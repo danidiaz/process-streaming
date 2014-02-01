@@ -1,4 +1,4 @@
-name:          pipes-process
+name:          process-pipes
 version:       0.0.1
 license:       BSD3
 license-file:  LICENSE
@@ -29,5 +29,5 @@ Library
 
 Source-repository head
     type:     git
-    location: https://github.com/danidiaz/pipes-process.git
+    location: https://github.com/danidiaz/process-pipes.git
 

@@ -1,4 +1,4 @@
-pipes-process
+process-pipes
 =============
 
 Exploring how to interact with system processes using pipes.
