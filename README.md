@@ -5,7 +5,7 @@ Exploring how to interact with system processes using pipes.
 
 Three basic goals:
 
-- Streaming access to *both* stdin and stdout, in a manner easy to integrate with
+- Streaming access to *both* stdout and stderr, in a manner easy to integrate with
   pipes-parse.
 
 - Never ever launch an exception: always use ErrorT or similar solution.
