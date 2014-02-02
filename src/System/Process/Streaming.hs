@@ -3,6 +3,9 @@ module System.Process.Streaming (
         shellPiped,
         procPiped,
         noNothingHandles,
+        IOExceptionHandler,
+        StdConsumer,
+        StdCombinedConsumer,
         consume',
         consume,
         consumeCombined',
@@ -18,9 +21,11 @@ import Control.Applicative
 import Control.Monad
 import Control.Monad.Error
 import Control.Exception
+import Control.Concurrent.Async
 import Pipes
 import Pipes.Prelude (drain)
 import Pipes.ByteString
+import Pipes.Concurrent
 import System.IO
 import System.Process
 import System.Exit
@@ -53,36 +58,79 @@ noNothingHandles (mb_stdin_hdl, mb_stdout_hdl, mb_stderr_hdl, ph) =
 
 type IOExceptionHandler e = IOException -> e
 
-consume' :: (Producer ByteString IO () -> ErrorT e IO a)
-         -> (Producer ByteString IO () -> ErrorT e IO b)
+type StdConsumer e a = Producer ByteString IO () -> ErrorT e IO a
+
+
+consume' :: StdConsumer e a
+         -> StdConsumer e b
          -> IOExceptionHandler e
          -> (Handle, Handle) 
          -> ErrorT e IO (a,b)
-consume' stdoutReader stderrReader exHandler (stdout_hdl, stderr_hdl) = 
-    undefined
+consume' stdoutConsumer stderrConsumer exHandler (stdout_hdl, stderr_hdl) = ErrorT $ try' exHandler $ do 
+    (inMailbox1, outMailbox1, seal1) <- spawn' Unbounded
+    a1 <- async $ writeToMailbox stdout_hdl inMailbox1
+    a2 <- async $ wait a1 `finally` atomically seal1 
+    a3 <- async $ consumeMailbox outMailbox1 stdoutConsumer 
+    (inMailbox2, outMailbox2, seal2) <- spawn' Unbounded
+    b1 <- async $ writeToMailbox stderr_hdl inMailbox2
+    b2 <- async $ wait b1 `finally` atomically seal2 
+    b3 <- async $ consumeMailbox outMailbox2 stderrConsumer 
+    (_,r) <- waitAny [fmap Right a3,fmap Left b3]
+    flip finally (waitBoth a2 b2) $ case r of
+        Left rb -> case rb of 
+            Left e -> do
+                    cancel a3
+                    return $ Left e
+            Right b -> do 
+                ra <- wait a3
+                case ra of
+                    Left e -> return $ Left e -- drop b result
+                    Right a -> return $ Right (a,b)
+        Right ra -> case ra of 
+            Left e -> do
+                    cancel b3
+                    return $ Left e
+            Right a -> do
+                rb <- wait b3
+                case rb of 
+                    Left e -> return $ Left e -- drop a result
+                    Right b -> return $ Right (a,b)
     where
-    consumeHandle :: Handle -> (Producer ByteString IO () -> ErrorT e IO a) -> ErrorT e IO a
-    consumeHandle handle consumer = ErrorT $ flip finally (hClose handle) $ do
-        result <- runErrorT . consumer $ fromHandle handle 
-        runEffect $ fromHandle handle >-> drain 
-        return $ result
+    try' :: IOExceptionHandler e -> IO (Either e a) -> IO (Either e a)
+    try' handler action = try action >>= either (return . Left . handler) return
 
-consume :: (Producer ByteString IO () -> ErrorT e IO a) 
-        -> (Producer ByteString IO () -> ErrorT e IO b) 
+    writeToMailbox :: Handle -> Output ByteString -> IO ()
+    writeToMailbox handle mailbox = 
+         finally (runEffect $ fromHandle handle >-> toOutput mailbox)
+                 (hClose handle) 
+
+    consumeMailbox :: Input ByteString -> (Producer ByteString IO () -> ErrorT e IO a) -> IO (Either e a)
+    consumeMailbox inMailbox consumer = do
+        result <- runErrorT . consumer $ fromInput inMailbox
+        case result of 
+            Left e -> return $ Left e
+            Right r -> do
+                runEffect $ fromInput inMailbox >-> drain 
+                return $ result
+
+consume :: StdConsumer e a
+        -> StdConsumer e b
         -> IOExceptionHandler e
         -> (u,Handle, Handle,v)
         -> (u,ErrorT e IO (a,b),v)
 consume stdoutReader stderrReader exHandler (u, stdout_hdl, stderr_hdl, v) =
     (u, consume' stdoutReader stderrReader exHandler (stdout_hdl, stderr_hdl), v)
 
-consumeCombined' :: (Producer (Either ByteString ByteString) IO () -> ErrorT e IO a)
+type StdCombinedConsumer e a = Producer (Either ByteString ByteString) IO () -> ErrorT e IO a
+
+consumeCombined' :: StdCombinedConsumer e a
                  -> IOExceptionHandler e
                  -> (Handle, Handle) 
                  -> ErrorT e IO a
 consumeCombined' combinedReader exHandler (stdout_hdl, stderr_hdl)  = 
     undefined
 
-consumeCombined :: (Producer (Either ByteString ByteString) IO () -> ErrorT e IO a) 
+consumeCombined :: StdCombinedConsumer e a
                 -- Maybe (Int,ByteString) -- limit the length of lines? Would this be useful?
                 -> IOExceptionHandler e
                 -> (u,Handle, Handle,v)
