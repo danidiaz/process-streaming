@@ -19,6 +19,7 @@ import Control.Monad
 import Control.Monad.Error
 import Control.Exception
 import Pipes
+import Pipes.Prelude (drain)
 import Pipes.ByteString
 import System.IO
 import System.Process
@@ -57,8 +58,14 @@ consume' :: (Producer ByteString IO () -> ErrorT e IO a)
          -> IOExceptionHandler e
          -> (Handle, Handle) 
          -> ErrorT e IO (a,b)
-consume' stdoutReader stderrReader exHandler (stdout_hdl, stderr_hdl)  = 
+consume' stdoutReader stderrReader exHandler (stdout_hdl, stderr_hdl) = 
     undefined
+    where
+    consumeHandle :: Handle -> (Producer ByteString IO () -> ErrorT e IO a) -> ErrorT e IO a
+    consumeHandle handle consumer = ErrorT $ flip finally (hClose handle) $ do
+        result <- runErrorT . consumer $ fromHandle handle 
+        runEffect $ fromHandle handle >-> drain 
+        return $ result
 
 consume :: (Producer ByteString IO () -> ErrorT e IO a) 
         -> (Producer ByteString IO () -> ErrorT e IO b) 
