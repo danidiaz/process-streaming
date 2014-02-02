@@ -1,4 +1,7 @@
 module System.Process.Streaming ( 
+        createProcessE,
+        shellPiped,
+        procPiped,
         noNothingHandles,
         consume',
         consume,
@@ -21,12 +24,31 @@ import System.IO
 import System.Process
 import System.Exit
 
+createProcessE :: CreateProcess 
+               -> ErrorT IOException IO (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle)
+createProcessE = ErrorT . try . createProcess
+
+shellPiped :: String -> CreateProcess 
+shellPiped cmd = (shell cmd) { std_in = CreatePipe, 
+                               std_out = CreatePipe, 
+                               std_err = CreatePipe 
+                             }
+
+procPiped :: FilePath -> [String] -> CreateProcess 
+procPiped cmd args = (proc cmd args) { std_in = CreatePipe, 
+                                       std_out = CreatePipe, 
+                                       std_err = CreatePipe 
+                                     }
+
 noNothingHandles :: (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) 
       -> (Handle, Handle, Handle, ProcessHandle)
 noNothingHandles (mb_stdin_hdl, mb_stdout_hdl, mb_stderr_hdl, ph) = 
     maybe (error "handle is unexpectedly Nothing") 
           id
-          ((,,,) <$> mb_stdin_hdl <*>  mb_stdout_hdl <*>  mb_stderr_hdl <*> pure ph)
+          ((,,,) <$> mb_stdin_hdl 
+                 <*> mb_stdout_hdl 
+                 <*> mb_stderr_hdl 
+                 <*> pure ph)
 
 type IOExceptionHandler e = IOException -> e
 
@@ -44,9 +66,7 @@ consume :: (Producer ByteString IO () -> ErrorT e IO a)
         -> (u,Handle, Handle,v)
         -> (u,ErrorT e IO (a,b),v)
 consume stdoutReader stderrReader exHandler (u, stdout_hdl, stderr_hdl, v) =
-    (,,) u 
-         (consume' stdoutReader stderrReader exHandler (stdout_hdl, stderr_hdl))
-         v
+    (u, consume' stdoutReader stderrReader exHandler (stdout_hdl, stderr_hdl), v)
 
 consumeCombined' :: (Producer (Either ByteString ByteString) IO () -> ErrorT e IO a)
                  -> IOExceptionHandler e
@@ -61,9 +81,7 @@ consumeCombined :: (Producer (Either ByteString ByteString) IO () -> ErrorT e IO
                 -> (u,Handle, Handle,v)
                 -> (u,ErrorT e IO a,v)
 consumeCombined combinedReader exHandler (u, stdout_hdl, stderr_hdl, v) =
-    (,,) u 
-         (consumeCombined' combinedReader exHandler (stdout_hdl, stderr_hdl))
-         v
+    (u, consumeCombined' combinedReader exHandler (stdout_hdl, stderr_hdl), v)
 
 feed' :: Producer ByteString IO a
       -> IOExceptionHandler e
@@ -77,8 +95,7 @@ feed :: Producer ByteString IO a
      -> (Handle,ErrorT e IO b,v)
      -> (ErrorT e IO b,v)
 feed producer exHandler (stdin_hdl,action,v) =
-    (,) (feed' producer exHandler stdin_hdl action)
-        v
+    (feed' producer exHandler stdin_hdl action, v)
 
 terminateOnError :: (ErrorT e IO a,ProcessHandle)
                  -> ErrorT e IO (a,ExitCode)
