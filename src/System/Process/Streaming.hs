@@ -174,7 +174,15 @@ feed producer exHandler (stdin_hdl,action,v) =
 
 terminateOnError :: (ErrorT e IO a,ProcessHandle)
                  -> ErrorT e IO (a,ExitCode)
-terminateOnError = undefined
+terminateOnError (action,pHandle) = ErrorT $ do
+    result <- runErrorT action
+    case result of
+        Left e -> do    
+            terminateProcess pHandle  
+            return $ Left e
+        Right r -> do 
+            exitCode <- waitForProcess pHandle 
+            return $ Right (r,exitCode)  
 
 example1 =  terminateOnError 
           . feed undefined undefined     
