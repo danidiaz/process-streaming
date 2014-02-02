@@ -135,8 +135,11 @@ consume stdoutReader stderrReader exHandler (u, stdout_hdl, stderr_hdl, v) =
 
 type StdCombinedConsumer e a = Producer (Either ByteString ByteString) IO () -> ErrorT e IO a
 
-combined :: (a -> StdConsumer e b) -> a -> StdCombinedConsumer e b
-combined f a producer =  f a (producer >-> P.map (either id id))  
+-- Useful in combination with "bifold" of the "bifunctors" package.
+combined :: (Either ByteString ByteString -> ByteString) 
+         -> (a -> StdConsumer e b) 
+         -> a -> StdCombinedConsumer e b
+combined mapper f a producer =  f a (producer >-> P.map mapper)  
 
 consumeCombined' :: StdCombinedConsumer e a
                  -> IOExceptionHandler e
@@ -205,9 +208,9 @@ example2 =  terminateOnError
           . noNothingHandles
 
 foo1 :: Error e => Consumer ByteString IO () -> StdCombinedConsumer e () 
-foo1 = combined fromSimpleConsumer
+foo1 = combined (either id id) fromSimpleConsumer
 
 foo2 :: (Monoid w, Error e) => Consumer ByteString (WriterT w (ErrorT e IO)) () -> StdCombinedConsumer e w
-foo2 = combined fromConsumer
+foo2 = combined (either id id) fromConsumer
 
 
