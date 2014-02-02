@@ -5,9 +5,13 @@ module System.Process.Streaming (
         noNothingHandles,
         IOExceptionHandler,
         StdConsumer,
-        StdCombinedConsumer,
+        fromSimpleConsumer,
+        fromConsumer,
         consume',
         consume,
+        StdCombinedConsumer,
+        fromSimpleSingleConsumer,
+        fromSingleConsumer,
         consumeCombined',
         consumeCombined,
         feed',
@@ -17,13 +21,16 @@ module System.Process.Streaming (
 
 import Data.Maybe
 import Data.Either
+import Data.Monoid
 import Control.Applicative
 import Control.Monad
 import Control.Monad.Error
+import Control.Monad.Writer.Strict
 import Control.Exception
 import Control.Concurrent.Async
 import Pipes
-import Pipes.Prelude (drain)
+import Pipes.Lift
+import qualified Pipes.Prelude as P
 import Pipes.ByteString
 import Pipes.Concurrent
 import System.IO
@@ -60,6 +67,11 @@ type IOExceptionHandler e = IOException -> e
 
 type StdConsumer e a = Producer ByteString IO () -> ErrorT e IO a
 
+fromSimpleConsumer :: Error e => Consumer ByteString IO () -> StdConsumer e () 
+fromSimpleConsumer consumer producer = runEffect . hoist lift $ producer >-> consumer
+
+fromConsumer :: (Monoid w, Error e) => Consumer ByteString (WriterT w (ErrorT e IO)) () -> StdConsumer e w
+fromConsumer consumer producer = fmap snd $ runEffect . runWriterP $ hoist (lift.lift) producer >-> consumer
 
 consume' :: StdConsumer e a
          -> StdConsumer e b
@@ -110,7 +122,7 @@ consume' stdoutConsumer stderrConsumer exHandler (stdout_hdl, stderr_hdl) = Erro
         case result of 
             Left e -> return $ Left e
             Right r -> do
-                runEffect $ fromInput inMailbox >-> drain 
+                runEffect $ fromInput inMailbox >-> P.drain 
                 return $ result
 
 consume :: StdConsumer e a
@@ -122,6 +134,16 @@ consume stdoutReader stderrReader exHandler (u, stdout_hdl, stderr_hdl, v) =
     (u, consume' stdoutReader stderrReader exHandler (stdout_hdl, stderr_hdl), v)
 
 type StdCombinedConsumer e a = Producer (Either ByteString ByteString) IO () -> ErrorT e IO a
+
+fromSimpleSingleConsumer :: Error e => Consumer ByteString IO () 
+                                    -> StdCombinedConsumer e () 
+fromSimpleSingleConsumer consumer producer =
+    fromSimpleConsumer consumer (producer >-> P.map (either id id))
+
+fromSingleConsumer :: (Monoid w, Error e) => Consumer ByteString (WriterT w (ErrorT e IO)) () 
+                                          -> StdCombinedConsumer e w
+fromSingleConsumer consumer producer = 
+    fromConsumer consumer (producer >-> P.map (either id id))
 
 consumeCombined' :: StdCombinedConsumer e a
                  -> IOExceptionHandler e
