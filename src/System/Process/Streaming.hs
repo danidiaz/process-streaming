@@ -10,8 +10,7 @@ module System.Process.Streaming (
         consume',
         consume,
         StdCombinedConsumer,
-        fromSimpleSingleConsumer,
-        fromSingleConsumer,
+        combined,
         consumeCombined',
         consumeCombined,
         feed',
@@ -73,6 +72,9 @@ fromSimpleConsumer consumer producer = runEffect . hoist lift $ producer >-> con
 fromConsumer :: (Monoid w, Error e) => Consumer ByteString (WriterT w (ErrorT e IO)) () -> StdConsumer e w
 fromConsumer consumer producer = fmap snd $ runEffect . runWriterP $ hoist (lift.lift) producer >-> consumer
 
+try' :: IOExceptionHandler e -> IO (Either e a) -> IO (Either e a)
+try' handler action = try action >>= either (return . Left . handler) return
+
 consume' :: StdConsumer e a
          -> StdConsumer e b
          -> IOExceptionHandler e
@@ -108,9 +110,6 @@ consume' stdoutConsumer stderrConsumer exHandler (stdout_hdl, stderr_hdl) = Erro
                     Left e -> return $ Left e -- drop a result
                     Right b -> return $ Right (a,b)
     where
-    try' :: IOExceptionHandler e -> IO (Either e a) -> IO (Either e a)
-    try' handler action = try action >>= either (return . Left . handler) return
-
     writeToMailbox :: Handle -> Output ByteString -> IO ()
     writeToMailbox handle mailbox = 
          finally (runEffect $ fromHandle handle >-> toOutput mailbox)
@@ -135,15 +134,8 @@ consume stdoutReader stderrReader exHandler (u, stdout_hdl, stderr_hdl, v) =
 
 type StdCombinedConsumer e a = Producer (Either ByteString ByteString) IO () -> ErrorT e IO a
 
-fromSimpleSingleConsumer :: Error e => Consumer ByteString IO () 
-                                    -> StdCombinedConsumer e () 
-fromSimpleSingleConsumer consumer producer =
-    fromSimpleConsumer consumer (producer >-> P.map (either id id))
-
-fromSingleConsumer :: (Monoid w, Error e) => Consumer ByteString (WriterT w (ErrorT e IO)) () 
-                                          -> StdCombinedConsumer e w
-fromSingleConsumer consumer producer = 
-    fromConsumer consumer (producer >-> P.map (either id id))
+combined :: (a -> StdConsumer e b) -> a -> StdCombinedConsumer e b
+combined f a producer =  f a (producer >-> P.map (either id id))  
 
 consumeCombined' :: StdCombinedConsumer e a
                  -> IOExceptionHandler e
@@ -165,7 +157,13 @@ feed' :: Producer ByteString IO a
       -> Handle
       -> ErrorT e IO b
       -> ErrorT e IO b 
-feed' producer exHandler stdin_hdl action = undefined
+feed' producer exHandler stdin_hdl action = ErrorT $ try' exHandler $ do
+    a1 <- async $ runEffect $ producer >-> toHandle stdin_hdl       
+    a2 <- async $ runErrorT action
+    r <- wait a2  
+    case r of
+        Left e -> cancel a1 >> (return $ Left e)
+        Right b -> wait a1 >> (return $ Right b)
 
 feed :: Producer ByteString IO a
      -> IOExceptionHandler e
@@ -187,3 +185,11 @@ example2 =  terminateOnError
           . feed undefined undefined     
           . consumeCombined undefined undefined 
           . noNothingHandles
+
+foo1 :: Error e => Consumer ByteString IO () -> StdCombinedConsumer e () 
+foo1 = combined fromSimpleConsumer
+
+foo2 :: (Monoid w, Error e) => Consumer ByteString (WriterT w (ErrorT e IO)) () -> StdCombinedConsumer e w
+foo2 = combined fromConsumer
+
+
