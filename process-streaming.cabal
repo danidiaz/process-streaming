@@ -1,4 +1,4 @@
-name:          process-pipes
+name:          process-streaming
 version:       0.0.1
 license:       BSD3
 license-file:  LICENSE
@@ -15,7 +15,7 @@ Extra-Source-Files:
 Library
     hs-source-dirs: src
     exposed-modules: 
-        System.Process.Pipes
+        System.Process.Streaming
     other-modules: 
     build-depends:         
         base >= 4.4 && < 5,
@@ -31,5 +31,5 @@ Library
 
 Source-repository head
     type:     git
-    location: https://github.com/danidiaz/process-pipes.git
+    location: https://github.com/danidiaz/process-streaming.git
 

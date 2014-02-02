@@ -1,4 +1,4 @@
-module System.Process.Pipes ( 
+module System.Process.Streaming ( 
         noNothingHandles,
         consume',
         consume,
