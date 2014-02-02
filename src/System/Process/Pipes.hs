@@ -1,12 +1,12 @@
 module System.Process.Pipes ( 
-        adapt,
+        noNothingHandles,
         consume',
         consume,
         consumeCombined',
         consumeCombined,
         feed',
         feed,
-        wrap        
+        terminateOnError        
     ) where
 
 import Data.Maybe
@@ -21,9 +21,9 @@ import System.IO
 import System.Process
 import System.Exit
 
-adapt :: (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) 
+noNothingHandles :: (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) 
       -> (Handle, Handle, Handle, ProcessHandle)
-adapt (mb_stdin_hdl, mb_stdout_hdl, mb_stderr_hdl, ph) = 
+noNothingHandles (mb_stdin_hdl, mb_stdout_hdl, mb_stderr_hdl, ph) = 
     maybe (error "handle is unexpectedly Nothing") 
           id
           ((,,,) <$> mb_stdin_hdl <*>  mb_stdout_hdl <*>  mb_stderr_hdl <*> pure ph)
@@ -80,16 +80,16 @@ feed producer exHandler (stdin_hdl,action,v) =
     (,) (feed' producer exHandler stdin_hdl action)
         v
 
-wrap :: (ErrorT e IO a,ProcessHandle)
-     -> ErrorT e IO (a,ExitCode)
-wrap = undefined
+terminateOnError :: (ErrorT e IO a,ProcessHandle)
+                 -> ErrorT e IO (a,ExitCode)
+terminateOnError = undefined
 
-example1 =  wrap 
+example1 =  terminateOnError 
           . feed undefined undefined     
           . consume undefined undefined undefined 
-          . adapt
+          . noNothingHandles
 
-example2 =  wrap 
+example2 =  terminateOnError 
           . feed undefined undefined     
           . consumeCombined undefined undefined 
-          . adapt
+          . noNothingHandles
