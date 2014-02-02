@@ -1,7 +1,8 @@
 process-streaming
 =================
 
-Exploring how to interact with system processes using pipes.
+Exploring how to interact with system processes using a streaming library
+(pipes).
 
 Three basic goals:
 
