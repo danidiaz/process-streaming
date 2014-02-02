@@ -75,6 +75,20 @@ fromConsumer consumer producer = fmap snd $ runEffect . runWriterP $ hoist (lift
 try' :: IOExceptionHandler e -> IO (Either e a) -> IO (Either e a)
 try' handler action = try action >>= either (return . Left . handler) return
 
+writeToMailbox :: Handle -> (ByteString -> a) -> Output a -> IO ()
+writeToMailbox handle mapper mailbox = 
+     finally (runEffect $ fromHandle handle >-> P.map mapper >-> toOutput mailbox)
+             (hClose handle) 
+
+consumeMailbox :: Input z -> (Producer z IO () -> ErrorT e IO a) -> IO (Either e a)
+consumeMailbox inMailbox consumer = do
+    result <- runErrorT . consumer $ fromInput inMailbox
+    case result of 
+        Left e -> return $ Left e
+        Right r -> do
+            runEffect $ fromInput inMailbox >-> P.drain 
+            return $ result
+
 consume' :: StdConsumer e a
          -> StdConsumer e b
          -> IOExceptionHandler e
@@ -82,14 +96,15 @@ consume' :: StdConsumer e a
          -> ErrorT e IO (a,b)
 consume' stdoutConsumer stderrConsumer exHandler (stdout_hdl, stderr_hdl) = ErrorT $ try' exHandler $ do 
     (inMailbox1, outMailbox1, seal1) <- spawn' Unbounded
-    a1 <- async $ writeToMailbox stdout_hdl inMailbox1
+    a1 <- async $ writeToMailbox stdout_hdl id inMailbox1
     a2 <- async $ wait a1 `finally` atomically seal1 
     a3 <- async $ consumeMailbox outMailbox1 stdoutConsumer 
     (inMailbox2, outMailbox2, seal2) <- spawn' Unbounded
-    b1 <- async $ writeToMailbox stderr_hdl inMailbox2
+    b1 <- async $ writeToMailbox stderr_hdl id inMailbox2
     b2 <- async $ wait b1 `finally` atomically seal2 
     b3 <- async $ consumeMailbox outMailbox2 stderrConsumer 
     (_,r) <- waitAny [fmap Right a3,fmap Left b3]
+    -- is waiting here a problem???
     flip finally (waitBoth a2 b2) $ case r of
         Left rb -> case rb of 
             Left e -> do
@@ -109,20 +124,6 @@ consume' stdoutConsumer stderrConsumer exHandler (stdout_hdl, stderr_hdl) = Erro
                 case rb of 
                     Left e -> return $ Left e -- drop a result
                     Right b -> return $ Right (a,b)
-    where
-    writeToMailbox :: Handle -> Output ByteString -> IO ()
-    writeToMailbox handle mailbox = 
-         finally (runEffect $ fromHandle handle >-> toOutput mailbox)
-                 (hClose handle) 
-
-    consumeMailbox :: Input ByteString -> (Producer ByteString IO () -> ErrorT e IO a) -> IO (Either e a)
-    consumeMailbox inMailbox consumer = do
-        result <- runErrorT . consumer $ fromInput inMailbox
-        case result of 
-            Left e -> return $ Left e
-            Right r -> do
-                runEffect $ fromInput inMailbox >-> P.drain 
-                return $ result
 
 consume :: StdConsumer e a
         -> StdConsumer e b
@@ -141,8 +142,17 @@ consumeCombined' :: StdCombinedConsumer e a
                  -> IOExceptionHandler e
                  -> (Handle, Handle) 
                  -> ErrorT e IO a
-consumeCombined' combinedReader exHandler (stdout_hdl, stderr_hdl)  = 
+consumeCombined' combinedReader exHandler (stdout_hdl, stderr_hdl)  = ErrorT $ try' exHandler $ do 
     undefined
+    (inMailbox1, outMailbox1, seal1) <- spawn' Unbounded
+    a1 <- async $ writeToMailbox stdout_hdl Right inMailbox1
+    a2 <- async $ wait a1 `finally` atomically seal1 
+    --a3 <- async $ consumeMailbox outMailbox1 stdoutConsumer 
+    b1 <- async $ writeToMailbox stderr_hdl Left inMailbox1
+    b2 <- async $ wait b1 `finally` atomically seal1 
+    -- Better link the asyncs? --should the asyncs be really canceled? 
+    consumeMailbox outMailbox1 combinedReader `finally` (cancel a1 >> cancel b1) 
+                                              `finally` (waitBoth a2 b2)
 
 consumeCombined :: StdCombinedConsumer e a
                 -- Maybe (Int,ByteString) -- limit the length of lines? Would this be useful?
