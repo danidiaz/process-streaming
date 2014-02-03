@@ -66,7 +66,7 @@ type IOExceptionHandler e = IOException -> e
 type StdConsumer e a = Producer ByteString IO () -> ErrorT e IO a
 
 fromConsumer :: (Monoid w, Error e) => Consumer ByteString (WriterT w (ErrorT e IO)) () -> StdConsumer e w
-fromConsumer consumer producer = fmap snd $ runEffect . runWriterP $ hoist (lift.lift) producer >-> consumer
+fromConsumer consumer producer = runEffect . execWriterP $ hoist (lift.lift) producer >-> consumer
 
 try' :: IOExceptionHandler e -> IO (Either e a) -> IO (Either e a)
 try' handler action = try action >>= either (return . Left . handler) return
