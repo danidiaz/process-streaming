@@ -5,7 +5,6 @@ module System.Process.Streaming (
         noNothingHandles,
         IOExceptionHandler,
         StdConsumer,
-        fromSimpleConsumer,
         fromConsumer,
         consume',
         consume,
@@ -65,9 +64,6 @@ noNothingHandles (mb_stdin_hdl, mb_stdout_hdl, mb_stderr_hdl, ph) =
 type IOExceptionHandler e = IOException -> e
 
 type StdConsumer e a = Producer ByteString IO () -> ErrorT e IO a
-
-fromSimpleConsumer :: Error e => Consumer ByteString IO () -> StdConsumer e () 
-fromSimpleConsumer consumer producer = runEffect . hoist lift $ producer >-> consumer
 
 fromConsumer :: (Monoid w, Error e) => Consumer ByteString (WriterT w (ErrorT e IO)) () -> StdConsumer e w
 fromConsumer consumer producer = fmap snd $ runEffect . runWriterP $ hoist (lift.lift) producer >-> consumer
@@ -206,9 +202,6 @@ example2 =  terminateOnError
           . feed undefined undefined     
           . consumeCombined undefined undefined 
           . noNothingHandles
-
-foo1 :: Error e => Consumer ByteString IO () -> StdCombinedConsumer e () 
-foo1 = combined (either id id) fromSimpleConsumer
 
 foo2 :: (Monoid w, Error e) => Consumer ByteString (WriterT w (ErrorT e IO)) () -> StdCombinedConsumer e w
 foo2 = combined (either id id) fromConsumer
