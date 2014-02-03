@@ -6,13 +6,10 @@ module System.Process.Streaming (
         IOExceptionHandler,
         StdConsumer,
         fromConsumer,
-        consume',
         consume,
         StdCombinedConsumer,
         combined,
-        consumeCombined',
         consumeCombined,
-        feed',
         feed,
         terminateOnError        
     ) where
