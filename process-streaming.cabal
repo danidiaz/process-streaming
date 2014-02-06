@@ -26,7 +26,8 @@ Library
         pipes >= 4.1.0, 
         pipes-bytestring >= 2.0.0,
         --pipes-safe >= 2.0.1, 
-        pipes-concurrency >= 2.0.2
+        pipes-concurrency >= 2.0.2,
+        pipes-parse >= 3.0.1
         
     default-language: Haskell2010
 

@@ -4,15 +4,19 @@ process-streaming
 Exploring how to interact with system processes using a streaming library
 (pipes).
 
-Three basic goals:
+The basic goals:
 
-- Concurrent streaming access to both stdout and stderr, in a manner easy to
-  integrate with pipes-parse.
+- Concurrent streaming access to stdin, stdout and stderr.
 
-- Avoid launching exceptions: always use ErrorT or similar solution to signal
+- Easy integration with pipes-parse (attoparsec parsers in particular).
+
+- Avoid launching exceptions: use ErrorT or similar solution to signal
   error conditions.
 
 - Avoid deadlock scenarios caused by full output buffers.
+
+- Modularity: don't enforce a "pipeified" approach for all the handles, let the
+  user "pipeify" only the particular handles in which he is interested. 
 
 Relevant thread in the Haskell Pipes Google Group:
 

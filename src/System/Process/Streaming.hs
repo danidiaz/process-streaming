@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE RankNTypes #-}
 
 module System.Process.Streaming ( 
         ConcurrentlyE (..),
@@ -43,7 +44,7 @@ data WrappedError e = WrappedError e
 instance (Show e, Typeable e) => Exception (WrappedError e)
 
 elideError :: (Show e, Typeable e) => IO (Either e a) -> IO a
-elideError action = action >>= either (throwIO.WrappedError) return
+elideError action = action >>= either (throwIO . WrappedError) return
 
 revealError :: (Show e, Typeable e) => IO a -> IO (Either e a)  
 revealError action = catch (action >>= return . Right)
@@ -65,6 +66,14 @@ instance (Show e, Typeable e) => Alternative (ConcurrentlyE e) where
   empty = ConcurrentlyE $ forever (threadDelay maxBound)
   ConcurrentlyE as <|> ConcurrentlyE bs =
     ConcurrentlyE $ either id id <$> race as bs
+
+--
+consumez :: Handle -> 
+            (IOException -> e) ->
+            Parser a IO (Either e a) ->
+            IO (Either e a) 
+consumez = undefined
+           
 
 --
 createProcessE :: CreateProcess 
