@@ -5,9 +5,12 @@ module System.Process.Streaming (
         ConcurrentlyE (..),
         consume,
         feed,
+        streams,
         createProcessE,
-        shellPiped,
-        procPiped,
+        pipe3,
+        handle3,
+        --shellPiped,
+        --procPiped,
 --        noNothingHandles,
 --        IOExceptionHandler,
 --        StreamSifter,
@@ -17,7 +20,7 @@ module System.Process.Streaming (
 --        combined,
 --        consumeCombined,
 --        feed,
---        terminateOnError        
+        terminateOnError        
     ) where
 
 import Data.Maybe
@@ -121,28 +124,67 @@ createProcessE :: CreateProcess
                -> IO (Either IOException (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle))
 createProcessE = try . createProcess
 
-shellPiped :: String -> CreateProcess 
-shellPiped cmd = (shell cmd) { std_in = CreatePipe, 
-                               std_out = CreatePipe, 
-                               std_err = CreatePipe 
-                             }
+streams :: forall f. Functor f => ((StdStream,StdStream,StdStream) -> f (StdStream,StdStream,StdStream)) -> CreateProcess -> f CreateProcess 
+streams f c = setStreams c <$> f (getStreams c)
+    where 
+    getStreams c = (std_in c,std_out c, std_err c)
+    setStreams c (s1,s2,s3) = c { std_in  = s1 
+                                , std_out = s2 
+                                , std_err = s3 
+                                } 
 
-procPiped :: FilePath -> [String] -> CreateProcess 
-procPiped cmd args = (proc cmd args) { std_in = CreatePipe, 
-                                       std_out = CreatePipe, 
-                                       std_err = CreatePipe 
-                                     }
+pipe3 :: (StdStream,StdStream,StdStream)
+pipe3 = (CreatePipe,CreatePipe,CreatePipe)
 
-noNothingHandles :: (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) 
-      -> (Handle, Handle, Handle, ProcessHandle)
-noNothingHandles (mb_stdin_hdl, mb_stdout_hdl, mb_stderr_hdl, ph) = 
-    maybe (error "handle is unexpectedly Nothing") 
-          id
-          ((,,,) <$> mb_stdin_hdl 
-                 <*> mb_stdout_hdl 
-                 <*> mb_stderr_hdl 
-                 <*> pure ph)
+handle3 :: forall m. Applicative m => ((Handle, Handle, Handle, ProcessHandle) -> m (Handle, Handle, Handle, ProcessHandle)) -> (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) -> m (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle)
+handle3 f quad = case impure quad of
+    Left l -> pure l
+    Right r -> fmap justify (f r)
+    where    
+    impure (Just h1, Just h2, Just h3, phandle) = Right (h1, h2, h3, phandle) 
+    impure x = Left x
+    justify (h1, h2, h3, phandle) = (Just h1, Just h2, Just h3, phandle)  
 
+--  = dimap impure (either pure (fmap justify)) . fmap
+--        impure
+--    where
+--        dimap fl fr e = case e of
+--            Left l  -> Left $ fl l  
+--            Right r -> Right $ fr r
+--        impure (Just h1, Just h2, Just h3, phandle) = Right (h1, h2, h3, phandle) 
+--        impure x = Left x
+--        justify (h1, h2, h3, phandle) = (Just h1, Just h2, Just h3, phandle)  
+
+
+--_Pure :: forall f m a p. (Choice p, Applicative m)
+--      => p a (m a) -> p (Free f a) (m (Free f a))
+--_Pure = dimap impure (either pure (fmap Pure)) . right'
+-- where
+--  impure (Pure x) = Right x
+--  impure x        = Left x
+
+--shellPiped :: String -> CreateProcess 
+--shellPiped cmd = (shell cmd) { std_in = CreatePipe, 
+--                               std_out = CreatePipe, 
+--                               std_err = CreatePipe 
+--                             }
+--
+--procPiped :: FilePath -> [String] -> CreateProcess 
+--procPiped cmd args = (proc cmd args) { std_in = CreatePipe, 
+--                                       std_out = CreatePipe, 
+--                                       std_err = CreatePipe 
+--                                     }
+--
+--noNothingHandles :: (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) 
+--      -> (Handle, Handle, Handle, ProcessHandle)
+--noNothingHandles (mb_stdin_hdl, mb_stdout_hdl, mb_stderr_hdl, ph) = 
+--    maybe (error "handle is unexpectedly Nothing") 
+--          id
+--          ((,,,) <$> mb_stdin_hdl 
+--                 <*> mb_stdout_hdl 
+--                 <*> mb_stderr_hdl 
+--                 <*> pure ph)
+--
 --type IOExceptionHandler e = IOException -> e
 --
 --type StreamSifter e a = Producer ByteString IO () -> ErrorT e IO a
@@ -282,5 +324,19 @@ noNothingHandles (mb_stdin_hdl, mb_stdout_hdl, mb_stderr_hdl, ph) =
 
 --foo2 :: (Monoid w, Error e) => Consumer ByteString (WriterT w (ErrorT e IO)) () -> StdCombinedConsumer e w
 --foo2 = combined (either id id) fromConsumer
+
+
+terminateOnError :: ProcessHandle 
+                 -> IO (Either e a)
+                 -> IO (Either e (ExitCode,a))
+terminateOnError pHandle action = do
+    result <- action
+    case result of
+        Left e -> do    
+            terminateProcess pHandle  
+            return $ Left e
+        Right r -> do 
+            exitCode <- waitForProcess pHandle 
+            return $ Right (exitCode,r)  
 
 
