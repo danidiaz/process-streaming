@@ -125,10 +125,10 @@ consume exHandler h c = try' exHandler $ do
 --     finally (runEffect $ fromHandle handle >-> toOutput mailbox)
 --             (hClose handle) 
 
-writeLines :: T.Codec -> MVar (Output T.Text) -> (forall a. Producer T.Text IO a -> Producer T.Text IO a) -> Producer ByteString IO () -> IO (Either e ())
-writeLines aCodec mvar transform producer = do
-    iterTLines freeTLines 
-    return . Right $ ()
+writeLines :: Error e => T.Codec -> (ByteString -> e) -> (forall a. Producer T.Text IO a -> Producer T.Text IO a) -> MVar (Output T.Text) -> Producer ByteString IO () -> IO (Either e ())
+writeLines aCodec errh transform mvar producer = do
+    remainingBytes <- iterTLines freeTLines 
+    runEffect $ runErrorP $ hoist lift remainingBytes >-> (await >>= throwError . errh) 
     where
     viewLines = getConst . T.lines Const
     viewDecoded = getConst . T.codec aCodec Const
@@ -141,26 +141,31 @@ writeLines aCodec mvar transform producer = do
             -- the P.drain bit was difficult to figure out!!!
             runEffect $ textProducer' >-> (toOutput output >> P.drain)
             
+consumeLines :: (Show e, Typeable e, Error e) 
+             => (IOException -> e) 
+             -> (Handle, T.Codec, ByteString -> e)
+             -> (forall t1. Producer T.Text IO t1 -> Producer T.Text IO t1)
+             -> MVar (Output T.Text)
+             -> IO (Either e ())
+consumeLines handler (h1,c1,texh1) t1 output = 
+    consume handler h1 $ writeLines c1 texh1 t1 output
 
-try'' :: (T.TextException -> e) -> IO (Either e a) -> IO (Either e a)
-try'' handler action = try action >>= either (return . Left . handler) return
-
-consumeCombinedLines :: (Show e, Typeable e) 
+consumeCombinedLines :: (Show e, Typeable e, Error e) 
                      => (IOException -> e) 
-        			 -> (Handle, T.Codec, T.TextException -> e, Producer T.Text IO t1 -> Producer T.Text IO t1)
-        			 -> (Handle, T.Codec, T.TextException -> e, Producer T.Text IO t2 -> Producer T.Text IO t2)
+        			 -> (Handle, T.Codec, ByteString -> e)
+                     -> (forall t. Producer T.Text IO t -> Producer T.Text IO t)
+        			 -> (Handle, T.Codec, ByteString -> e)
+                     -> (forall t. Producer T.Text IO t -> Producer T.Text IO t)
         			 -> (Producer T.Text IO () -> IO (Either e a))
         		     -> IO (Either e a) 
-consumeCombinedLines exHandler (h1,c1,texh1,t1) (h2,c2,texh2,t2) c = try' exHandler $ do
+consumeCombinedLines exHandler branch1 t1 branch2 t2 c = try' exHandler $ do
     (outbox, inbox, seal) <- spawn' Unbounded
     t <- newMVar outbox
-    r <- runConcurrentlyE $ (,) <$> ConcurrentlyE (finally (runConcurrentlyE $ (,) <$> ConcurrentlyE (try'' texh1 $ consume exHandler h1 undefined) 
-                                                                                   <*> ConcurrentlyE (try'' texh2 $ consume exHandler h2 undefined)) 
-
-
+    r <- runConcurrentlyE $ (,) <$> ConcurrentlyE (finally (runConcurrentlyE $ (,) <$> ConcurrentlyE (consumeLines exHandler branch1 t1 t) 
+                                                                                   <*> ConcurrentlyE (consumeLines exHandler branch2 t2 t)) 
                                                            (atomically seal))
                                 <*> ConcurrentlyE (consumeMailbox inbox c)
-    return . fmap (\(_,r') -> r') $ r
+    return . fmap snd $ r
 
 feed :: (IOException -> e)
      -> Handle 
