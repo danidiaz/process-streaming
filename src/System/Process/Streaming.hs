@@ -5,7 +5,7 @@ module System.Process.Streaming (
         ConcurrentlyE (..),
         consume,
         feed,
-        streams,
+        stream3,
         createProcessE,
         pipe3,
         handle3,
@@ -124,8 +124,13 @@ createProcessE :: CreateProcess
                -> IO (Either IOException (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle))
 createProcessE = try . createProcess
 
-streams :: forall f. Functor f => ((StdStream,StdStream,StdStream) -> f (StdStream,StdStream,StdStream)) -> CreateProcess -> f CreateProcess 
-streams f c = setStreams c <$> f (getStreams c)
+_env :: forall f. Functor f => (Maybe [(String, String)] -> f (Maybe [(String, String)])) -> CreateProcess -> f CreateProcess 
+_env f c = setEnv c <$> f (env c)
+    where
+    setEnv c env' = c { env = env' } 
+
+stream3 :: forall f. Functor f => ((StdStream,StdStream,StdStream) -> f (StdStream,StdStream,StdStream)) -> CreateProcess -> f CreateProcess 
+stream3 f c = setStreams c <$> f (getStreams c)
     where 
     getStreams c = (std_in c,std_out c, std_err c)
     setStreams c (s1,s2,s3) = c { std_in  = s1 
