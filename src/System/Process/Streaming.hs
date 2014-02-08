@@ -40,9 +40,10 @@ import Control.Exception
 import Control.Concurrent
 import Control.Concurrent.Async
 import Pipes
-import Pipes.Lift
 import qualified Pipes.Prelude as P
+import Pipes.Lift
 import Pipes.ByteString
+import qualified Pipes.Text as T
 import Pipes.Concurrent
 import System.IO
 import System.Process
@@ -113,6 +114,13 @@ consume exHandler h c = try' exHandler $ do
                                wait a `finally` atomically seal)
                            (consumeMailbox inbox c) 
     return r                                
+
+consumeCombinedLines :: (IOException -> e) 
+        			 -> (Handle, T.Codec, T.TextException -> e, Producer T.Text IO a -> Producer T.Text IO a)
+        			 -> (Handle, T.Codec, T.TextException -> e, Producer T.Text IO a -> Producer T.Text IO a)
+        			 -> (Producer T.Text IO () -> IO (Either e a))
+        		     -> IO (Either e a) 
+consumeCombinedLines = undefined
 
 feed :: (IOException -> e)
      -> Handle 
@@ -191,14 +199,6 @@ handle3 f quad = case impure quad of
 --        impure (Just h1, Just h2, Just h3, phandle) = Right (h1, h2, h3, phandle) 
 --        impure x = Left x
 --        justify (h1, h2, h3, phandle) = (Just h1, Just h2, Just h3, phandle)  
-
-
---_Pure :: forall f m a p. (Choice p, Applicative m)
---      => p a (m a) -> p (Free f a) (m (Free f a))
---_Pure = dimap impure (either pure (fmap Pure)) . right'
--- where
---  impure (Pure x) = Right x
---  impure x        = Left x
 
 --shellPiped :: String -> CreateProcess 
 --shellPiped cmd = (shell cmd) { std_in = CreatePipe, 
