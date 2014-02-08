@@ -6,6 +6,7 @@ module System.Process.Streaming (
         ConcurrentlyE (..),
         consume,
         linesFromHandle,
+        consumeCombinedLines,
         feed,
         createProcessE,
         _cmdspec,
@@ -147,13 +148,14 @@ writeLines aCodec errh transform mvar producer = do
             runEffect $ textProducer' >-> (toOutput output >> P.drain)
             
 linesFromHandle :: (Show e, Typeable e, Error e) 
-             => (Handle, T.Codec)
+             => Handle
+             -> T.Codec
              -> (forall t1. Producer T.Text IO t1 -> Producer T.Text IO t1)
              -> (ByteString -> e)
              -> (IOException -> e) 
              -> MVar (Output T.Text)
              -> IO (Either e ())
-linesFromHandle (h1,c1) t1 texh1 handler output = 
+linesFromHandle h1 c1 t1 texh1 handler output = 
     consume handler h1 $ writeLines c1 texh1 t1 output
 
 consumeCombinedLines :: (Show e, Typeable e, Error e) 
@@ -168,7 +170,7 @@ consumeCombinedLines exHandler actions c = try' exHandler $ do
                                                            (atomically seal))
 
                                 <*> ConcurrentlyE (consumeMailbox inbox c)
-    return . fmap snd $ r
+    return $ snd <$> r
 
 feed :: (IOException -> e)
      -> Handle 
