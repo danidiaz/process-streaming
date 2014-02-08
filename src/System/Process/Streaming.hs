@@ -5,8 +5,13 @@ module System.Process.Streaming (
         ConcurrentlyE (..),
         consume,
         feed,
-        stream3,
         createProcessE,
+        _cmdspec,
+        _RawCommand,
+        _ShellCommand,
+        _cwd,
+        _env,
+        stream3,
         pipe3,
         handle3,
         --shellPiped,
@@ -123,6 +128,33 @@ feed exHandler h c = try' exHandler $ do
 createProcessE :: CreateProcess 
                -> IO (Either IOException (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle))
 createProcessE = try . createProcess
+
+_cmdspec :: forall f. Functor f => (CmdSpec -> f CmdSpec) -> CreateProcess -> f CreateProcess 
+_cmdspec f c = setCmdSpec c <$> f (cmdspec c)
+    where
+    setCmdSpec c cmdspec' = c { cmdspec = cmdspec' } 
+
+_ShellCommand :: forall m. Applicative m => (String -> m String) -> CmdSpec -> m CmdSpec 
+_ShellCommand f quad = case impure quad of
+    Left l -> pure l
+    Right r -> fmap ShellCommand (f r)
+    where    
+    impure (ShellCommand str) = Right str
+    impure x = Left x
+
+_RawCommand :: forall m. Applicative m => ((FilePath,[String]) -> m (FilePath,[String])) -> CmdSpec -> m CmdSpec 
+_RawCommand f quad = case impure quad of
+    Left l -> pure l
+    Right r -> fmap justify (f r)
+    where    
+    impure (RawCommand fpath strs) = Right (fpath,strs)
+    impure x = Left x
+    justify (fpath,strs) = RawCommand fpath strs
+
+_cwd :: forall f. Functor f => (Maybe FilePath -> f (Maybe FilePath)) -> CreateProcess -> f CreateProcess 
+_cwd f c = setCwd c <$> f (cwd c)
+    where
+    setCwd c cwd' = c { cwd = cwd' } 
 
 _env :: forall f. Functor f => (Maybe [(String, String)] -> f (Maybe [(String, String)])) -> CreateProcess -> f CreateProcess 
 _env f c = setEnv c <$> f (env c)
