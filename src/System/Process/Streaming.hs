@@ -1,5 +1,6 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module System.Process.Streaming ( 
         ConcurrentlyE (..),
@@ -29,11 +30,13 @@ module System.Process.Streaming (
     ) where
 
 import Data.Maybe
+import Data.Functor.Identity
 import Data.Either
 import Data.Monoid
 import Data.Typeable
 import Control.Applicative
 import Control.Monad
+import Control.Monad.Trans.Free
 import Control.Monad.Error
 import Control.Monad.Writer.Strict
 import Control.Exception
@@ -115,12 +118,49 @@ consume exHandler h c = try' exHandler $ do
                            (consumeMailbox inbox c) 
     return r                                
 
-consumeCombinedLines :: (IOException -> e) 
-        			 -> (Handle, T.Codec, T.TextException -> e, Producer T.Text IO a -> Producer T.Text IO a)
-        			 -> (Handle, T.Codec, T.TextException -> e, Producer T.Text IO a -> Producer T.Text IO a)
+--handle2TextMailbox :: (Handle, T.Codec, T.TextException -> e, Producer T.Text IO t1 -> Producer T.Text IO t1) -> IO ()
+--handle2TextMailbox   
+--                   
+--handle2TextMailbox handle mailbox = 
+--     finally (runEffect $ fromHandle handle >-> toOutput mailbox)
+--             (hClose handle) 
+
+writeLines :: T.Codec -> MVar (Output T.Text) -> (forall a. Producer T.Text IO a -> Producer T.Text IO a) -> Producer ByteString IO () -> IO (Either e ())
+writeLines aCodec mvar transform producer = do
+    iterTLines freeTLines 
+    return . Right $ ()
+    where
+    viewLines = getConst . T.lines Const
+    viewDecoded = getConst . T.codec aCodec Const
+    freeTLines :: FreeT (Producer T.Text IO) IO (Producer ByteString IO ())
+    freeTLines = viewLines . viewDecoded $ producer
+    iterTLines :: forall x. FreeT (Producer T.Text IO) IO x -> IO x
+    iterTLines = iterT $ \textProducer -> do
+        let textProducer' = transform textProducer'  
+        withMVar mvar $ \output ->
+            -- the P.drain bit was difficult to figure out!!!
+            runEffect $ textProducer' >-> (toOutput output >> P.drain)
+            
+
+try'' :: (T.TextException -> e) -> IO (Either e a) -> IO (Either e a)
+try'' handler action = try action >>= either (return . Left . handler) return
+
+consumeCombinedLines :: (Show e, Typeable e) 
+                     => (IOException -> e) 
+        			 -> (Handle, T.Codec, T.TextException -> e, Producer T.Text IO t1 -> Producer T.Text IO t1)
+        			 -> (Handle, T.Codec, T.TextException -> e, Producer T.Text IO t2 -> Producer T.Text IO t2)
         			 -> (Producer T.Text IO () -> IO (Either e a))
         		     -> IO (Either e a) 
-consumeCombinedLines = undefined
+consumeCombinedLines exHandler (h1,c1,texh1,t1) (h2,c2,texh2,t2) c = try' exHandler $ do
+    (outbox, inbox, seal) <- spawn' Unbounded
+    t <- newMVar outbox
+    r <- runConcurrentlyE $ (,) <$> ConcurrentlyE (finally (runConcurrentlyE $ (,) <$> ConcurrentlyE (try'' texh1 $ consume exHandler h1 undefined) 
+                                                                                   <*> ConcurrentlyE (try'' texh2 $ consume exHandler h2 undefined)) 
+
+
+                                                           (atomically seal))
+                                <*> ConcurrentlyE (consumeMailbox inbox c)
+    return . fmap (\(_,r') -> r') $ r
 
 feed :: (IOException -> e)
      -> Handle 
