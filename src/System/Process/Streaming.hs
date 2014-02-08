@@ -5,6 +5,7 @@
 module System.Process.Streaming ( 
         ConcurrentlyE (..),
         consume,
+        linesFromHandle,
         feed,
         createProcessE,
         _cmdspec,
@@ -33,6 +34,7 @@ import Data.Maybe
 import Data.Functor.Identity
 import Data.Either
 import Data.Monoid
+import Data.Traversable
 import Data.Typeable
 import Control.Applicative
 import Control.Monad
@@ -80,6 +82,9 @@ instance (Show e, Typeable e) => Alternative (ConcurrentlyE e) where
   empty = ConcurrentlyE $ forever (threadDelay maxBound)
   ConcurrentlyE as <|> ConcurrentlyE bs =
     ConcurrentlyE $ either id id <$> race as bs
+
+mapConcurrentlyE :: (Show e, Typeable e, Traversable t) => (a -> IO (Either e b)) -> t a -> IO (Either e (t b))
+mapConcurrentlyE f = revealError .  mapConcurrently (elideError . f)
 
 --
 mailbox2Handle :: Input ByteString -> Handle -> IO ()
@@ -141,29 +146,27 @@ writeLines aCodec errh transform mvar producer = do
             -- the P.drain bit was difficult to figure out!!!
             runEffect $ textProducer' >-> (toOutput output >> P.drain)
             
-consumeLines :: (Show e, Typeable e, Error e) 
-             => (IOException -> e) 
-             -> (Handle, T.Codec, ByteString -> e)
+linesFromHandle :: (Show e, Typeable e, Error e) 
+             => (Handle, T.Codec)
              -> (forall t1. Producer T.Text IO t1 -> Producer T.Text IO t1)
+             -> (ByteString -> e)
+             -> (IOException -> e) 
              -> MVar (Output T.Text)
              -> IO (Either e ())
-consumeLines handler (h1,c1,texh1) t1 output = 
+linesFromHandle (h1,c1) t1 texh1 handler output = 
     consume handler h1 $ writeLines c1 texh1 t1 output
 
 consumeCombinedLines :: (Show e, Typeable e, Error e) 
                      => (IOException -> e) 
-        			 -> (Handle, T.Codec, ByteString -> e)
-                     -> (forall t. Producer T.Text IO t -> Producer T.Text IO t)
-        			 -> (Handle, T.Codec, ByteString -> e)
-                     -> (forall t. Producer T.Text IO t -> Producer T.Text IO t)
+                     -> [(IOException -> e) -> MVar (Output T.Text) -> IO (Either e ())]
         			 -> (Producer T.Text IO () -> IO (Either e a))
         		     -> IO (Either e a) 
-consumeCombinedLines exHandler branch1 t1 branch2 t2 c = try' exHandler $ do
+consumeCombinedLines exHandler actions c = try' exHandler $ do
     (outbox, inbox, seal) <- spawn' Unbounded
     t <- newMVar outbox
-    r <- runConcurrentlyE $ (,) <$> ConcurrentlyE (finally (runConcurrentlyE $ (,) <$> ConcurrentlyE (consumeLines exHandler branch1 t1 t) 
-                                                                                   <*> ConcurrentlyE (consumeLines exHandler branch2 t2 t)) 
+    r <- runConcurrentlyE $ (,) <$> ConcurrentlyE (finally (mapConcurrentlyE (\z -> z exHandler t) actions) 
                                                            (atomically seal))
+
                                 <*> ConcurrentlyE (consumeMailbox inbox c)
     return . fmap snd $ r
 
@@ -235,164 +238,6 @@ handle3 f quad = case impure quad of
     impure x = Left x
     justify (h1, h2, h3, phandle) = (Just h1, Just h2, Just h3, phandle)  
 
---  = dimap impure (either pure (fmap justify)) . fmap
---        impure
---    where
---        dimap fl fr e = case e of
---            Left l  -> Left $ fl l  
---            Right r -> Right $ fr r
---        impure (Just h1, Just h2, Just h3, phandle) = Right (h1, h2, h3, phandle) 
---        impure x = Left x
---        justify (h1, h2, h3, phandle) = (Just h1, Just h2, Just h3, phandle)  
-
---shellPiped :: String -> CreateProcess 
---shellPiped cmd = (shell cmd) { std_in = CreatePipe, 
---                               std_out = CreatePipe, 
---                               std_err = CreatePipe 
---                             }
---
---procPiped :: FilePath -> [String] -> CreateProcess 
---procPiped cmd args = (proc cmd args) { std_in = CreatePipe, 
---                                       std_out = CreatePipe, 
---                                       std_err = CreatePipe 
---                                     }
---
---noNothingHandles :: (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) 
---      -> (Handle, Handle, Handle, ProcessHandle)
---noNothingHandles (mb_stdin_hdl, mb_stdout_hdl, mb_stderr_hdl, ph) = 
---    maybe (error "handle is unexpectedly Nothing") 
---          id
---          ((,,,) <$> mb_stdin_hdl 
---                 <*> mb_stdout_hdl 
---                 <*> mb_stderr_hdl 
---                 <*> pure ph)
---
---type IOExceptionHandler e = IOException -> e
---
---type StreamSifter e a = Producer ByteString IO () -> ErrorT e IO a
---
---fromConsumer :: (Monoid w, Error e) => Consumer ByteString (WriterT w (ErrorT e IO)) () -> StreamSifter e w
---fromConsumer consumer producer = runEffect . execWriterP $ hoist (lift.lift) producer >-> consumer
---
---
---
---
---consume' :: StreamSifter e a
---         -> StreamSifter e b
---         -> IOExceptionHandler e
---         -> (Handle, Handle) 
---         -> ErrorT e IO (a,b)
---consume' stdoutConsumer stderrConsumer exHandler (stdout_hdl, stderr_hdl) = ErrorT $ try' exHandler $ do 
---    (inMailbox1, outMailbox1, seal1) <- spawn' Unbounded
---    a1 <- async $ writeToMailbox stdout_hdl id inMailbox1
---    a2 <- async $ wait a1 `finally` atomically seal1 
---    a3 <- async $ consumeMailbox outMailbox1 stdoutConsumer 
---    (inMailbox2, outMailbox2, seal2) <- spawn' Unbounded
---    b1 <- async $ writeToMailbox stderr_hdl id inMailbox2
---    b2 <- async $ wait b1 `finally` atomically seal2 
---    b3 <- async $ consumeMailbox outMailbox2 stderrConsumer 
---    (_,r) <- waitAny [fmap Right a3,fmap Left b3]
---    -- is waiting here a problem???
---    flip finally (waitBoth a2 b2) $ case r of
---        Left rb -> case rb of 
---            Left e -> do
---                    cancel a3
---                    return $ Left e
---            Right b -> do 
---                ra <- wait a3
---                case ra of
---                    Left e -> return $ Left e -- drop b result
---                    Right a -> return $ Right (a,b)
---        Right ra -> case ra of 
---            Left e -> do
---                    cancel b3
---                    return $ Left e
---            Right a -> do
---                rb <- wait b3
---                case rb of 
---                    Left e -> return $ Left e -- drop a result
---                    Right b -> return $ Right (a,b)
---
---consume :: StreamSifter e a
---        -> StreamSifter e b
---        -> IOExceptionHandler e
---        -> (u,Handle, Handle,v)
---        -> (u,ErrorT e IO (a,b),v)
---consume stdoutReader stderrReader exHandler (u, stdout_hdl, stderr_hdl, v) =
---    (u, consume' stdoutReader stderrReader exHandler (stdout_hdl, stderr_hdl), v)
---
---type StdCombinedConsumer e a = Producer (Either ByteString ByteString) IO () -> ErrorT e IO a
---
---
---consumeCombined' :: Pipe ByteString ByteString IO X  
---                 -> Pipe ByteString ByteString IO X   
---                 -> StreamSifter e a
---                 -> IOExceptionHandler e
---                 -> (Handle, Handle) 
---                 -> ErrorT e IO a
---consumeCombined' = undefined
-
----- Useful in combination with "bifold" of the "bifunctors" package.
---combined :: (Either ByteString ByteString -> ByteString) 
---         -> (a -> StreamSifter e b) 
---         -> a -> StdCombinedConsumer e b
---combined mapper f a producer =  f a (producer >-> P.map mapper)  
---
---consumeCombined' :: StdCombinedConsumer e a
---                 -> IOExceptionHandler e
---                 -> (Handle, Handle) 
---                 -> ErrorT e IO a
---consumeCombined' combinedReader exHandler (stdout_hdl, stderr_hdl)  = ErrorT $ try' exHandler $ do 
---    undefined
---    (inMailbox1, outMailbox1, seal1) <- spawn' Unbounded
---    a1 <- async $ writeToMailbox stdout_hdl Right inMailbox1
---    a2 <- async $ wait a1 `finally` atomically seal1 
---    --a3 <- async $ consumeMailbox outMailbox1 stdoutConsumer 
---    b1 <- async $ writeToMailbox stderr_hdl Left inMailbox1
---    b2 <- async $ wait b1 `finally` atomically seal1 
---    -- Better link the asyncs? --should the asyncs be really canceled? 
---    consumeMailbox outMailbox1 combinedReader `finally` (cancel a1 >> cancel b1) 
---                                              `finally` (waitBoth a2 b2)
---
---consumeCombined :: StdCombinedConsumer e a
---                -- Maybe (Int,ByteString) -- limit the length of lines? Would this be useful?
---                -> IOExceptionHandler e
---                -> (u,Handle, Handle,v)
---                -> (u,ErrorT e IO a,v)
---consumeCombined combinedReader exHandler (u, stdout_hdl, stderr_hdl, v) =
---    (u, consumeCombined' combinedReader exHandler (stdout_hdl, stderr_hdl), v)
-
---feed' :: Producer ByteString IO a
---      -> IOExceptionHandler e
---      -> Handle
---      -> ErrorT e IO b
---      -> ErrorT e IO b 
---feed' producer exHandler stdin_hdl action = ErrorT $ try' exHandler $ do
---    a1 <- async $ runEffect $ producer >-> toHandle stdin_hdl       
---    a2 <- async $ runErrorT action
---    r <- wait a2  
---    case r of
---        Left e -> cancel a1 >> (return $ Left e)
---        Right b -> wait a1 >> (return $ Right b)
---
---feed :: Producer ByteString IO a
---     -> IOExceptionHandler e
---     -> (Handle,ErrorT e IO b,v)
---     -> (ErrorT e IO b,v)
---feed producer exHandler (stdin_hdl,action,v) =
---    (feed' producer exHandler stdin_hdl action, v)
---
---terminateOnError :: (ErrorT e IO a,ProcessHandle)
---                 -> ErrorT e IO (a,ExitCode)
---terminateOnError (action,pHandle) = ErrorT $ do
---    result <- runErrorT action
---    case result of
---        Left e -> do    
---            terminateProcess pHandle  
---            return $ Left e
---        Right r -> do 
---            exitCode <- waitForProcess pHandle 
---            return $ Right (r,exitCode)  
 --
 --example1 =  terminateOnError 
 --          . feed undefined undefined     
