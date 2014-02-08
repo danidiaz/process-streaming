@@ -131,32 +131,58 @@ consume exHandler h c = try' exHandler $ do
 --     finally (runEffect $ fromHandle handle >-> toOutput mailbox)
 --             (hClose handle) 
 
-writeLines :: Error e => T.Codec -> (ByteString -> e) -> (forall a. Producer T.Text IO a -> Producer T.Text IO a) -> MVar (Output T.Text) -> Producer ByteString IO () -> IO (Either e ())
-writeLines aCodec errh transform mvar producer = do
+--writeLines :: Error e => T.Codec -> (ByteString -> e) -> (forall a. Producer T.Text IO a -> Producer T.Text IO a) -> MVar (Output T.Text) -> Producer ByteString IO () -> IO (Either e ())
+--writeLines aCodec errh transform mvar producer = do
+--    remainingBytes <- iterTLines freeTLines 
+--    runEffect $ runErrorP $ hoist lift remainingBytes >-> (await >>= throwError . errh) 
+--    where
+--    viewLines = getConst . T.lines Const
+--    viewDecoded = getConst . T.codec aCodec Const
+--    freeTLines :: FreeT (Producer T.Text IO) IO (Producer ByteString IO ())
+--    freeTLines = viewLines . viewDecoded $ producer
+--    iterTLines :: forall x. FreeT (Producer T.Text IO) IO x -> IO x
+--    iterTLines = iterT $ \textProducer -> do
+--        let textProducer' = transform textProducer'  
+--        withMVar mvar $ \output ->
+--            -- the P.drain bit was difficult to figure out!!!
+--            runEffect $ textProducer' >-> (toOutput output >> P.drain)
+--            
+
+-- remove the dependency on (Error) by bringing an either
+writeLines :: Error e 
+           => (ByteString -> e) 
+           -> FreeT (Producer T.Text IO) IO (Producer ByteString IO ()) 
+           -> MVar (Output T.Text) 
+           -> IO (Either e ())
+writeLines errh freeTLines mvar = do
     remainingBytes <- iterTLines freeTLines 
     runEffect $ runErrorP $ hoist lift remainingBytes >-> (await >>= throwError . errh) 
     where
-    viewLines = getConst . T.lines Const
-    viewDecoded = getConst . T.codec aCodec Const
-    freeTLines :: FreeT (Producer T.Text IO) IO (Producer ByteString IO ())
-    freeTLines = viewLines . viewDecoded $ producer
     iterTLines :: forall x. FreeT (Producer T.Text IO) IO x -> IO x
     iterTLines = iterT $ \textProducer -> do
-        let textProducer' = transform textProducer'  
-        withMVar mvar $ \output ->
+        withMVar mvar $ \output -> do
             -- the P.drain bit was difficult to figure out!!!
-            runEffect $ textProducer' >-> (toOutput output >> P.drain)
-            
-linesFromHandle :: (Show e, Typeable e, Error e) 
-             => Handle
-             -> T.Codec
-             -> (forall t1. Producer T.Text IO t1 -> Producer T.Text IO t1)
-             -> (ByteString -> e)
-             -> (IOException -> e) 
-             -> MVar (Output T.Text)
-             -> IO (Either e ())
-linesFromHandle h1 c1 t1 texh1 handler output = 
-    consume handler h1 $ writeLines c1 texh1 t1 output
+            join $ runEffect $ textProducer >-> (toOutput output >> P.drain)
+
+linesFromHandle :: Handle
+                -> T.Codec
+                -> (forall t1. Producer T.Text IO t1 -> Producer T.Text IO t1) 
+                -> FreeT (Producer T.Text IO) IO (Producer ByteString IO ())
+linesFromHandle handle aCodec transform = transFreeT transform . viewLines . viewDecoded $ fromHandle handle
+    where 
+    viewLines = getConst . T.lines Const
+    viewDecoded = getConst . T.codec aCodec Const
+
+--linesFromHandle :: (Show e, Typeable e, Error e) 
+--             => Handle
+--             -> T.Codec
+--             -> (forall t1. Producer T.Text IO t1 -> Producer T.Text IO t1)
+--             -> (ByteString -> e)
+--             -> (IOException -> e) 
+--             -> MVar (Output T.Text)
+--             -> IO (Either e ())
+--linesFromHandle h1 c1 t1 texh1 handler output = 
+--    consume handler h1 $ writeLines c1 texh1 t1 output
 
 consumeCombinedLines :: (Show e, Typeable e, Error e) 
                      => (IOException -> e) 
