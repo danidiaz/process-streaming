@@ -4,8 +4,9 @@
 
 module System.Process.Streaming ( 
         ConcurrentlyE (..),
+        mapConcurrentlyE,
         consume,
-        linesFromHandle,
+        decodeLines,
         consumeCombinedLines,
         feed,
         createProcessE,
@@ -17,17 +18,6 @@ module System.Process.Streaming (
         stream3,
         pipe3,
         handle3,
-        --shellPiped,
-        --procPiped,
---        noNothingHandles,
---        IOExceptionHandler,
---        StreamSifter,
---        fromConsumer,
---        consume,
---        StdCombinedConsumer,
---        combined,
---        consumeCombined,
---        feed,
         terminateOnError        
     ) where
 
@@ -124,38 +114,13 @@ consume exHandler h c = try' exHandler $ do
                            (consumeMailbox inbox c) 
     return r                                
 
---handle2TextMailbox :: (Handle, T.Codec, T.TextException -> e, Producer T.Text IO t1 -> Producer T.Text IO t1) -> IO ()
---handle2TextMailbox   
---                   
---handle2TextMailbox handle mailbox = 
---     finally (runEffect $ fromHandle handle >-> toOutput mailbox)
---             (hClose handle) 
-
---writeLines :: Error e => T.Codec -> (ByteString -> e) -> (forall a. Producer T.Text IO a -> Producer T.Text IO a) -> MVar (Output T.Text) -> Producer ByteString IO () -> IO (Either e ())
---writeLines aCodec errh transform mvar producer = do
---    remainingBytes <- iterTLines freeTLines 
---    runEffect $ runErrorP $ hoist lift remainingBytes >-> (await >>= throwError . errh) 
---    where
---    viewLines = getConst . T.lines Const
---    viewDecoded = getConst . T.codec aCodec Const
---    freeTLines :: FreeT (Producer T.Text IO) IO (Producer ByteString IO ())
---    freeTLines = viewLines . viewDecoded $ producer
---    iterTLines :: forall x. FreeT (Producer T.Text IO) IO x -> IO x
---    iterTLines = iterT $ \textProducer -> do
---        let textProducer' = transform textProducer'  
---        withMVar mvar $ \output ->
---            -- the P.drain bit was difficult to figure out!!!
---            runEffect $ textProducer' >-> (toOutput output >> P.drain)
---            
-
--- remove the dependency on (Error) by bringing an either
 writeLines :: Error e 
-           => (ByteString -> e) 
-           -> FreeT (Producer T.Text IO) IO (Producer ByteString IO ()) 
-           -> MVar (Output T.Text) 
+           => MVar (Output T.Text) 
+           -> (ByteString -> e) 
+           -> FreeT (Producer T.Text IO) IO (Producer ByteString IO ())
            -> IO (Either e ())
-writeLines errh freeTLines mvar = do
-    remainingBytes <- iterTLines freeTLines 
+writeLines mvar errh freeTLines = do
+    remainingBytes <- iterTLines freeTLines
     runEffect $ runErrorP $ hoist lift remainingBytes >-> (await >>= throwError . errh) 
     where
     iterTLines :: forall x. FreeT (Producer T.Text IO) IO x -> IO x
@@ -164,35 +129,25 @@ writeLines errh freeTLines mvar = do
             -- the P.drain bit was difficult to figure out!!!
             join $ runEffect $ textProducer >-> (toOutput output >> P.drain)
 
-linesFromHandle :: Handle
-                -> T.Codec
-                -> (forall t1. Producer T.Text IO t1 -> Producer T.Text IO t1) 
-                -> FreeT (Producer T.Text IO) IO (Producer ByteString IO ())
-linesFromHandle handle aCodec transform = transFreeT transform . viewLines . viewDecoded $ fromHandle handle
+decodeLines :: T.Codec
+            -> (forall t1. Producer T.Text IO t1 -> Producer T.Text IO t1) 
+            -> Producer ByteString IO ()
+            -> FreeT (Producer T.Text IO) IO (Producer ByteString IO ())
+decodeLines aCodec transform producer = transFreeT transform . viewLines . viewDecoded $ producer
     where 
     viewLines = getConst . T.lines Const
     viewDecoded = getConst . T.codec aCodec Const
 
---linesFromHandle :: (Show e, Typeable e, Error e) 
---             => Handle
---             -> T.Codec
---             -> (forall t1. Producer T.Text IO t1 -> Producer T.Text IO t1)
---             -> (ByteString -> e)
---             -> (IOException -> e) 
---             -> MVar (Output T.Text)
---             -> IO (Either e ())
---linesFromHandle h1 c1 t1 texh1 handler output = 
---    consume handler h1 $ writeLines c1 texh1 t1 output
-
 consumeCombinedLines :: (Show e, Typeable e, Error e) 
                      => (IOException -> e) 
-                     -> [(IOException -> e) -> MVar (Output T.Text) -> IO (Either e ())]
+                     -> (ByteString -> e)
+                     -> [(Handle, Producer ByteString IO () -> FreeT (Producer T.Text IO) IO (Producer ByteString IO ()))]
         			 -> (Producer T.Text IO () -> IO (Either e a))
         		     -> IO (Either e a) 
-consumeCombinedLines exHandler actions c = try' exHandler $ do
+consumeCombinedLines exHandler encHandler actions c = try' exHandler $ do
     (outbox, inbox, seal) <- spawn' Unbounded
     t <- newMVar outbox
-    r <- runConcurrentlyE $ (,) <$> ConcurrentlyE (finally (mapConcurrentlyE (\z -> z exHandler t) actions) 
+    r <- runConcurrentlyE $ (,) <$> ConcurrentlyE (finally (mapConcurrentlyE (\(h,f) -> consume exHandler h $ writeLines t encHandler .   f) actions) 
                                                            (atomically seal))
 
                                 <*> ConcurrentlyE (consumeMailbox inbox c)
@@ -208,6 +163,19 @@ feed exHandler h c = try' exHandler $ do
                               wait a `finally` atomically seal) 
                           (mailbox2Handle inbox h)
     return r
+
+terminateOnError :: ProcessHandle 
+                 -> IO (Either e a)
+                 -> IO (Either e (ExitCode,a))
+terminateOnError pHandle action = do
+    result <- action
+    case result of
+        Left e -> do    
+            terminateProcess pHandle  
+            return $ Left e
+        Right r -> do 
+            exitCode <- waitForProcess pHandle 
+            return $ Right (exitCode,r)  
 
 createProcessE :: CreateProcess 
                -> IO (Either IOException (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle))
@@ -279,19 +247,5 @@ handle3 f quad = case impure quad of
 
 --foo2 :: (Monoid w, Error e) => Consumer ByteString (WriterT w (ErrorT e IO)) () -> StdCombinedConsumer e w
 --foo2 = combined (either id id) fromConsumer
-
-
-terminateOnError :: ProcessHandle 
-                 -> IO (Either e a)
-                 -> IO (Either e (ExitCode,a))
-terminateOnError pHandle action = do
-    result <- action
-    case result of
-        Left e -> do    
-            terminateProcess pHandle  
-            return $ Left e
-        Right r -> do 
-            exitCode <- waitForProcess pHandle 
-            return $ Right (exitCode,r)  
 
 
