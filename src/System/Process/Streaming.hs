@@ -5,10 +5,20 @@
 module System.Process.Streaming ( 
         ConcurrentlyE (..),
         mapConcurrentlyE,
+        Consumption,
         consume,
-        decodeLines,
+        LineDecoder,
+        lineDecoder,
         consumeCombinedLines,
+        useConsumer,
+        useConsumerE,
+        useConsumerW,
+        Feeding,
         feed,
+        useProducer,
+        useProducerE,
+        useProducerW,
+        terminateOnError,
         createProcessE,
         _cmdspec,
         _RawCommand,
@@ -17,8 +27,7 @@ module System.Process.Streaming (
         _env,
         stream3,
         pipe3,
-        handle3,
-        terminateOnError        
+        handle3
     ) where
 
 import Data.Maybe
@@ -104,6 +113,8 @@ feedMailbox feeder outMailbox = feeder $ toOutput outMailbox
 try' :: (IOException -> e) -> IO (Either e a) -> IO (Either e a)
 try' handler action = try action >>= either (return . Left . handler) return
 
+type Consumption b e a = Producer b IO () -> IO (Either e a)
+
 consume :: (IOException -> e) 
         -> Handle 
         -> (Producer ByteString IO () -> IO (Either e a))
@@ -114,6 +125,8 @@ consume exHandler h c = try' exHandler $ do
                                wait a `finally` atomically seal)
                            (consumeMailbox inbox c) 
     return r                                
+
+type LineDecoder = Producer ByteString IO () -> FreeT (Producer T.Text IO) IO (Producer ByteString IO ())
 
 writeLines :: MVar (Output T.Text) 
            -> (ByteString -> e) 
@@ -130,11 +143,10 @@ writeLines mvar errh freeTLines = do
             -- the P.drain bit was difficult to figure out!!!
             join $ runEffect $ textProducer >-> (toOutput output >> P.drain)
 
-decodeLines :: T.Codec
-            -> (forall t1. Producer T.Text IO t1 -> Producer T.Text IO t1) 
-            -> Producer ByteString IO ()
-            -> FreeT (Producer T.Text IO) IO (Producer ByteString IO ())
-decodeLines aCodec transform producer = transFreeT transform . viewLines . viewDecoded $ producer
+lineDecoder :: T.Codec
+            -> (forall r. Producer T.Text IO r -> Producer T.Text IO r) 
+            -> LineDecoder
+lineDecoder aCodec transform producer = transFreeT transform . viewLines . viewDecoded $ producer
     where 
     viewLines = getConst . T.lines Const
     viewDecoded = getConst . T.codec aCodec Const
@@ -142,7 +154,7 @@ decodeLines aCodec transform producer = transFreeT transform . viewLines . viewD
 consumeCombinedLines :: (Show e, Typeable e) 
                      => (IOException -> e) 
                      -> (ByteString -> e)
-                     -> [(Handle, Producer ByteString IO () -> FreeT (Producer T.Text IO) IO (Producer ByteString IO ()))]
+                     -> [(Handle, LineDecoder)]
         			 -> (Producer T.Text IO () -> IO (Either e a))
         		     -> IO (Either e a) 
 consumeCombinedLines exHandler encHandler actions c = try' exHandler $ do
@@ -154,6 +166,24 @@ consumeCombinedLines exHandler encHandler actions c = try' exHandler $ do
                                 <*> ConcurrentlyE (consumeMailbox inbox c)
     return $ snd <$> r
 
+--
+useConsumer :: Consumer b IO () -> Consumption b e ()
+useConsumer consumer producer = runEffect (producer >-> consumer) >>= return . Right  
+
+useConsumerE :: Error e => Consumer b (ErrorT e IO) () -> Consumption b e ()
+useConsumerE consumer producer = runEffect $ runErrorP $ hoist lift producer >-> consumer
+
+useConsumerW :: (Monoid w, Error e') => (w -> e' -> e) -> Consumer b (ErrorT e' (WriterT w IO)) () -> Consumption b e w 
+useConsumerW resultsUntilError consumer producer = do
+    (r,w) <- runEffect $ runWriterP $ runErrorP $ hoist (lift.lift) producer >-> consumer 
+    case r of
+        Left e' -> return $ Left $ resultsUntilError w e'    
+        Right () -> return $ Right w
+
+-- to plug a parser, just use evalStateT! 
+
+type Feeding b e a = Consumer b IO () -> IO (Either e a)
+
 feed :: (IOException -> e)
      -> Handle 
      -> (Consumer ByteString IO () -> IO (Either e a))
@@ -164,6 +194,20 @@ feed exHandler h c = try' exHandler $ do
                               wait a `finally` atomically seal) 
                           (mailbox2Handle inbox h)
     return r
+
+useProducer :: Producer b IO () -> Feeding b e ()
+useProducer producer consumer = runEffect (producer >-> consumer) >>= return . Right  
+
+useProducerE :: Error e => Producer b (ErrorT e IO) () -> Feeding b e ()
+useProducerE producer consumer = runEffect $ runErrorP $ producer >-> hoist lift consumer
+
+useProducerW :: (Monoid w, Error e') => (w -> e' -> e) -> Producer b (ErrorT e' (WriterT w IO)) () -> Feeding b e w 
+useProducerW resultsUntilError producer consumer = do
+    (r,w) <- runEffect $ runWriterP $ runErrorP $ producer >-> hoist (lift.lift) consumer 
+    case r of
+        Left e' -> return $ Left $ resultsUntilError w e'    
+        Right () -> return $ Right w
+--
 
 terminateOnError :: ProcessHandle 
                  -> IO (Either e a)
@@ -177,6 +221,8 @@ terminateOnError pHandle action = do
         Right r -> do 
             exitCode <- waitForProcess pHandle 
             return $ Right (exitCode,r)  
+
+--
 
 createProcessE :: CreateProcess 
                -> IO (Either IOException (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle))
