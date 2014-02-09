@@ -95,7 +95,7 @@ revealError action = catch (action >>= return . Right)
 work over each handle (actions defined using functions like 'consume',
 'consumeCombinedLines' and 'feed') and combine their results. 
 
-   If any of the actions fails with @e@ the other actions are inmediately
+   If any of the actions fails with @e@ the other actions are immediately
 cancelled and the whole computation fails with @e@. 
 -}
 newtype ConcE e a = ConcE { runConcE :: IO (Either e a) }
@@ -117,7 +117,7 @@ instance (Show e, Typeable e) => Alternative (ConcE e) where
 {-| 
       Works similarly to 'Control.Concurrent.Async.mapConcurrently' from the
 @async@ package, but if any of the computations fails with @e@, the other are
-inmediately cancelled and the whole computation fails with @e@. 
+immediately cancelled and the whole computation fails with @e@. 
  -}
 mapConcE :: (Show e, Typeable e, Traversable t) => (a -> IO (Either e b)) -> t a -> IO (Either e (t b))
 mapConcE f = revealError .  mapConcurrently (elideError . f)
