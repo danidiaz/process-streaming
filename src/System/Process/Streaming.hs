@@ -174,7 +174,7 @@ consumeCombinedLines exHandler encHandler actions c = try' exHandler $ do
 
 --
 useConsumer :: Consumer b IO () -> Consumption b e ()
-useConsumer consumer producer = runEffect (producer >-> consumer) >>= return . Right  
+useConsumer consumer producer = Right <$> runEffect (producer >-> consumer) 
 
 useConsumerE :: Error e => Consumer b (ErrorT e IO) () -> Consumption b e ()
 useConsumerE consumer producer = runEffect $ runErrorP $ hoist lift producer >-> consumer
@@ -202,7 +202,7 @@ feed exHandler h c = try' exHandler $ do
     return r
 
 useProducer :: Producer b IO () -> Feeding b e ()
-useProducer producer consumer = runEffect (producer >-> consumer) >>= return . Right  
+useProducer producer consumer = Right <$> runEffect (producer >-> consumer) 
 
 useProducerE :: Error e => Producer b (ErrorT e IO) () -> Feeding b e ()
 useProducerE producer consumer = runEffect $ runErrorP $ producer >-> hoist lift consumer
