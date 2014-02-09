@@ -3,8 +3,8 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
 module System.Process.Streaming ( 
-        ConcurrentlyE (..),
-        mapConcurrentlyE,
+        ConcE (..),
+        mapConcE,
         Consumption,
         consume,
         LineDecoder,
@@ -68,24 +68,24 @@ revealError action = catch (action >>= return . Right)
                            (\(WrappedError e) -> return . Left $ e)   
 
 -- A variant of Concurrently with errors explicit in the signature.
-newtype ConcurrentlyE e a = ConcurrentlyE { runConcurrentlyE :: IO (Either e a) }
+newtype ConcE e a = ConcE { runConcE :: IO (Either e a) }
 
-instance Functor (ConcurrentlyE e) where
-  fmap f (ConcurrentlyE x) = ConcurrentlyE $ fmap (fmap f) x
+instance Functor (ConcE e) where
+  fmap f (ConcE x) = ConcE $ fmap (fmap f) x
 
-instance (Show e, Typeable e) => Applicative (ConcurrentlyE e) where
-  pure = ConcurrentlyE . pure . pure
-  ConcurrentlyE fs <*> ConcurrentlyE as =
-    ConcurrentlyE . revealError $ 
+instance (Show e, Typeable e) => Applicative (ConcE e) where
+  pure = ConcE . pure . pure
+  ConcE fs <*> ConcE as =
+    ConcE . revealError $ 
         (\(f, a) -> f a) <$> concurrently (elideError fs) (elideError as)
 
-instance (Show e, Typeable e) => Alternative (ConcurrentlyE e) where
-  empty = ConcurrentlyE $ forever (threadDelay maxBound)
-  ConcurrentlyE as <|> ConcurrentlyE bs =
-    ConcurrentlyE $ either id id <$> race as bs
+instance (Show e, Typeable e) => Alternative (ConcE e) where
+  empty = ConcE $ forever (threadDelay maxBound)
+  ConcE as <|> ConcE bs =
+    ConcE $ either id id <$> race as bs
 
-mapConcurrentlyE :: (Show e, Typeable e, Traversable t) => (a -> IO (Either e b)) -> t a -> IO (Either e (t b))
-mapConcurrentlyE f = revealError .  mapConcurrently (elideError . f)
+mapConcE :: (Show e, Typeable e, Traversable t) => (a -> IO (Either e b)) -> t a -> IO (Either e (t b))
+mapConcE f = revealError .  mapConcurrently (elideError . f)
 
 --
 mailbox2Handle :: Input ByteString -> Handle -> IO ()
@@ -159,12 +159,15 @@ consumeCombinedLines :: (Show e, Typeable e)
         		     -> IO (Either e a) 
 consumeCombinedLines exHandler encHandler actions c = try' exHandler $ do
     (outbox, inbox, seal) <- spawn' Unbounded
-    t <- newMVar outbox
-    r <- runConcurrentlyE $ (,) <$> ConcurrentlyE (finally (mapConcurrentlyE (\(h,f) -> consume exHandler h $ writeLines t encHandler .   f) actions) 
-                                                           (atomically seal))
-
-                                <*> ConcurrentlyE (consumeMailbox inbox c)
+    mVar <- newMVar outbox
+    r <- runConcE $ (,) <$> ConcE (finally (mapConcE (consumeHandle mVar) actions) 
+                                           (atomically seal)
+                                  )
+                        <*> ConcE (consumeMailbox inbox c)
     return $ snd <$> r
+    where 
+    consumeHandle mVar (h,lineDec) = consume exHandler h $ 
+        writeLines mVar encHandler . lineDec 
 
 --
 useConsumer :: Consumer b IO () -> Consumption b e ()
