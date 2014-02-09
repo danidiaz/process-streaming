@@ -6,8 +6,8 @@ data-files:
 author:        Daniel Díaz Carrete
 maintainer:    diaz_carrete@yahoo.com
 category:      System
-Synopsis:      Concurrent streaming access to the input and outputs of system
-               processes.
+Synopsis:      Concurrent, buffered, streaming access to the input and outputs
+               of system processes.
 build-type:    Simple
 cabal-version: >= 1.10
 Extra-Source-Files:

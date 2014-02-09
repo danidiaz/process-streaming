@@ -6,12 +6,12 @@ Exploring how to interact with system processes using a streaming library
 
 The basic goals:
 
-- Concurrent streaming access to stdin, stdout and stderr.
+- Concurrent, buffered, streaming access to stdin, stdout and stderr.
 
-- Easy integration with pipes-parse (attoparsec parsers in particular).
+- Easy integration with pipes-parse (even without a direct dependency).
 
-- Avoid launching exceptions: use ErrorT or similar solution to signal
-  error conditions.
+- Avoid launching exceptions: use Either or similar solution to signal error
+  conditions.
 
 - Avoid deadlock scenarios caused by full output buffers.
 
