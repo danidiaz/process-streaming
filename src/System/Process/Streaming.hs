@@ -77,7 +77,7 @@ instance (Show e, Typeable e) => Applicative (ConcE e) where
   pure = ConcE . pure . pure
   ConcE fs <*> ConcE as =
     ConcE . revealError $ 
-        (\(f, a) -> f a) <$> concurrently (elideError fs) (elideError as)
+        uncurry ($) <$> concurrently (elideError fs) (elideError as)
 
 instance (Show e, Typeable e) => Alternative (ConcE e) where
   empty = ConcE $ forever (threadDelay maxBound)
@@ -98,7 +98,7 @@ handle2Mailbox handle mailbox =
      finally (runEffect $ fromHandle handle >-> toOutput mailbox)
              (hClose handle) 
 
-consumeMailbox :: Input z -> (Producer z IO () -> IO (Either e a)) -> IO (Either e a)
+consumeMailbox :: Input b -> (Producer b IO () -> IO (Either e a)) -> IO (Either e a)
 consumeMailbox inMailbox consumer = do
     result <- consumer $ fromInput inMailbox
     case result of 
@@ -107,7 +107,7 @@ consumeMailbox inMailbox consumer = do
             runEffect $ fromInput inMailbox >-> P.drain 
             return $ result
 
-feedMailbox :: (Consumer z IO () -> IO (Either e a)) -> Output z -> IO (Either e a)
+feedMailbox :: (Consumer b IO () -> IO (Either e a)) -> Output b -> IO (Either e a)
 feedMailbox feeder outMailbox = feeder $ toOutput outMailbox
 
 try' :: (IOException -> e) -> IO (Either e a) -> IO (Either e a)
@@ -134,7 +134,7 @@ writeLines :: MVar (Output T.Text)
            -> IO (Either e ())
 writeLines mvar errh freeTLines = do
     remainingBytes <- iterTLines freeTLines
-    -- We use EitherT instead of ErrorT to avoid an Error constraint on e.
+    -- We use EitherT here instead of ErrorT to avoid an Error constraint on e.
     runEitherT $ runEffect $ hoist lift remainingBytes >-> (await >>= lift . left . errh) 
     where
     iterTLines :: forall x. FreeT (Producer T.Text IO) IO x -> IO x
@@ -146,7 +146,10 @@ writeLines mvar errh freeTLines = do
 lineDecoder :: T.Codec
             -> (forall r. Producer T.Text IO r -> Producer T.Text IO r) 
             -> LineDecoder
-lineDecoder aCodec transform producer = transFreeT transform . viewLines . viewDecoded $ producer
+lineDecoder aCodec transform producer =  transFreeT transform 
+                                       . viewLines 
+                                       . viewDecoded 
+                                       $ producer
     where 
     viewLines = getConst . T.lines Const
     viewDecoded = getConst . T.codec aCodec Const
@@ -283,19 +286,3 @@ handle3 f quad = case impure quad of
     impure (Just h1, Just h2, Just h3, phandle) = Right (h1, h2, h3, phandle) 
     impure x = Left x
     justify (h1, h2, h3, phandle) = (Just h1, Just h2, Just h3, phandle)  
-
---
---example1 =  terminateOnError 
---          . feed undefined undefined     
---          . consume undefined undefined undefined 
---          . noNothingHandles
---
---example2 =  terminateOnError 
---          . feed undefined undefined     
---          . consumeCombined undefined undefined 
---          . noNothingHandles
-
---foo2 :: (Monoid w, Error e) => Consumer ByteString (WriterT w (ErrorT e IO)) () -> StdCombinedConsumer e w
---foo2 = combined (either id id) fromConsumer
-
-
