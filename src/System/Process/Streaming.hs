@@ -30,6 +30,7 @@ import Data.Typeable
 import Control.Applicative
 import Control.Monad
 import Control.Monad.Trans.Free
+import Control.Monad.Trans.Either
 import Control.Monad.Error
 import Control.Monad.Writer.Strict
 import Control.Exception
@@ -114,14 +115,14 @@ consume exHandler h c = try' exHandler $ do
                            (consumeMailbox inbox c) 
     return r                                
 
-writeLines :: Error e 
-           => MVar (Output T.Text) 
+writeLines :: MVar (Output T.Text) 
            -> (ByteString -> e) 
            -> FreeT (Producer T.Text IO) IO (Producer ByteString IO ())
            -> IO (Either e ())
 writeLines mvar errh freeTLines = do
     remainingBytes <- iterTLines freeTLines
-    runEffect $ runErrorP $ hoist lift remainingBytes >-> (await >>= throwError . errh) 
+    -- We use EitherT instead of ErrorT to avoid an Error constraint on e.
+    runEitherT $ runEffect $ hoist lift remainingBytes >-> (await >>= lift . left . errh) 
     where
     iterTLines :: forall x. FreeT (Producer T.Text IO) IO x -> IO x
     iterTLines = iterT $ \textProducer -> do
@@ -138,7 +139,7 @@ decodeLines aCodec transform producer = transFreeT transform . viewLines . viewD
     viewLines = getConst . T.lines Const
     viewDecoded = getConst . T.codec aCodec Const
 
-consumeCombinedLines :: (Show e, Typeable e, Error e) 
+consumeCombinedLines :: (Show e, Typeable e) 
                      => (IOException -> e) 
                      -> (ByteString -> e)
                      -> [(Handle, Producer ByteString IO () -> FreeT (Producer T.Text IO) IO (Producer ByteString IO ()))]
