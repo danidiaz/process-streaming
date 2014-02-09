@@ -242,9 +242,9 @@ writeLines mvar errh freeTLines = do
     where
     iterTLines :: forall x. FreeT (Producer T.Text IO) IO x -> IO x
     iterTLines = iterT $ \textProducer -> do
-        withMVar mvar $ \output -> do
-            -- the P.drain bit was difficult to figure out!!!
-            join $ runEffect $ textProducer >-> (toOutput output >> P.drain)
+        -- the P.drain bit was difficult to figure out!!!
+        join $ withMVar mvar $ \output -> do
+            runEffect $ textProducer >-> (toOutput output >> P.drain)
 
 {-| 
     This function reads bytes from a lists of file handles, converts them into
