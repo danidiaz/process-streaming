@@ -16,8 +16,6 @@ import Control.Monad.Trans.Either
 import Control.Monad.Error
 import Control.Monad.Writer.Strict
 import Control.Exception
-import Control.Concurrent
-import Control.Concurrent.Async
 import Control.Lens
 import Pipes
 import qualified Pipes.Prelude as P
@@ -31,16 +29,31 @@ import System.IO
 import System.Process
 import System.Process.Streaming
 import System.Exit
+import System.IO.Error
 
-example = execute2 show create $ \(stdout,stderr) -> runConcE $
-        (,) <$> ConcE (consume show stdout $ useSafeConsumer $ writeFile' "stdout.log")
-            <*> ConcE (consume show stderr $ useSafeConsumer $ writeFile' "stderr.log")
+-- stdout and stderr to different files, using pipes-safe
+example1 :: IO (Either String (ExitCode,()))
+example1 = execute2 show create $ \(hout,herr) -> mapConcE_ id $
+        [ consume' hout "stdout.log", consume' herr "stderr.log" ]
     where
-    create = set stream3 pipe3 $ proc "script1.bat" []
-    writeFile' file = S.withFile file WriteMode toHandle
+    create = set stream3 (pipe2 Inherit) $ proc "script1.bat" []
+    consume' h file = consume show h $ useSafeConsumer $ S.withFile file WriteMode toHandle 
 
+-- missing executable
+example2 :: IO (Either String (ExitCode,()))
+example2 = execute2 show create $ \_ -> return $ Right ()
+    where
+    create = set stream3 (pipe2 Inherit) $ proc "asdfasdf.bat" []
     
-
+-- stream to console the combined lines of stdout and stderr
+example3 :: IO (Either String (ExitCode,()))
+example3 = do
+    execute2 show create $ \(hout,herr) -> consumeCombinedLines show (const "decode error") 
+        [ (hout, lineDecoder T.utf8 id),
+          (herr, lineDecoder T.utf8 $ \x -> yield "errprefix: " *> x) ]
+        (useConsumer T.stdout)
+    where
+    create = set stream3 (pipe2 Inherit) $ proc "script1.bat" []
 
 
 
