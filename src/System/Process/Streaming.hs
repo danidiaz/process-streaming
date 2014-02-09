@@ -16,6 +16,7 @@ module System.Process.Streaming (
         -- * Concurrency helpers
         ConcE (..),
         mapConcE,
+        mapConcE_,
         -- * Consuming stdout/stderr
         Consumption,
         consume,
@@ -23,14 +24,18 @@ module System.Process.Streaming (
         lineDecoder,
         consumeCombinedLines,
         useConsumer,
+        useSafeConsumer,
         useConsumerE,
         useConsumerW,
+        useSafeConsumerW,
         -- * Feeding stdin
         Feeding,
         feed,
         useProducer,
+        useSafeProducer,
         useProducerE,
         useProducerW,
+        useSafeProducerW,
         -- * Prisms and lenses
         _cmdspec,
         _ShellCommand,
@@ -122,6 +127,9 @@ immediately cancelled and the whole computation fails with @e@.
  -}
 mapConcE :: (Show e, Typeable e, Traversable t) => (a -> IO (Either e b)) -> t a -> IO (Either e (t b))
 mapConcE f = revealError .  mapConcurrently (elideError . f)
+
+mapConcE_ :: (Show e, Typeable e, Traversable t) => (a -> IO (Either e b)) -> t a -> IO (Either e ())
+mapConcE_ f l = fmap (const ()) <$> mapConcE f l
 
 mailbox2Handle :: Input ByteString -> Handle -> IO ()
 mailbox2Handle mailbox handle = 
@@ -266,13 +274,13 @@ consumeCombinedLines :: (Show e, Typeable e)
 consumeCombinedLines exHandler encHandler actions c = try' exHandler $ do
     (outbox, inbox, seal) <- spawn' Unbounded
     mVar <- newMVar outbox
-    r <- runConcE $ (,) <$> ConcE (finally (mapConcE (consumeHandle mVar) actions) 
+    r <- runConcE $ (,) <$> ConcE (finally (mapConcE (consume' mVar) actions) 
                                            (atomically seal)
                                   )
                         <*> ConcE (consumeMailbox inbox c)
     return $ snd <$> r
     where 
-    consumeHandle mVar (h,lineDec) = consume exHandler h $ 
+    consume' mVar (h,lineDec) = consume exHandler h $ 
         writeLines mVar encHandler . lineDec 
 
 {-|
@@ -512,7 +520,7 @@ results.
    The first argument is 'Prism' that matches against the tuple returned by
 'createProcess'. If the prism fails to match, an 'error' is raised. 
 
-   The third argument is an error callback for exceptions thrown when launching
+   The second argument is an error callback for exceptions thrown when launching
 the process, or while waiting for it to complete.  
 
    The fourth argument is a computation that depends of what the prism matches
@@ -523,8 +531,8 @@ like 'consume', 'consumeCombinedLines' and 'feed'.
    If an asynchronous exception is thrown while this function executes, the
 external process is terminated. 
  -}
-executeX :: ((forall m. Applicative m => ((t, ProcessHandle) -> m (t, ProcessHandle)) -> (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) -> m (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle))) -> CreateProcess -> (IOException -> e) -> (t -> IO (Either e a)) -> IO (Either e (ExitCode,a))
-executeX somePrism procSpec exHandler action = mask $ \restore -> runEitherT $ do
+executeX :: ((forall m. Applicative m => ((t, ProcessHandle) -> m (t, ProcessHandle)) -> (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) -> m (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle))) -> (IOException -> e) -> CreateProcess -> (t -> IO (Either e a)) -> IO (Either e (ExitCode,a))
+executeX somePrism exHandler procSpec action = mask $ \restore -> runEitherT $ do
     maybeHtuple <- bimapEitherT exHandler id $ EitherT $ createProcessE procSpec  
     case getFirst . getConst . somePrism (Const . First . Just) $ maybeHtuple of
         Nothing -> error "A stdin/stdout/stderr handle was unexpectedly null."
@@ -539,7 +547,7 @@ executeX somePrism procSpec exHandler action = mask $ \restore -> runEitherT $ d
 
     > execute3 = executeX handle3
  -}
-execute3 ::  CreateProcess -> (IOException -> e) -> ((Handle,Handle,Handle) -> IO (Either e a)) -> IO (Either e (ExitCode,a))
+execute3 ::  (IOException -> e) -> CreateProcess -> ((Handle,Handle,Handle) -> IO (Either e a)) -> IO (Either e (ExitCode,a))
 execute3 = executeX handle3
 
 {-|
@@ -547,6 +555,6 @@ execute3 = executeX handle3
 
     > execute2 = executeX handle2
  -}
-execute2 ::  CreateProcess -> (IOException -> e) -> ((Handle,Handle) -> IO (Either e a)) -> IO (Either e (ExitCode,a))
+execute2 ::  (IOException -> e) -> CreateProcess -> ((Handle,Handle) -> IO (Either e a)) -> IO (Either e (ExitCode,a))
 execute2 = executeX handle2
 

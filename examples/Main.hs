@@ -24,8 +24,25 @@ import qualified Pipes.Prelude as P
 import Pipes.Lift
 import Pipes.ByteString
 import qualified Pipes.Text as T
+import qualified Pipes.Safe as S
+import qualified Pipes.Safe.Prelude as S
 import Pipes.Concurrent
 import System.IO
 import System.Process
+import System.Process.Streaming
 import System.Exit
+
+example = execute2 show create $ \(stdout,stderr) -> runConcE $
+        (,) <$> ConcE (consume show stdout $ useSafeConsumer $ writeFile' "stdout.log")
+            <*> ConcE (consume show stderr $ useSafeConsumer $ writeFile' "stderr.log")
+    where
+    create = set stream3 pipe3 $ proc "script1.bat" []
+    writeFile' file = S.withFile file WriteMode toHandle
+
+    
+
+
+
+
+
 
