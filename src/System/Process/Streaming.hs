@@ -71,6 +71,7 @@ import Pipes.Lift
 import Pipes.ByteString
 import qualified Pipes.Text as T
 import Pipes.Concurrent
+import Pipes.Safe (SafeT, runSafeT)
 import System.IO
 import System.Process
 import System.Exit
@@ -281,6 +282,9 @@ consumeCombinedLines exHandler encHandler actions c = try' exHandler $ do
 useConsumer :: Consumer b IO () -> Consumption b e ()
 useConsumer consumer producer = Right <$> runEffect (producer >-> consumer) 
 
+useSafeConsumer :: Consumer b (SafeT IO) () -> Consumption b e ()
+useSafeConsumer consumer producer = Right <$> (runSafeT $ runEffect $ hoist lift producer >-> consumer)
+
 {-|
     Constructs a 'Consumption' from a 'Consumer' that may fail with @e@.
  -}
@@ -300,6 +304,11 @@ useConsumerW resultsUntilError consumer producer = do
     case r of
         Left e' -> return $ Left $ resultsUntilError w e'    
         Right () -> return $ Right w
+
+useSafeConsumerW :: Monoid w => Consumer b (WriterT w (SafeT IO)) () -> Consumption b e w 
+useSafeConsumerW consumer producer = do
+    (_,w) <- runSafeT $ runEffect $ runWriterP $ hoist (lift.lift) producer >-> consumer
+    return $ Right w
 
 {-|
     Type synonym for a function that takes a 'Consumer', does something with
@@ -337,6 +346,12 @@ useProducer producer consumer = Right <$> runEffect (producer >-> consumer)
 {-|
     Constructs a 'Feeding' from a 'Producer' that may fail with @e@.
  -}
+useSafeProducer :: Producer b (SafeT IO) () -> Feeding b e ()
+useSafeProducer producer consumer = Right <$> (runSafeT $ runEffect $ producer >-> hoist lift consumer)
+
+{-|
+    Constructs a 'Feeding' from a 'Producer' that may fail with @e@.
+ -}
 useProducerE :: Error e => Producer b (ErrorT e IO) () -> Feeding b e ()
 useProducerE producer consumer = runEffect $ runErrorP $ producer >-> hoist lift consumer
 
@@ -353,6 +368,11 @@ useProducerW resultsUntilError producer consumer = do
     case r of
         Left e' -> return $ Left $ resultsUntilError w e'    
         Right () -> return $ Right w
+
+useSafeProducerW :: Monoid w => Producer b (WriterT w (SafeT IO)) () -> Feeding b e w 
+useSafeProducerW producer consumer = do
+    (_,w) <- runSafeT $ runEffect $ runWriterP $ producer >-> hoist (lift.lift) consumer 
+    return $ Right w
 
 {-|
     > _cmdspec :: Lens' CreateProcess CmdSpec 
