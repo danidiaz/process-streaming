@@ -25,10 +25,10 @@ module System.Process.Streaming (
         stream3,
         pipe3,
         pipe2,
-        createProcessE,
-        terminateOnError,
         handle3,
         handle2,
+        createProcessE,
+        terminateOnError,
         executeX,
         execute3,
         execute2
@@ -266,23 +266,6 @@ pipe3 = (CreatePipe,CreatePipe,CreatePipe)
 pipe2 :: StdStream -> (StdStream,StdStream,StdStream)
 pipe2 std_in = (std_in,CreatePipe,CreatePipe)
 
-createProcessE :: CreateProcess 
-               -> IO (Either IOException (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle))
-createProcessE = try . createProcess
-
-terminateOnError :: ProcessHandle 
-                 -> IO (Either e a)
-                 -> IO (Either e (ExitCode,a))
-terminateOnError pHandle action = do
-    result <- action
-    case result of
-        Left e -> do    
-            terminateProcess pHandle  
-            return $ Left e
-        Right r -> do 
-            exitCode <- waitForProcess pHandle 
-            return $ Right (exitCode,r)  
-
 handle3 :: forall m. Applicative m => (((Handle, Handle, Handle), ProcessHandle) -> m ((Handle, Handle, Handle), ProcessHandle)) -> (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) -> m (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle)
 handle3 f quad = case impure quad of
     Left l -> pure l
@@ -301,6 +284,23 @@ handle2 f quad = case impure quad of
     impure (Nothing, Just h2, Just h3, phandle) = Right ((h2, h3), phandle) 
     impure x = Left x
     justify ((h2, h3), phandle) = (Nothing, Just h2, Just h3, phandle)  
+
+createProcessE :: CreateProcess 
+               -> IO (Either IOException (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle))
+createProcessE = try . createProcess
+
+terminateOnError :: ProcessHandle 
+                 -> IO (Either e a)
+                 -> IO (Either e (ExitCode,a))
+terminateOnError pHandle action = do
+    result <- action
+    case result of
+        Left e -> do    
+            terminateProcess pHandle  
+            return $ Left e
+        Right r -> do 
+            exitCode <- waitForProcess pHandle 
+            return $ Right (exitCode,r)  
 
 executeX :: ((forall m. Applicative m => ((t, ProcessHandle) -> m (t, ProcessHandle)) -> (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) -> m (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle))) -> CreateProcess -> (IOException -> e) -> (t -> IO (Either e a)) -> IO (Either e (ExitCode,a))
 executeX somePrism procSpec exHandler action = mask $ \restore -> runEitherT $ do
