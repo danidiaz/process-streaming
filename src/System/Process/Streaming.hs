@@ -27,7 +27,11 @@ module System.Process.Streaming (
         _env,
         stream3,
         pipe3,
-        handle3
+        handle3,
+        handle2,
+        executeX,
+        execute3,
+        execute2
     ) where
 
 import Data.Maybe
@@ -278,11 +282,31 @@ stream3 f c = setStreams c <$> f (getStreams c)
 pipe3 :: (StdStream,StdStream,StdStream)
 pipe3 = (CreatePipe,CreatePipe,CreatePipe)
 
-handle3 :: forall m. Applicative m => ((Handle, Handle, Handle, ProcessHandle) -> m (Handle, Handle, Handle, ProcessHandle)) -> (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) -> m (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle)
+handle3 :: forall m. Applicative m => (((Handle, Handle, Handle), ProcessHandle) -> m ((Handle, Handle, Handle), ProcessHandle)) -> (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) -> m (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle)
 handle3 f quad = case impure quad of
     Left l -> pure l
     Right r -> fmap justify (f r)
     where    
-    impure (Just h1, Just h2, Just h3, phandle) = Right (h1, h2, h3, phandle) 
+    impure (Just h1, Just h2, Just h3, phandle) = Right ((h1, h2, h3), phandle) 
     impure x = Left x
-    justify (h1, h2, h3, phandle) = (Just h1, Just h2, Just h3, phandle)  
+    justify ((h1, h2, h3), phandle) = (Just h1, Just h2, Just h3, phandle)  
+
+
+handle2 :: forall m. Applicative m => (((Handle, Handle), ProcessHandle) -> m ((Handle, Handle), ProcessHandle)) -> (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) -> m (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle)
+handle2 f quad = case impure quad of
+    Left l -> pure l
+    Right r -> fmap justify (f r)
+    where    
+    impure (Nothing, Just h2, Just h3, phandle) = Right ((h2, h3), phandle) 
+    impure x = Left x
+    justify ((h2, h3), phandle) = (Nothing, Just h2, Just h3, phandle)  
+
+executeX :: ((forall m. Applicative m => ((htuple, ProcessHandle) -> m (htuple, ProcessHandle)) -> (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) -> m (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle))) -> (IOException -> e) -> CreateProcess -> (htuple -> IO (Either e a)) -> IO (Either e (ExitCode,a))
+executeX = undefined
+
+execute3 :: (IOException -> e) -> CreateProcess -> ((Handle,Handle,Handle) -> IO (Either e a)) -> IO (Either e (ExitCode,a))
+execute3 = executeX handle3
+
+execute2 :: (IOException -> e) -> CreateProcess -> ((Handle,Handle) -> IO (Either e a)) -> IO (Either e (ExitCode,a))
+execute2 = executeX handle2
+
