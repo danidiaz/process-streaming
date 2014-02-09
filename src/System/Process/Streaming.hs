@@ -1,6 +1,6 @@
 -----------------------------------------------------------------------------
 -- |
--- This module constains helper functions and types built on top of
+-- This module contains helper functions and types built on top of
 -- @System.Process@.
 --
 -- See the functions 'execute3', 'execute2' and 'executeX' for an entry point.
