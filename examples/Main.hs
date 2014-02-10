@@ -49,8 +49,8 @@ example2 = execute2 show create $ \_ -> return $ Right ()
 example3 :: IO (Either String (ExitCode,()))
 example3 = do
     execute2 show create $ \(hout,herr) -> consumeCombinedLines show (const "decode error") 
-        [ (hout, lineDecoder T.utf8 id)
-        , (herr, lineDecoder T.utf8 $ \x -> yield "errprefix: " *> x) 
+        [ (hout, lineDecoder T.decodeIso8859_1 id)
+        , (herr, lineDecoder T.decodeIso8859_1 $ \x -> yield "errprefix: " *> x) 
         ]
         (useSafeConsumer $ S.withFile "combined.txt" WriteMode T.toHandle )
     where

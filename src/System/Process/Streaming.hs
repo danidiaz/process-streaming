@@ -22,6 +22,7 @@ module System.Process.Streaming (
         consume,
         LineDecoder,
         lineDecoder,
+        lineDecoderC,
         consumeCombinedLines,
         useConsumer,
         useSafeConsumer,
@@ -220,16 +221,22 @@ add using applicative notation:
 
     The modifier function could also be used to add timestamps.
  -}
-lineDecoder :: T.Codec
+lineDecoder :: (forall r. Producer ByteString IO r -> Producer T.Text IO (Producer ByteString IO r)) 
             -> (forall r. Producer T.Text IO r -> Producer T.Text IO r) 
             -> LineDecoder
-lineDecoder aCodec transform producer =  transFreeT transform 
-                                       . viewLines 
-                                       . viewDecoded 
-                                       $ producer
+lineDecoder decoder transform =  transFreeT transform 
+                               . viewLines 
+                               . decoder
     where 
     viewLines = getConst . T.lines Const
-    viewDecoded = getConst . T.codec aCodec Const
+--    viewDecoded = getConst . T.codec aCodec Const
+
+lineDecoderC :: T.Codec
+             -> (forall r. Producer T.Text IO r -> Producer T.Text IO r) 
+             -> LineDecoder
+lineDecoderC aCodec = lineDecoder decoder 
+    where 
+    decoder = getConst . T.codec aCodec Const
 
 writeLines :: MVar (Output T.Text) 
            -> (ByteString -> e) 
