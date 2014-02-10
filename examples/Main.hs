@@ -33,24 +33,24 @@ import System.IO.Error
 
 -- stdout and stderr to different files, using pipes-safe
 example1 :: IO (Either String (ExitCode,()))
-example1 = execute2 show create $ \(hout,herr) -> mapConcE_ id $
-        [ consume' hout "stdout.log", consume' herr "stderr.log" ]
+example1 = execute2 "nohandle!" show create $ \(hout,herr) -> mapConcE_ consume' $
+        [ (hout,"stdout.log"), (herr,"stderr.log") ]
     where
     create = set stream3 (pipe2 Inherit) $ proc "script1.bat" []
-    consume' h file = consume show h $ useSafeConsumer $ S.withFile file WriteMode toHandle 
+    consume' (h,file) = consume show h $ useSafeConsumer $ S.withFile file WriteMode toHandle 
 
 -- missing executable
 example2 :: IO (Either String (ExitCode,()))
-example2 = execute2 show create $ \_ -> return $ Right ()
+example2 = execute2 "nohandle!" show create $ \_ -> return $ Right ()
     where
     create = set stream3 (pipe2 Inherit) $ proc "asdfasdf.bat" []
     
 -- stream to console the combined lines of stdout and stderr
 example3 :: IO (Either String (ExitCode,()))
 example3 = do
-    execute2 show create $ \(hout,herr) -> consumeCombinedLines show (const "decode error") 
-        [ (hout, lineDecoder T.decodeIso8859_1 id)
-        , (herr, lineDecoder T.decodeIso8859_1 $ \x -> yield "errprefix: " *> x) 
+    execute2 "nohandle!" show create $ \(hout,herr) -> consumeCombinedLines show (const "decode error") 
+        [ (hout, decodeLines T.decodeIso8859_1 id)
+        , (herr, decodeLines T.decodeIso8859_1 $ \x -> yield "errprefix: " *> x) 
         ]
         (useSafeConsumer $ S.withFile "combined.txt" WriteMode T.toHandle )
     where

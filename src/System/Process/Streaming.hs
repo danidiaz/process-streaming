@@ -21,8 +21,8 @@ module System.Process.Streaming (
         Consumption,
         consume,
         LineDecoder,
-        lineDecoder,
-        lineDecoderC,
+        decodeLines,
+        decodeLinesC,
         consumeCombinedLines,
         useConsumer,
         useSafeConsumer,
@@ -219,24 +219,24 @@ each individual line.
     If you want the lines unmodified, just pass @id@. Line prefixes are easy to
 add using applicative notation:
 
-  > lineDecoder utf8 (\x -> yield "prefix: " *> x)
+  > decodeLines utf8 (\x -> yield "prefix: " *> x)
 
     The modifier function could also be used to add timestamps.
  -}
-lineDecoder :: (forall r. Producer ByteString IO r -> Producer T.Text IO (Producer ByteString IO r)) 
+decodeLines :: (forall r. Producer ByteString IO r -> Producer T.Text IO (Producer ByteString IO r)) 
             -> (forall r. Producer T.Text IO r -> Producer T.Text IO r) 
             -> LineDecoder
-lineDecoder decoder transform =  transFreeT transform 
+decodeLines decoder transform =  transFreeT transform 
                                . viewLines 
                                . decoder
     where 
     viewLines = getConst . T.lines Const
 --    viewDecoded = getConst . T.codec aCodec Const
 
-lineDecoderC :: T.Codec
+decodeLinesC :: T.Codec
              -> (forall r. Producer T.Text IO r -> Producer T.Text IO r) 
              -> LineDecoder
-lineDecoderC aCodec = lineDecoder decoder 
+decodeLinesC aCodec = decodeLines decoder 
     where 
     decoder = getConst . T.codec aCodec Const
 
@@ -540,11 +540,11 @@ like 'consume', 'consumeCombinedLines' and 'feed'.
    If an asynchronous exception is thrown while this function executes, the
 external process is terminated. 
  -}
-executeX :: ((forall m. Applicative m => ((t, ProcessHandle) -> m (t, ProcessHandle)) -> (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) -> m (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle))) -> (IOException -> e) -> CreateProcess -> (t -> IO (Either e a)) -> IO (Either e (ExitCode,a))
-executeX somePrism exHandler procSpec action = mask $ \restore -> runEitherT $ do
+executeX :: ((forall m. Applicative m => ((t, ProcessHandle) -> m (t, ProcessHandle)) -> (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) -> m (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle))) -> e -> (IOException -> e) -> CreateProcess -> (t -> IO (Either e a)) -> IO (Either e (ExitCode,a))
+executeX somePrism nomatch exHandler procSpec action = mask $ \restore -> runEitherT $ do
     maybeHtuple <- bimapEitherT exHandler id $ EitherT $ createProcessE procSpec  
     case getFirst . getConst . somePrism (Const . First . Just) $ maybeHtuple of
-        Nothing -> error "A stdin/stdout/stderr handle was unexpectedly null."
+        Nothing -> left nomatch 
         Just (htuple,phandle) -> do
             EitherT $ try' exHandler $ 
                 restore (terminateOnError phandle $ action htuple)
@@ -556,7 +556,7 @@ executeX somePrism exHandler procSpec action = mask $ \restore -> runEitherT $ d
 
     > execute3 = executeX handle3
  -}
-execute3 ::  (IOException -> e) -> CreateProcess -> ((Handle,Handle,Handle) -> IO (Either e a)) -> IO (Either e (ExitCode,a))
+execute3 ::  e -> (IOException -> e) -> CreateProcess -> ((Handle,Handle,Handle) -> IO (Either e a)) -> IO (Either e (ExitCode,a))
 execute3 = executeX handle3
 
 {-|
@@ -564,6 +564,6 @@ execute3 = executeX handle3
 
     > execute2 = executeX handle2
  -}
-execute2 ::  (IOException -> e) -> CreateProcess -> ((Handle,Handle) -> IO (Either e a)) -> IO (Either e (ExitCode,a))
+execute2 :: e -> (IOException -> e) -> CreateProcess -> ((Handle,Handle) -> IO (Either e a)) -> IO (Either e (ExitCode,a))
 execute2 = executeX handle2
 
