@@ -62,6 +62,7 @@ import Data.Either
 import Data.Monoid
 import Data.Traversable
 import Data.Typeable
+import Data.Text 
 import Control.Applicative
 import Control.Monad
 import Control.Monad.Trans.Free
@@ -72,6 +73,7 @@ import Control.Exception
 import Control.Concurrent
 import Control.Concurrent.Async
 import Pipes
+import qualified Pipes as P
 import qualified Pipes.Prelude as P
 import Pipes.Lift
 import Pipes.ByteString
@@ -251,7 +253,7 @@ writeLines mvar errh freeTLines = do
     iterTLines = iterT $ \textProducer -> do
         -- the P.drain bit was difficult to figure out!!!
         join $ withMVar mvar $ \output -> do
-            runEffect $ textProducer >-> (toOutput output >> P.drain)
+            runEffect $ (textProducer <* P.yield (singleton '\n')) >-> (toOutput output >> P.drain)
 
 {-| 
     This function reads bytes from a lists of file handles, converts them into
