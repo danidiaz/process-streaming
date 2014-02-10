@@ -48,13 +48,14 @@ example2 = execute2 "nohandle!" show create $ \_ -> return $ Right ()
 -- stream to console the combined lines of stdout and stderr
 example3 :: IO (Either String (ExitCode,()))
 example3 = do
-    execute2 "nohandle!" show create $ \(hout,herr) -> consumeCombinedLines show (const "decode error") 
-        [ (hout, decodeLines T.decodeIso8859_1 id)
-        , (herr, decodeLines T.decodeIso8859_1 $ \x -> yield "errprefix: " *> x) 
+    execute2 "nohandle!" show create $ \(hout,herr) -> consumeCombinedLines show 
+        [ (hout, decodeLines T.decodeIso8859_1 id, leftoverp)
+        , (herr, decodeLines T.decodeIso8859_1 $ \x -> yield "errprefix: " *> x , leftoverp) 
         ]
         (useSafeConsumer $ S.withFile "combined.txt" WriteMode T.toHandle )
     where
     create = set stream3 (pipe2 Inherit) $ proc "script1.bat" []
+    leftoverp = firstFailingBytes (const "badbytes")
 
 
 

@@ -24,6 +24,9 @@ module System.Process.Streaming (
         decodeLines,
         decodeLinesC,
         consumeCombinedLines,
+        LeftoverPolicy,
+        ignoreLeftovers,
+        firstFailingBytes,
         useConsumer,
         useSafeConsumer,
         useConsumerE,
@@ -59,6 +62,7 @@ module System.Process.Streaming (
 import Data.Maybe
 import Data.Functor.Identity
 import Data.Either
+import Data.Either.Combinators
 import Data.Monoid
 import Data.Traversable
 import Data.Typeable
@@ -167,7 +171,7 @@ it, and returns a result @a@ or an error @e@.
 convert a @Parser b IO (Either e a)@ to a @Consumption b e a@ by using
 'evalStateT'. 
  -}
-type Consumption b e a = Producer b IO () -> IO (Either e a)
+type Consumption b l e a = Producer b IO l -> IO (Either e a)
 
 {-|
     This function consumes the @stdout@ or @stderr@ of an external process,
@@ -241,13 +245,14 @@ decodeLinesC aCodec = decodeLines decoder
     decoder = getConst . T.codec aCodec Const
 
 writeLines :: MVar (Output T.Text) 
-           -> (ByteString -> e) 
+           -> LeftoverPolicy (Producer ByteString IO ()) e
            -> FreeT (Producer T.Text IO) IO (Producer ByteString IO ())
            -> IO (Either e ())
 writeLines mvar errh freeTLines = do
     remainingBytes <- iterTLines freeTLines
     -- We use EitherT here instead of ErrorT to avoid an Error constraint on e.
-    runEitherT $ runEffect $ hoist lift remainingBytes >-> (await >>= lift . left . errh) 
+    errh remainingBytes
+    -- runEitherT $ runEffect $ hoist lift remainingBytes >-> (await >>= lift . left . errh) 
     where
     iterTLines :: forall x. FreeT (Producer T.Text IO) IO x -> IO x
     iterTLines = iterT $ \textProducer -> do
@@ -276,11 +281,10 @@ other handles won't be consumed, either!
  -}
 consumeCombinedLines :: (Show e, Typeable e) 
                      => (IOException -> e) 
-                     -> (ByteString -> e)
-                     -> [(Handle, LineDecoder)]
+                     -> [(Handle, LineDecoder, LeftoverPolicy (Producer ByteString IO ()) e]
         			 -> (Producer T.Text IO () -> IO (Either e a))
         		     -> IO (Either e a) 
-consumeCombinedLines exHandler encHandler actions c = try' exHandler $ do
+consumeCombinedLines exHandler actions c = try' exHandler $ do
     (outbox, inbox, seal) <- spawn' Unbounded
     mVar <- newMVar outbox
     r <- runConcE $ (,) <$> ConcE (finally (mapConcE (consume' mVar) actions) 
@@ -289,23 +293,33 @@ consumeCombinedLines exHandler encHandler actions c = try' exHandler $ do
                         <*> ConcE (consumeMailbox inbox c)
     return $ snd <$> r
     where 
-    consume' mVar (h,lineDec) = consume exHandler h $ 
-        writeLines mVar encHandler . lineDec 
+    consume' mVar (h,lineDec,leftoverp) = consume exHandler h $ 
+        writeLines mVar leftoverp . lineDec 
+
+
+type LeftoverPolicy l e = l -> IO (Either e ())
+
+ignoreLeftovers :: LeftoverPolicy l e 
+ignoreLeftovers =  const (return $ Right ()) 
+
+firstFailingBytes :: (ByteString -> e) -> LeftoverPolicy (Producer ByteString IO ()) e 
+firstFailingBytes errh remainingBytes = do
+    runEitherT . runEffect $ hoist lift remainingBytes >-> (await >>= lift . left . errh)
 
 {-|
     Constructs a 'Consumption' from a 'Consumer'. If basically combines the
 'Producer' and the 'Consumer' in a pipeline and runs it.
  -}
-useConsumer :: Consumer b IO () -> Consumption b e ()
+useConsumer :: Consumer b IO l -> Consumption b l e ()
 useConsumer consumer producer = Right <$> runEffect (producer >-> consumer) 
 
-useSafeConsumer :: Consumer b (SafeT IO) () -> Consumption b e ()
+useSafeConsumer :: Consumer b (SafeT IO) l -> Consumption b l e ()
 useSafeConsumer consumer producer = Right <$> (runSafeT $ runEffect $ hoist lift producer >-> consumer)
 
 {-|
     Constructs a 'Consumption' from a 'Consumer' that may fail with @e@.
  -}
-useConsumerE :: Error e => Consumer b (ErrorT e IO) () -> Consumption b e ()
+useConsumerE :: Error e => Consumer b (ErrorT e IO) l -> Consumption b l e ()
 useConsumerE consumer producer = runEffect $ runErrorP $ hoist lift producer >-> consumer
 
 {-|
@@ -315,17 +329,20 @@ with @e'@, a failure @e@ is constructed by combining @e'@ and the values
 accumulated up until the error, so that @e@ may include them if the user
 wishes. To ignore them, it is enough to pass 'const' as the first argument. 
  -}
-useConsumerW :: (Monoid w, Error e') => (w -> e' -> e) -> Consumer b (ErrorT e' (WriterT w IO)) () -> Consumption b e w 
+useConsumerW :: (Monoid w, Error e') => (w -> e' -> e) -> Consumer b (ErrorT e' (WriterT w IO)) l -> Consumption b l e w 
 useConsumerW resultsUntilError consumer producer = do
     (r,w) <- runEffect $ runWriterP $ runErrorP $ hoist (lift.lift) producer >-> consumer 
     case r of
         Left e' -> return $ Left $ resultsUntilError w e'    
         Right () -> return $ Right w
 
-useSafeConsumerW :: Monoid w => Consumer b (WriterT w (SafeT IO)) () -> Consumption b e w 
+useSafeConsumerW :: Monoid w => Consumer b (WriterT w (SafeT IO)) l -> Consumption b l e w 
 useSafeConsumerW consumer producer = do
     (_,w) <- runSafeT $ runEffect $ runWriterP $ hoist (lift.lift) producer >-> consumer
     return $ Right w
+
+
+
 
 {-|
     Type synonym for a function that takes a 'Consumer', does something with
