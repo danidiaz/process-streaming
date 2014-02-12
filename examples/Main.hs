@@ -36,25 +36,27 @@ example1 :: IO (Either String (ExitCode,()))
 example1 = execute2 "nohandle!" show create $ \(hout,herr) -> mapConcE_ consume' $
         [ (hout,"stdout.log"), (herr,"stderr.log") ]
     where
-    create = set stream3 (pipe2 Inherit) $ proc "script1.bat" []
-    consume' (h,file) = consume show h $ useSafeConsumer $ S.withFile file WriteMode toHandle 
+    create = set stream3 pipe2 $ proc "script1.bat" []
+    consume' (h,file) = consume show h $ 
+        safely $ useConsumer ignoreLeftovers $ 
+            S.withFile file WriteMode toHandle
 
 -- missing executable
 example2 :: IO (Either String (ExitCode,()))
 example2 = execute2 "nohandle!" show create $ \_ -> return $ Right ()
     where
-    create = set stream3 (pipe2 Inherit) $ proc "asdfasdf.bat" []
-    
--- stream to console the combined lines of stdout and stderr
+    create = set stream3 pipe2 $ proc "asdfasdf.bat" []
+
+---- stream to console the combined lines of stdout and stderr
 example3 :: IO (Either String (ExitCode,()))
 example3 = do
     execute2 "nohandle!" show create $ \(hout,herr) -> consumeCombinedLines show 
         [ (hout, decodeLines T.decodeIso8859_1 id, leftoverp)
         , (herr, decodeLines T.decodeIso8859_1 $ \x -> yield "errprefix: " *> x , leftoverp) 
         ]
-        (useSafeConsumer $ S.withFile "combined.txt" WriteMode T.toHandle )
+        (safely $ useConsumer' $ S.withFile "combined.txt" WriteMode T.toHandle)
     where
-    create = set stream3 (pipe2 Inherit) $ proc "script1.bat" []
+    create = set stream3 pipe2 $ proc "script1.bat" []
     leftoverp = firstFailingBytes (const "badbytes")
 
 

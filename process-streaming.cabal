@@ -31,7 +31,8 @@ Library
         pipes-bytestring >= 2.0.0,
         pipes-text >= 0.0.0.6,
         pipes-concurrency >= 2.0.2,
-        pipes-safe >= 2.0.2 
+        pipes-safe >= 2.0.2,
+        exceptions >= 0.3.3
         
     default-language: Haskell2010
 

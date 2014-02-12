@@ -1,4 +1,4 @@
------------------------------------------------------------------------------
+
 -- |
 -- This module contains helper functions and types built on top of
 -- @System.Process@.
@@ -28,18 +28,16 @@ module System.Process.Streaming (
         ignoreLeftovers,
         firstFailingBytes,
         useConsumer,
-        useSafeConsumer,
-        useConsumerE,
-        useConsumerW,
-        useSafeConsumerW,
+        useConsumer',
         -- * Feeding stdin
         Feeding,
         feed,
         useProducer,
-        useSafeProducer,
-        useProducerE,
-        useProducerW,
-        useSafeProducerW,
+        -- * Adapters
+        safely,
+        fallibly,
+        monoidally,
+        safelyMonoidally,
         -- * Prisms and lenses
         _cmdspec,
         _ShellCommand,
@@ -49,6 +47,7 @@ module System.Process.Streaming (
         stream3,
         pipe3,
         pipe2,
+        pipe2h,
         handle3,
         handle2,
         -- * Execution helpers
@@ -73,6 +72,7 @@ import Control.Monad.Trans.Free
 import Control.Monad.Trans.Either
 import Control.Monad.Error
 import Control.Monad.Writer.Strict
+import qualified Control.Monad.Catch as C
 import Control.Exception
 import Control.Concurrent
 import Control.Concurrent.Async
@@ -171,7 +171,7 @@ it, and returns a result @a@ or an error @e@.
 convert a @Parser b IO (Either e a)@ to a @Consumption b e a@ by using
 'evalStateT'. 
  -}
-type Consumption b l e a = Producer b IO l -> IO (Either e a)
+type Consumption b l e m a = Producer b m l -> m (Either e a)
 
 {-|
     This function consumes the @stdout@ or @stderr@ of an external process,
@@ -281,7 +281,7 @@ other handles won't be consumed, either!
  -}
 consumeCombinedLines :: (Show e, Typeable e) 
                      => (IOException -> e) 
-                     -> [(Handle, LineDecoder, LeftoverPolicy (Producer ByteString IO ()) e]
+                     -> [(Handle, LineDecoder, LeftoverPolicy (Producer ByteString IO ()) e)]
         			 -> (Producer T.Text IO () -> IO (Either e a))
         		     -> IO (Either e a) 
 consumeCombinedLines exHandler actions c = try' exHandler $ do
@@ -297,50 +297,86 @@ consumeCombinedLines exHandler actions c = try' exHandler $ do
         writeLines mVar leftoverp . lineDec 
 
 
-type LeftoverPolicy l e = l -> IO (Either e ())
+type LeftoverPolicy  l e = l -> IO (Either e ())
 
-ignoreLeftovers :: LeftoverPolicy l e 
-ignoreLeftovers =  const (return $ Right ()) 
+type LeftoverPolicy' l e = forall m. MonadIO m => l -> m (Either e ())
 
-firstFailingBytes :: (ByteString -> e) -> LeftoverPolicy (Producer ByteString IO ()) e 
+ignoreLeftovers :: LeftoverPolicy' l e 
+ignoreLeftovers =  const (liftIO . return $ Right ()) 
+
+firstFailingBytes :: (ByteString -> e) -> LeftoverPolicy' (Producer ByteString IO ()) e 
 firstFailingBytes errh remainingBytes = do
-    runEitherT . runEffect $ hoist lift remainingBytes >-> (await >>= lift . left . errh)
+    liftIO $ runEitherT . runEffect $ hoist lift remainingBytes >-> (await >>= lift . left . errh)
 
 {-|
     Constructs a 'Consumption' from a 'Consumer'. If basically combines the
 'Producer' and the 'Consumer' in a pipeline and runs it.
  -}
-useConsumer :: Consumer b IO l -> Consumption b l e ()
-useConsumer consumer producer = Right <$> runEffect (producer >-> consumer) 
+useConsumer :: MonadIO m => LeftoverPolicy' l e -> Consumer b m l -> Consumption b l e m ()
+useConsumer policy consumer producer = do
+    leftovers <- runEffect $ producer >-> consumer 
+    policy leftovers 
 
-useSafeConsumer :: Consumer b (SafeT IO) l -> Consumption b l e ()
-useSafeConsumer consumer producer = Right <$> (runSafeT $ runEffect $ hoist lift producer >-> consumer)
+useConsumer' :: MonadIO m => Consumer b m l -> Consumption b l e m ()
+useConsumer' = useConsumer ignoreLeftovers
 
-{-|
-    Constructs a 'Consumption' from a 'Consumer' that may fail with @e@.
- -}
-useConsumerE :: Error e => Consumer b (ErrorT e IO) l -> Consumption b l e ()
-useConsumerE consumer producer = runEffect $ runErrorP $ hoist lift producer >-> consumer
+safely :: (C.MonadCatch m, MonadIO m) => (Proxy a b c d (SafeT m) r -> (SafeT m) x) 
+                                      -> (Proxy a b c d m r -> m x) 
+safely safeConsumption = runSafeT . safeConsumption . hoist lift 
 
-{-|
-    Constructs a 'Consumption' from a 'Consumer' that may fail with @e'@ and
-that keeps a monoidal summary @w@ of the consumed data. If the consumer fails
-with @e'@, a failure @e@ is constructed by combining @e'@ and the values
-accumulated up until the error, so that @e@ may include them if the user
-wishes. To ignore them, it is enough to pass 'const' as the first argument. 
- -}
-useConsumerW :: (Monoid w, Error e') => (w -> e' -> e) -> Consumer b (ErrorT e' (WriterT w IO)) l -> Consumption b l e w 
-useConsumerW resultsUntilError consumer producer = do
-    (r,w) <- runEffect $ runWriterP $ runErrorP $ hoist (lift.lift) producer >-> consumer 
+fallibly :: (Monad m, Error e) => (Proxy a b c d (ErrorT e m) l -> (ErrorT e m) (Either e x)) 
+                               -> (Proxy a b c d m l -> m (Either e x)) 
+fallibly fallibleConsumption proxy = join `liftM` (runErrorT . fallibleConsumption . hoist lift $ proxy)
+
+monoidally :: (Monad m, Monoid w, Error e') => (w -> e' -> e) 
+                                            -> (w -> e  -> e)
+                                            -> (Proxy a b c d (ErrorT e' (WriterT w m)) l -> ErrorT e' (WriterT w m) (Either e ()))
+                                            -> (Proxy a b c d m l -> m (Either e w))
+monoidally errh1 errh2 monoidalActivity proxy = do
+    (r,w) <- runWriterT . runErrorT . monoidalActivity . hoist (lift.lift) $ proxy
     case r of
-        Left e' -> return $ Left $ resultsUntilError w e'    
-        Right () -> return $ Right w
+        Left e' -> return $ Left $ errh1 w e'    
+        Right r' -> case r' of
+            Left e -> return $ Left $ errh2 w e
+            Right () -> return $ Right w 
 
-useSafeConsumerW :: Monoid w => Consumer b (WriterT w (SafeT IO)) l -> Consumption b l e w 
-useSafeConsumerW consumer producer = do
-    (_,w) <- runSafeT $ runEffect $ runWriterP $ hoist (lift.lift) producer >-> consumer
-    return $ Right w
+safelyMonoidally :: (C.MonadCatch m, MonadIO m, Monoid w) => (w -> e -> e)
+                                                          -> (Proxy a b c d (WriterT w (SafeT m)) l -> WriterT w (SafeT m) (Either e ()))
+                                                          -> (Proxy a b c d m l -> m (Either e w))
+safelyMonoidally errh monoidalActivity proxy = do        
+    (r,w) <- runSafeT . runWriterT . monoidalActivity . hoist (lift.lift) $ proxy
+    case r of 
+        Left e -> return $ Left $ errh w e  
+        Right () -> return $ Right w 
 
+--useSafeConsumer :: Consumer b (SafeT IO) l -> Consumption b l e ()
+--useSafeConsumer consumer producer = Right <$> (runSafeT $ runEffect $ hoist lift producer >-> consumer)
+--
+--{-|
+--    Constructs a 'Consumption' from a 'Consumer' that may fail with @e@.
+-- -}
+--useConsumerE :: Error e => Consumer b (ErrorT e IO) l -> Consumption b l e ()
+--useConsumerE consumer producer = runEffect $ runErrorP $ hoist lift producer >-> consumer
+--
+--{-|
+--    Constructs a 'Consumption' from a 'Consumer' that may fail with @e'@ and
+--that keeps a monoidal summary @w@ of the consumed data. If the consumer fails
+--with @e'@, a failure @e@ is constructed by combining @e'@ and the values
+--accumulated up until the error, so that @e@ may include them if the user
+--wishes. To ignore them, it is enough to pass 'const' as the first argument. 
+-- -}
+--useConsumerW :: (Monoid w, Error e') => (w -> e' -> e) -> Consumer b (ErrorT e' (WriterT w IO)) l -> Consumption b l e w 
+--useConsumerW resultsUntilError consumer producer = do
+--    (r,w) <- runEffect $ runWriterP $ runErrorP $ hoist (lift.lift) producer >-> consumer 
+--    case r of
+--        Left e' -> return $ Left $ resultsUntilError w e'    
+--        Right () -> return $ Right w
+--
+--useSafeConsumerW :: Monoid w => Consumer b (WriterT w (SafeT IO)) l -> Consumption b l e w 
+--useSafeConsumerW consumer producer = do
+--    (_,w) <- runSafeT $ runEffect $ runWriterP $ hoist (lift.lift) producer >-> consumer
+--    return $ Right w
+--
 
 
 
@@ -348,7 +384,7 @@ useSafeConsumerW consumer producer = do
     Type synonym for a function that takes a 'Consumer', does something with
 it, and returns a result @a@ or an error @e@. 
  -}
-type Feeding b e a = Consumer b IO () -> IO (Either e a)
+type Feeding b e m a = Consumer b m () -> m (Either e a)
 
 {-|
     This function feeds the stdin of an external process, with buffering.
@@ -374,40 +410,40 @@ feed exHandler h c = try' exHandler $ do
     Constructs a 'Feeding' from a 'Producer'. If basically combines the
 'Producer' and the 'Consumer' in a pipeline and runs it.
  -}
-useProducer :: Producer b IO () -> Feeding b e ()
-useProducer producer consumer = Right <$> runEffect (producer >-> consumer) 
+useProducer :: MonadIO m => Producer b m () -> Feeding b e m ()
+useProducer producer consumer = Right `liftM` runEffect (producer >-> consumer) 
 
 {-|
     Constructs a 'Feeding' from a 'Producer' that may fail with @e@.
  -}
-useSafeProducer :: Producer b (SafeT IO) () -> Feeding b e ()
-useSafeProducer producer consumer = Right <$> (runSafeT $ runEffect $ producer >-> hoist lift consumer)
-
-{-|
-    Constructs a 'Feeding' from a 'Producer' that may fail with @e@.
- -}
-useProducerE :: Error e => Producer b (ErrorT e IO) () -> Feeding b e ()
-useProducerE producer consumer = runEffect $ runErrorP $ producer >-> hoist lift consumer
-
-{-|
-    Constructs a 'Feeding' from a 'Producer' that may fail with @e'@ and
-that keeps a monoidal summary @w@ of the consumed data. If the producer fails
-with @e'@, a failure @e@ is constructed by combining @e'@ and the values
-accumulated up until the error, so that @e@ may include them if the user
-wishes. To ignore them, it is enough to pass 'const' as the first argument. 
- -}
-useProducerW :: (Monoid w, Error e') => (w -> e' -> e) -> Producer b (ErrorT e' (WriterT w IO)) () -> Feeding b e w 
-useProducerW resultsUntilError producer consumer = do
-    (r,w) <- runEffect $ runWriterP $ runErrorP $ producer >-> hoist (lift.lift) consumer 
-    case r of
-        Left e' -> return $ Left $ resultsUntilError w e'    
-        Right () -> return $ Right w
-
-useSafeProducerW :: Monoid w => Producer b (WriterT w (SafeT IO)) () -> Feeding b e w 
-useSafeProducerW producer consumer = do
-    (_,w) <- runSafeT $ runEffect $ runWriterP $ producer >-> hoist (lift.lift) consumer 
-    return $ Right w
-
+--useSafeProducer :: Producer b (SafeT IO) () -> Feeding b e ()
+--useSafeProducer producer consumer = Right <$> (runSafeT $ runEffect $ producer >-> hoist lift consumer)
+--
+--{-|
+--    Constructs a 'Feeding' from a 'Producer' that may fail with @e@.
+-- -}
+--useProducerE :: Error e => Producer b (ErrorT e IO) () -> Feeding b e ()
+--useProducerE producer consumer = runEffect $ runErrorP $ producer >-> hoist lift consumer
+--
+--{-|
+--    Constructs a 'Feeding' from a 'Producer' that may fail with @e'@ and
+--that keeps a monoidal summary @w@ of the consumed data. If the producer fails
+--with @e'@, a failure @e@ is constructed by combining @e'@ and the values
+--accumulated up until the error, so that @e@ may include them if the user
+--wishes. To ignore them, it is enough to pass 'const' as the first argument. 
+-- -}
+--useProducerW :: (Monoid w, Error e') => (w -> e' -> e) -> Producer b (ErrorT e' (WriterT w IO)) () -> Feeding b e w 
+--useProducerW resultsUntilError producer consumer = do
+--    (r,w) <- runEffect $ runWriterP $ runErrorP $ producer >-> hoist (lift.lift) consumer 
+--    case r of
+--        Left e' -> return $ Left $ resultsUntilError w e'    
+--        Right () -> return $ Right w
+--
+--useSafeProducerW :: Monoid w => Producer b (WriterT w (SafeT IO)) () -> Feeding b e w 
+--useSafeProducerW producer consumer = do
+--    (_,w) <- runSafeT $ runEffect $ runWriterP $ producer >-> hoist (lift.lift) consumer 
+--    return $ Right w
+--
 {-|
     > _cmdspec :: Lens' CreateProcess CmdSpec 
 -}
@@ -478,8 +514,15 @@ pipe3 = (CreatePipe,CreatePipe,CreatePipe)
     Specifies @CreatePipe@ for @std_out@ and @std_err@; @std_in@ is taken as 
 parameter. 
  -}
-pipe2 :: StdStream -> (StdStream,StdStream,StdStream)
-pipe2 std_in = (std_in,CreatePipe,CreatePipe)
+pipe2 :: (StdStream,StdStream,StdStream)
+pipe2 = (Inherit,CreatePipe,CreatePipe)
+
+{-|
+    Specifies @CreatePipe@ for @std_out@ and @std_err@; @std_in@ is taken as 
+parameter. 
+ -}
+pipe2h :: Handle -> (StdStream,StdStream,StdStream)
+pipe2h handle = (UseHandle handle,CreatePipe,CreatePipe)
 
 {-|
     A 'Prism' for the return value of 'createProcess' that removes the 'Maybe's from @stdin@, @stdout@ and @stderr@ or fails to match if any of them is 'Nothing'.
