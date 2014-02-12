@@ -8,7 +8,8 @@ The basic goals:
 
 - Concurrent, buffered, streaming access to stdin, stdout and stderr.
 
-- Easy integration with pipes-parse (even without a direct dependency).
+- Easy integration with pipes from the pipes-parse package and folds from the
+  foldl package.
 
 - Avoid launching exceptions: use Either or similar solution to signal error
   conditions.

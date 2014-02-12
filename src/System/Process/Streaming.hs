@@ -14,7 +14,6 @@
 
 module System.Process.Streaming ( 
         -- * Consuming stdout/stderr
-        Consumption,
         consume,
         LineDecoder,
         decodeLines,
@@ -27,7 +26,6 @@ module System.Process.Streaming (
         useConsumer,
         useConsumer',
         -- * Feeding stdin
-        Feeding,
         feed,
         useProducer,
         -- * Adapters
@@ -266,12 +264,17 @@ consumeCombinedLines exHandler actions c = try' exHandler $ do
     Constructs a 'Consumption' from a 'Consumer'. If basically combines the
 'Producer' and the 'Consumer' in a pipeline and runs it.
  -}
-useConsumer :: MonadIO m => LeftoverPolicy l e -> Consumer b m l -> Consumption b l e m ()
+useConsumer :: MonadIO m 
+            => LeftoverPolicy l e 
+            -> Consumer b m l 
+            -> Producer b m l -> m (Either e ())
 useConsumer policy consumer producer = do
     leftovers <- runEffect $ producer >-> consumer 
     policy leftovers 
 
-useConsumer' :: MonadIO m => Consumer b m l -> Consumption b l e m ()
+useConsumer' :: MonadIO m       
+             => Consumer b m l 
+             -> Producer b m l -> m (Either e ())
 useConsumer' = useConsumer ignoreLeftovers
 
 --useSafeConsumer :: Consumer b (SafeT IO) l -> Consumption b l e ()
@@ -303,14 +306,6 @@ useConsumer' = useConsumer ignoreLeftovers
 --    return $ Right w
 --
 
-
-
-{-|
-    Type synonym for a function that takes a 'Consumer', does something with
-it, and returns a result @a@ or an error @e@. 
- -}
-type Feeding b e m a = Consumer b m () -> m (Either e a)
-
 {-|
     This function feeds the stdin of an external process, with buffering.
 
@@ -335,7 +330,9 @@ feed exHandler h c = try' exHandler $ do
     Constructs a 'Feeding' from a 'Producer'. If basically combines the
 'Producer' and the 'Consumer' in a pipeline and runs it.
  -}
-useProducer :: MonadIO m => Producer b m () -> Feeding b e m ()
+useProducer :: MonadIO m 
+            => Producer b m () 
+            -> Consumer b m () -> m (Either e ())
 useProducer producer consumer = Right `liftM` runEffect (producer >-> consumer) 
 
 safely :: (C.MonadCatch m, MonadIO m, MFunctor t) 
