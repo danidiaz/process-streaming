@@ -32,7 +32,7 @@ module System.Process.Streaming (
         safely,
         fallibly,
         monoidally,
-        safelyMonoidally,
+        monoifably,
         -- * Prisms and lenses
         _cmdspec,
         _ShellCommand,
@@ -335,38 +335,38 @@ useProducer :: MonadIO m
             -> Consumer b m () -> m (Either e ())
 useProducer producer consumer = Right `liftM` runEffect (producer >-> consumer) 
 
-safely :: (C.MonadCatch m, MonadIO m, MFunctor t) 
-       => (t (SafeT m) r -> (SafeT m) x) 
-       -> (t m r -> m x) 
+safely :: (MFunctor t, C.MonadCatch m, MonadIO m) 
+       => (t (SafeT m) l -> (SafeT m) x) 
+       -> (t m l -> m x) 
 safely safeActivity = runSafeT . safeActivity . hoist lift 
 
-fallibly :: (Monad m, Error e, MFunctor t) 
+fallibly :: (MFunctor t, Monad m, Error e) 
          => (t (ErrorT e m) l -> (ErrorT e m) (Either e x)) 
          -> (t m l -> m (Either e x)) 
 fallibly fallibleActivity proxy = join `liftM` (runErrorT . fallibleActivity . hoist lift $ proxy)
 
-monoidally :: (Monad m, Monoid w, Error e', MFunctor t) 
+monoidally :: (MFunctor t,Monad m, Monoid w) 
+           => (w -> e -> e)
+           -> (t (WriterT w m) l -> WriterT w m (Either e ()))
+           -> (t m l -> m (Either e w))
+monoidally errh monoidalActivity proxy = do        
+    (r,w) <- runWriterT . monoidalActivity . hoist lift $ proxy
+    case r of 
+        Left e -> return $ Left $ errh w e  
+        Right () -> return $ Right w 
+
+monoifably :: (MFunctor t,Monad m,Monoid w, Error e') 
            => (w -> e' -> e) 
            -> (w -> e  -> e)
            -> (t (ErrorT e' (WriterT w m)) l -> ErrorT e' (WriterT w m) (Either e ()))
            -> (t m l -> m (Either e w))
-monoidally errh1 errh2 monoidalActivity proxy = do
+monoifably errh1 errh2 monoidalActivity proxy = do
     (r,w) <- runWriterT . runErrorT . monoidalActivity . hoist (lift.lift) $ proxy
     case r of
         Left e' -> return $ Left $ errh1 w e'    
         Right r' -> case r' of
             Left e -> return $ Left $ errh2 w e
             Right () -> return $ Right w 
-
-safelyMonoidally :: (C.MonadCatch m, MonadIO m, Monoid w, MFunctor t) 
-                 => (w -> e -> e)
-                 -> (t (WriterT w (SafeT m)) l -> WriterT w (SafeT m) (Either e ()))
-                 -> (t m l -> m (Either e w))
-safelyMonoidally errh monoidalActivity proxy = do        
-    (r,w) <- runSafeT . runWriterT . monoidalActivity . hoist (lift.lift) $ proxy
-    case r of 
-        Left e -> return $ Left $ errh w e  
-        Right () -> return $ Right w 
 
 {-|
     > _cmdspec :: Lens' CreateProcess CmdSpec 
