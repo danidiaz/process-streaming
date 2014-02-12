@@ -17,7 +17,7 @@ module System.Process.Streaming (
         consume,
         LineDecoder,
         decodeLines,
-        decodeLinesC,
+        decodeLines',
         LeftoverPolicy,
         LeftoverPolicy',
         ignoreLeftovers,
@@ -187,10 +187,10 @@ decodeLines decoder transform =  transFreeT transform
     viewLines = getConst . T.lines Const
 --    viewDecoded = getConst . T.codec aCodec Const
 
-decodeLinesC :: T.Codec
+decodeLines' :: T.Codec
              -> (forall r. Producer T.Text IO r -> Producer T.Text IO r) 
              -> LineDecoder
-decodeLinesC aCodec = decodeLines decoder 
+decodeLines' aCodec = decodeLines decoder 
     where 
     decoder = getConst . T.codec aCodec Const
 
