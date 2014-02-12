@@ -13,20 +13,17 @@
 {-# LANGUAGE RankNTypes #-}
 
 module System.Process.Streaming ( 
-        -- * Concurrency helpers
-        ConcE (..),
-        mapConcE,
-        mapConcE_,
         -- * Consuming stdout/stderr
         Consumption,
         consume,
         LineDecoder,
         decodeLines,
         decodeLinesC,
-        consumeCombinedLines,
         LeftoverPolicy,
+        LeftoverPolicy',
         ignoreLeftovers,
         firstFailingBytes,
+        consumeCombinedLines,
         useConsumer,
         useConsumer',
         -- * Feeding stdin
@@ -55,7 +52,11 @@ module System.Process.Streaming (
         terminateOnError,
         executeX,
         execute3,
-        execute2
+        execute2,
+        -- * Concurrency helpers
+        ConcE (..),
+        mapConcE,
+        mapConcE_
     ) where
 
 import Data.Maybe
@@ -71,6 +72,7 @@ import Control.Monad
 import Control.Monad.Trans.Free
 import Control.Monad.Trans.Either
 import Control.Monad.Error
+import Control.Monad.Morph
 import Control.Monad.Writer.Strict
 import qualified Control.Monad.Catch as C
 import Control.Exception
@@ -88,55 +90,8 @@ import System.IO
 import System.Process
 import System.Exit
 
-data WrappedError e = WrappedError e
-    deriving (Show, Typeable)
-
-instance (Show e, Typeable e) => Exception (WrappedError e)
-
-elideError :: (Show e, Typeable e) => IO (Either e a) -> IO a
-elideError action = action >>= either (throwIO . WrappedError) return
-
-revealError :: (Show e, Typeable e) => IO a -> IO (Either e a)  
-revealError action = catch (action >>= return . Right)
-                           (\(WrappedError e) -> return . Left $ e)   
-
-{-| 
-    'ConcE' is very similar to 'Control.Concurrent.Async.Concurrently' from the
-@async@ package, but it has an explicit error type @e@.
-
-    The 'Applicative' instance is used to run concurrently the actions that
-work over each handle (actions defined using functions like 'consume',
-'consumeCombinedLines' and 'feed') and combine their results. 
-
-   If any of the actions fails with @e@ the other actions are immediately
-cancelled and the whole computation fails with @e@. 
--}
-newtype ConcE e a = ConcE { runConcE :: IO (Either e a) }
-
-instance Functor (ConcE e) where
-  fmap f (ConcE x) = ConcE $ fmap (fmap f) x
-
-instance (Show e, Typeable e) => Applicative (ConcE e) where
-  pure = ConcE . pure . pure
-  ConcE fs <*> ConcE as =
-    ConcE . revealError $ 
-        uncurry ($) <$> concurrently (elideError fs) (elideError as)
-
-instance (Show e, Typeable e) => Alternative (ConcE e) where
-  empty = ConcE $ forever (threadDelay maxBound)
-  ConcE as <|> ConcE bs =
-    ConcE $ either id id <$> race as bs
-
-{-| 
-      Works similarly to 'Control.Concurrent.Async.mapConcurrently' from the
-@async@ package, but if any of the computations fails with @e@, the other are
-immediately cancelled and the whole computation fails with @e@. 
- -}
-mapConcE :: (Show e, Typeable e, Traversable t) => (a -> IO (Either e b)) -> t a -> IO (Either e (t b))
-mapConcE f = revealError .  mapConcurrently (elideError . f)
-
-mapConcE_ :: (Show e, Typeable e, Traversable t) => (a -> IO (Either e b)) -> t a -> IO (Either e ())
-mapConcE_ f l = fmap (const ()) <$> mapConcE f l
+try' :: (IOException -> e) -> IO (Either e a) -> IO (Either e a)
+try' handler action = try action >>= either (return . Left . handler) return
 
 mailbox2Handle :: Input ByteString -> Handle -> IO ()
 mailbox2Handle mailbox handle = 
@@ -159,9 +114,6 @@ consumeMailbox inMailbox consumer = do
 
 feedMailbox :: (Consumer b IO () -> IO (Either e a)) -> Output b -> IO (Either e a)
 feedMailbox feeder outMailbox = feeder $ toOutput outMailbox
-
-try' :: (IOException -> e) -> IO (Either e a) -> IO (Either e a)
-try' handler action = try action >>= either (return . Left . handler) return
 
 {-|
     Type synonym for a function that takes a 'Producer', does something with
@@ -244,8 +196,20 @@ decodeLinesC aCodec = decodeLines decoder
     where 
     decoder = getConst . T.codec aCodec Const
 
+type LeftoverPolicy'  l e = l -> IO (Either e ())
+
+type LeftoverPolicy l e = forall m. MonadIO m => l -> m (Either e ())
+
+ignoreLeftovers :: LeftoverPolicy l e 
+ignoreLeftovers =  const (liftIO . return $ Right ()) 
+
+firstFailingBytes :: (ByteString -> e) -> LeftoverPolicy (Producer ByteString IO ()) e 
+firstFailingBytes errh remainingBytes = do
+    liftIO $ runEitherT . runEffect $ hoist lift remainingBytes >-> (await >>= lift . left . errh)
+
+
 writeLines :: MVar (Output T.Text) 
-           -> LeftoverPolicy (Producer ByteString IO ()) e
+           -> LeftoverPolicy' (Producer ByteString IO ()) e
            -> FreeT (Producer T.Text IO) IO (Producer ByteString IO ())
            -> IO (Either e ())
 writeLines mvar errh freeTLines = do
@@ -281,7 +245,7 @@ other handles won't be consumed, either!
  -}
 consumeCombinedLines :: (Show e, Typeable e) 
                      => (IOException -> e) 
-                     -> [(Handle, LineDecoder, LeftoverPolicy (Producer ByteString IO ()) e)]
+                     -> [(Handle, LineDecoder, LeftoverPolicy' (Producer ByteString IO ()) e)]
         			 -> (Producer T.Text IO () -> IO (Either e a))
         		     -> IO (Either e a) 
 consumeCombinedLines exHandler actions c = try' exHandler $ do
@@ -297,57 +261,18 @@ consumeCombinedLines exHandler actions c = try' exHandler $ do
         writeLines mVar leftoverp . lineDec 
 
 
-type LeftoverPolicy  l e = l -> IO (Either e ())
-
-type LeftoverPolicy' l e = forall m. MonadIO m => l -> m (Either e ())
-
-ignoreLeftovers :: LeftoverPolicy' l e 
-ignoreLeftovers =  const (liftIO . return $ Right ()) 
-
-firstFailingBytes :: (ByteString -> e) -> LeftoverPolicy' (Producer ByteString IO ()) e 
-firstFailingBytes errh remainingBytes = do
-    liftIO $ runEitherT . runEffect $ hoist lift remainingBytes >-> (await >>= lift . left . errh)
 
 {-|
     Constructs a 'Consumption' from a 'Consumer'. If basically combines the
 'Producer' and the 'Consumer' in a pipeline and runs it.
  -}
-useConsumer :: MonadIO m => LeftoverPolicy' l e -> Consumer b m l -> Consumption b l e m ()
+useConsumer :: MonadIO m => LeftoverPolicy l e -> Consumer b m l -> Consumption b l e m ()
 useConsumer policy consumer producer = do
     leftovers <- runEffect $ producer >-> consumer 
     policy leftovers 
 
 useConsumer' :: MonadIO m => Consumer b m l -> Consumption b l e m ()
 useConsumer' = useConsumer ignoreLeftovers
-
-safely :: (C.MonadCatch m, MonadIO m) => (Proxy a b c d (SafeT m) r -> (SafeT m) x) 
-                                      -> (Proxy a b c d m r -> m x) 
-safely safeConsumption = runSafeT . safeConsumption . hoist lift 
-
-fallibly :: (Monad m, Error e) => (Proxy a b c d (ErrorT e m) l -> (ErrorT e m) (Either e x)) 
-                               -> (Proxy a b c d m l -> m (Either e x)) 
-fallibly fallibleConsumption proxy = join `liftM` (runErrorT . fallibleConsumption . hoist lift $ proxy)
-
-monoidally :: (Monad m, Monoid w, Error e') => (w -> e' -> e) 
-                                            -> (w -> e  -> e)
-                                            -> (Proxy a b c d (ErrorT e' (WriterT w m)) l -> ErrorT e' (WriterT w m) (Either e ()))
-                                            -> (Proxy a b c d m l -> m (Either e w))
-monoidally errh1 errh2 monoidalActivity proxy = do
-    (r,w) <- runWriterT . runErrorT . monoidalActivity . hoist (lift.lift) $ proxy
-    case r of
-        Left e' -> return $ Left $ errh1 w e'    
-        Right r' -> case r' of
-            Left e -> return $ Left $ errh2 w e
-            Right () -> return $ Right w 
-
-safelyMonoidally :: (C.MonadCatch m, MonadIO m, Monoid w) => (w -> e -> e)
-                                                          -> (Proxy a b c d (WriterT w (SafeT m)) l -> WriterT w (SafeT m) (Either e ()))
-                                                          -> (Proxy a b c d m l -> m (Either e w))
-safelyMonoidally errh monoidalActivity proxy = do        
-    (r,w) <- runSafeT . runWriterT . monoidalActivity . hoist (lift.lift) $ proxy
-    case r of 
-        Left e -> return $ Left $ errh w e  
-        Right () -> return $ Right w 
 
 --useSafeConsumer :: Consumer b (SafeT IO) l -> Consumption b l e ()
 --useSafeConsumer consumer producer = Right <$> (runSafeT $ runEffect $ hoist lift producer >-> consumer)
@@ -413,37 +338,39 @@ feed exHandler h c = try' exHandler $ do
 useProducer :: MonadIO m => Producer b m () -> Feeding b e m ()
 useProducer producer consumer = Right `liftM` runEffect (producer >-> consumer) 
 
-{-|
-    Constructs a 'Feeding' from a 'Producer' that may fail with @e@.
- -}
---useSafeProducer :: Producer b (SafeT IO) () -> Feeding b e ()
---useSafeProducer producer consumer = Right <$> (runSafeT $ runEffect $ producer >-> hoist lift consumer)
---
---{-|
---    Constructs a 'Feeding' from a 'Producer' that may fail with @e@.
--- -}
---useProducerE :: Error e => Producer b (ErrorT e IO) () -> Feeding b e ()
---useProducerE producer consumer = runEffect $ runErrorP $ producer >-> hoist lift consumer
---
---{-|
---    Constructs a 'Feeding' from a 'Producer' that may fail with @e'@ and
---that keeps a monoidal summary @w@ of the consumed data. If the producer fails
---with @e'@, a failure @e@ is constructed by combining @e'@ and the values
---accumulated up until the error, so that @e@ may include them if the user
---wishes. To ignore them, it is enough to pass 'const' as the first argument. 
--- -}
---useProducerW :: (Monoid w, Error e') => (w -> e' -> e) -> Producer b (ErrorT e' (WriterT w IO)) () -> Feeding b e w 
---useProducerW resultsUntilError producer consumer = do
---    (r,w) <- runEffect $ runWriterP $ runErrorP $ producer >-> hoist (lift.lift) consumer 
---    case r of
---        Left e' -> return $ Left $ resultsUntilError w e'    
---        Right () -> return $ Right w
---
---useSafeProducerW :: Monoid w => Producer b (WriterT w (SafeT IO)) () -> Feeding b e w 
---useSafeProducerW producer consumer = do
---    (_,w) <- runSafeT $ runEffect $ runWriterP $ producer >-> hoist (lift.lift) consumer 
---    return $ Right w
---
+safely :: (C.MonadCatch m, MonadIO m, MFunctor t) 
+       => (t (SafeT m) r -> (SafeT m) x) 
+       -> (t m r -> m x) 
+safely safeActivity = runSafeT . safeActivity . hoist lift 
+
+fallibly :: (Monad m, Error e, MFunctor t) 
+         => (t (ErrorT e m) l -> (ErrorT e m) (Either e x)) 
+         -> (t m l -> m (Either e x)) 
+fallibly fallibleActivity proxy = join `liftM` (runErrorT . fallibleActivity . hoist lift $ proxy)
+
+monoidally :: (Monad m, Monoid w, Error e', MFunctor t) 
+           => (w -> e' -> e) 
+           -> (w -> e  -> e)
+           -> (t (ErrorT e' (WriterT w m)) l -> ErrorT e' (WriterT w m) (Either e ()))
+           -> (t m l -> m (Either e w))
+monoidally errh1 errh2 monoidalActivity proxy = do
+    (r,w) <- runWriterT . runErrorT . monoidalActivity . hoist (lift.lift) $ proxy
+    case r of
+        Left e' -> return $ Left $ errh1 w e'    
+        Right r' -> case r' of
+            Left e -> return $ Left $ errh2 w e
+            Right () -> return $ Right w 
+
+safelyMonoidally :: (C.MonadCatch m, MonadIO m, Monoid w, MFunctor t) 
+                 => (w -> e -> e)
+                 -> (t (WriterT w (SafeT m)) l -> WriterT w (SafeT m) (Either e ()))
+                 -> (t m l -> m (Either e w))
+safelyMonoidally errh monoidalActivity proxy = do        
+    (r,w) <- runSafeT . runWriterT . monoidalActivity . hoist (lift.lift) $ proxy
+    case r of 
+        Left e -> return $ Left $ errh w e  
+        Right () -> return $ Right w 
+
 {-|
     > _cmdspec :: Lens' CreateProcess CmdSpec 
 -}
@@ -626,4 +553,57 @@ execute3 = executeX handle3
  -}
 execute2 :: e -> (IOException -> e) -> CreateProcess -> ((Handle,Handle) -> IO (Either e a)) -> IO (Either e (ExitCode,a))
 execute2 = executeX handle2
+
+
+--
+--
+data WrappedError e = WrappedError e
+    deriving (Show, Typeable)
+
+instance (Show e, Typeable e) => Exception (WrappedError e)
+
+elideError :: (Show e, Typeable e) => IO (Either e a) -> IO a
+elideError action = action >>= either (throwIO . WrappedError) return
+
+revealError :: (Show e, Typeable e) => IO a -> IO (Either e a)  
+revealError action = catch (action >>= return . Right)
+                           (\(WrappedError e) -> return . Left $ e)   
+
+{-| 
+    'ConcE' is very similar to 'Control.Concurrent.Async.Concurrently' from the
+@async@ package, but it has an explicit error type @e@.
+
+    The 'Applicative' instance is used to run concurrently the actions that
+work over each handle (actions defined using functions like 'consume',
+'consumeCombinedLines' and 'feed') and combine their results. 
+
+   If any of the actions fails with @e@ the other actions are immediately
+cancelled and the whole computation fails with @e@. 
+-}
+newtype ConcE e a = ConcE { runConcE :: IO (Either e a) }
+
+instance Functor (ConcE e) where
+  fmap f (ConcE x) = ConcE $ fmap (fmap f) x
+
+instance (Show e, Typeable e) => Applicative (ConcE e) where
+  pure = ConcE . pure . pure
+  ConcE fs <*> ConcE as =
+    ConcE . revealError $ 
+        uncurry ($) <$> concurrently (elideError fs) (elideError as)
+
+instance (Show e, Typeable e) => Alternative (ConcE e) where
+  empty = ConcE $ forever (threadDelay maxBound)
+  ConcE as <|> ConcE bs =
+    ConcE $ either id id <$> race as bs
+
+{-| 
+      Works similarly to 'Control.Concurrent.Async.mapConcurrently' from the
+@async@ package, but if any of the computations fails with @e@, the other are
+immediately cancelled and the whole computation fails with @e@. 
+ -}
+mapConcE :: (Show e, Typeable e, Traversable t) => (a -> IO (Either e b)) -> t a -> IO (Either e (t b))
+mapConcE f = revealError .  mapConcurrently (elideError . f)
+
+mapConcE_ :: (Show e, Typeable e, Traversable t) => (a -> IO (Either e b)) -> t a -> IO (Either e ())
+mapConcE_ f l = fmap (const ()) <$> mapConcE f l
 
