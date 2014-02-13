@@ -191,9 +191,9 @@ decodeLines' aCodec = decodeLines decoder
     where 
     decoder = getConst . T.codec aCodec Const
 
-type LeftoverPolicy'  l e = l -> IO (Either e ())
-
 type LeftoverPolicy l e = forall m. MonadIO m => l -> m (Either e ())
+
+type LeftoverPolicy'  l e = l -> IO (Either e ())
 
 ignoreLeftovers :: LeftoverPolicy l e 
 ignoreLeftovers =  const (liftIO . return $ Right ()) 
@@ -314,10 +314,9 @@ feed :: (IOException -> e)
      -> IO (Either e a) 
 feed exHandler h c = try' exHandler $ do 
     (outbox, inbox, seal) <- spawn' Unbounded
-    (r,_) <- concurrently (do a <- async $ feedMailbox c outbox
-                              wait a `finally` atomically seal) 
-                          (mailbox2Handle inbox h)
-    return r
+    fst <$> concurrently (do a <- async $ feedMailbox c outbox
+                             wait a `finally` atomically seal) 
+                         (mailbox2Handle inbox h)
 
 {-|
     Constructs a 'Feeding' from a 'Producer'. If basically combines the
