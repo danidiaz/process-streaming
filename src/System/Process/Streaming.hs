@@ -5,7 +5,7 @@
 --
 -- See the functions 'execute3', 'execute2' and 'executeX' for an entry point.
 -- Then read about 'consume' and 'feed' and how to combine the actions
--- concurrently using 'ConcE'.
+-- concurrently using 'Conc'.
 --
 -----------------------------------------------------------------------------
 
@@ -28,11 +28,6 @@ module System.Process.Streaming (
         -- * Feeding stdin
         feed,
         useProducer,
-        -- * Adapters
-        safely,
-        fallibly,
-        monoidally,
-        monoifably,
         -- * Prisms and lenses
         _cmdspec,
         _ShellCommand,
@@ -52,9 +47,16 @@ module System.Process.Streaming (
         execute3,
         execute2,
         -- * Concurrency helpers
-        ConcE (..),
-        mapConcE,
-        mapConcE_
+        Conc (..),
+        mapConc,
+        mapConc_,
+        ConcProd (..),
+        -- * Other helpers
+        safely,
+        fallibly,
+        monoidally,
+        monoifably,
+        righteously
     ) where
 
 import Data.Maybe
@@ -70,6 +72,7 @@ import Control.Monad
 import Control.Monad.Trans.Free
 import Control.Monad.Trans.Either
 import Control.Monad.Error
+import Control.Monad.State
 import Control.Monad.Morph
 import Control.Monad.Writer.Strict
 import qualified Control.Monad.Catch as C
@@ -242,10 +245,10 @@ consumeCombinedLines :: (Show e, Typeable e)
 consumeCombinedLines exHandler actions c = try' exHandler $ do
     (outbox, inbox, seal) <- spawn' Unbounded
     mVar <- newMVar outbox
-    r <- runConcE $ (,) <$> ConcE (finally (mapConcE (consume' mVar) actions) 
+    r <- runConc $ (,) <$> Conc (finally (mapConc (consume' mVar) actions) 
                                            (atomically seal)
                                   )
-                        <*> ConcE (consumeMailbox inbox c)
+                        <*> Conc (consumeMailbox inbox c)
     return $ snd <$> r
     where 
     consume' mVar (h,lineDec,leftoverp) = consume exHandler h $ 
@@ -327,38 +330,6 @@ useProducer :: MonadIO m
             -> Consumer b m () -> m (Either e ())
 useProducer producer consumer = Right `liftM` runEffect (producer >-> consumer) 
 
-safely :: (MFunctor t, C.MonadCatch m, MonadIO m) 
-       => (t (SafeT m) l -> (SafeT m) x) 
-       -> (t m l -> m x) 
-safely safeActivity = runSafeT . safeActivity . hoist lift 
-
-fallibly :: (MFunctor t, Monad m, Error e) 
-         => (t (ErrorT e m) l -> (ErrorT e m) (Either e x)) 
-         -> (t m l -> m (Either e x)) 
-fallibly fallibleActivity proxy = join `liftM` (runErrorT . fallibleActivity . hoist lift $ proxy)
-
-monoidally :: (MFunctor t,Monad m, Monoid w) 
-           => (w -> e -> e)
-           -> (t (WriterT w m) l -> WriterT w m (Either e ()))
-           -> (t m l -> m (Either e w))
-monoidally errh monoidalActivity proxy = do        
-    (r,w) <- runWriterT . monoidalActivity . hoist lift $ proxy
-    case r of 
-        Left e -> return $ Left $ errh w e  
-        Right () -> return $ Right w 
-
-monoifably :: (MFunctor t,Monad m,Monoid w, Error e') 
-           => (w -> e' -> e) 
-           -> (w -> e  -> e)
-           -> (t (ErrorT e' (WriterT w m)) l -> ErrorT e' (WriterT w m) (Either e ()))
-           -> (t m l -> m (Either e w))
-monoifably errh1 errh2 monoidalActivity proxy = do
-    (r,w) <- runWriterT . runErrorT . monoidalActivity . hoist (lift.lift) $ proxy
-    case r of
-        Left e' -> return $ Left $ errh1 w e'    
-        Right r' -> case r' of
-            Left e -> return $ Left $ errh2 w e
-            Right () -> return $ Right w 
 
 {-|
     > _cmdspec :: Lens' CreateProcess CmdSpec 
@@ -510,7 +481,7 @@ the process, or while waiting for it to complete.
 
    The fourth argument is a computation that depends of what the prism matches
 (some subset of the handles) and may fail with error @e@. The compuation is
-often constructed using the 'Applicative' instance of 'ConcE' and functions
+often constructed using the 'Applicative' instance of 'Conc' and functions
 like 'consume', 'consumeCombinedLines' and 'feed'.
 
    If an asynchronous exception is thrown while this function executes, the
@@ -559,7 +530,7 @@ revealError action = catch (action >>= return . Right)
                            (\(WrappedError e) -> return . Left $ e)   
 
 {-| 
-    'ConcE' is very similar to 'Control.Concurrent.Async.Concurrently' from the
+    'Conc' is very similar to 'Control.Concurrent.Async.Concurrently' from the
 @async@ package, but it has an explicit error type @e@.
 
     The 'Applicative' instance is used to run concurrently the actions that
@@ -569,30 +540,87 @@ work over each handle (actions defined using functions like 'consume',
    If any of the actions fails with @e@ the other actions are immediately
 cancelled and the whole computation fails with @e@. 
 -}
-newtype ConcE e a = ConcE { runConcE :: IO (Either e a) }
+newtype Conc e a = Conc { runConc :: IO (Either e a) }
 
-instance Functor (ConcE e) where
-  fmap f (ConcE x) = ConcE $ fmap (fmap f) x
+instance Functor (Conc e) where
+  fmap f (Conc x) = Conc $ fmap (fmap f) x
 
-instance (Show e, Typeable e) => Applicative (ConcE e) where
-  pure = ConcE . pure . pure
-  ConcE fs <*> ConcE as =
-    ConcE . revealError $ 
+instance (Show e, Typeable e) => Applicative (Conc e) where
+  pure = Conc . pure . pure
+  Conc fs <*> Conc as =
+    Conc . revealError $ 
         uncurry ($) <$> concurrently (elideError fs) (elideError as)
 
-instance (Show e, Typeable e) => Alternative (ConcE e) where
-  empty = ConcE $ forever (threadDelay maxBound)
-  ConcE as <|> ConcE bs =
-    ConcE $ either id id <$> race as bs
+instance (Show e, Typeable e) => Alternative (Conc e) where
+  empty = Conc $ forever (threadDelay maxBound)
+  Conc as <|> Conc bs =
+    Conc $ either id id <$> race as bs
 
 {-| 
       Works similarly to 'Control.Concurrent.Async.mapConcurrently' from the
 @async@ package, but if any of the computations fails with @e@, the other are
 immediately cancelled and the whole computation fails with @e@. 
  -}
-mapConcE :: (Show e, Typeable e, Traversable t) => (a -> IO (Either e b)) -> t a -> IO (Either e (t b))
-mapConcE f = revealError .  mapConcurrently (elideError . f)
+mapConc :: (Show e, Typeable e, Traversable t) => (a -> IO (Either e b)) -> t a -> IO (Either e (t b))
+mapConc f = revealError .  mapConcurrently (elideError . f)
 
-mapConcE_ :: (Show e, Typeable e, Traversable t) => (a -> IO (Either e b)) -> t a -> IO (Either e ())
-mapConcE_ f l = fmap (const ()) <$> mapConcE f l
+mapConc_ :: (Show e, Typeable e, Traversable t) => (a -> IO (Either e b)) -> t a -> IO (Either e ())
+mapConc_ f l = fmap (const ()) <$> mapConc f l
 
+newtype ConcProd e a = ConcProd { runConcProd :: Producer ByteString IO () -> IO (Either e a) }
+
+instance Functor (ConcProd e) where
+  fmap f (ConcProd x) = ConcProd $ fmap (fmap (fmap f)) x
+
+instance (Show e, Typeable e) => Applicative (ConcProd e) where
+  pure = ConcProd . pure . pure . pure
+  ConcProd fs <*> ConcProd as = 
+      ConcProd $ \producer -> revealError $ do
+          (Output outbox1,inbox1,seal1) <- spawn' Unbounded
+          (Output outbox2,inbox2,seal2) <- spawn' Unbounded
+          --let (Output combined) = outbox1 <> outbox2
+          feeding <- async $ runEffect $ 
+              producer >-> (P.mapM $ \v -> do atomically $ outbox1 v
+                                              atomically $ outbox2 v)
+                       >-> P.drain
+          sealing <- async $ wait feeding >> atomically seal1 >> atomically seal2
+          r <- uncurry ($) <$> concurrently (elideError $ fs producer) 
+                                            (elideError $ as producer)
+          wait sealing
+          return r
+
+safely :: (MFunctor t, C.MonadCatch m, MonadIO m) 
+       => (t (SafeT m) l -> (SafeT m) x) 
+       -> (t m l -> m x) 
+safely safeActivity = runSafeT . safeActivity . hoist lift 
+
+fallibly :: (MFunctor t, Monad m, Error e) 
+         => (t (ErrorT e m) l -> (ErrorT e m) (Either e x)) 
+         -> (t m l -> m (Either e x)) 
+fallibly fallibleActivity proxy = join `liftM` (runErrorT . fallibleActivity . hoist lift $ proxy)
+
+monoidally :: (MFunctor t,Monad m, Monoid w) 
+           => (w -> e -> e)
+           -> (t (WriterT w m) l -> WriterT w m (Either e ()))
+           -> (t m l -> m (Either e w))
+monoidally errh monoidalActivity proxy = do        
+    (r,w) <- runWriterT . monoidalActivity . hoist lift $ proxy
+    case r of 
+        Left e -> return $ Left $ errh w e  
+        Right () -> return $ Right w 
+
+monoifably :: (MFunctor t,Monad m,Monoid w, Error e') 
+           => (w -> e' -> e) 
+           -> (w -> e  -> e)
+           -> (t (ErrorT e' (WriterT w m)) l -> ErrorT e' (WriterT w m) (Either e ()))
+           -> (t m l -> m (Either e w))
+monoifably errh1 errh2 monoidalActivity proxy = do
+    (r,w) <- runWriterT . runErrorT . monoidalActivity . hoist (lift.lift) $ proxy
+    case r of
+        Left e' -> return $ Left $ errh1 w e'    
+        Right r' -> case r' of
+            Left e -> return $ Left $ errh2 w e
+            Right () -> return $ Right w 
+
+righteously :: (Functor f, Functor f') => f (f' a) -> f (f' (Either e a))
+righteously = fmap (fmap Right)
