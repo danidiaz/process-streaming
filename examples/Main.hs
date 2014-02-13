@@ -79,7 +79,7 @@ parser2 = parseChars 'a'
 example4 ::IO (Either String (ExitCode, ((), ([Char], [Char]))))
 example4 = 
     execute2 "nohandle!" show create $ \(hout,herr) ->
-       conc (consume show herr $ pure . pure . const ())
+       conc (consume show herr $ useConsumer' P.drain)
             (consume show hout $
                 T.decodeIso8859_1   
                 `lmap`
