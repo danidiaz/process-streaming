@@ -121,7 +121,6 @@ it, and returns a result @a@ or an error @e@.
 convert a @Parser b IO (Either e a)@ to a @Consumption b e a@ by using
 'evalStateT'. 
  -}
-type Consumption b l e m a = Producer b m l -> m (Either e a)
 
 {-|
     This function consumes the @stdout@ or @stderr@ of an external process,
