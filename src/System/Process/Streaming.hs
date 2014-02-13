@@ -48,9 +48,12 @@ module System.Process.Streaming (
         execute2,
         -- * Concurrency helpers
         Conc (..),
+        conc,
+        conc3,
         mapConc,
         mapConc_,
         ConcProd (..),
+        concProd,
         -- * Other helpers
         safely,
         fallibly,
@@ -556,6 +559,22 @@ instance (Show e, Typeable e) => Alternative (Conc e) where
   Conc as <|> Conc bs =
     Conc $ either id id <$> race as bs
 
+conc :: (Show e, Typeable e) 
+     => IO (Either e a)
+     -> IO (Either e b)
+     -> IO (Either e (a,b))
+conc c1 c2 = runConc $ (,) <$> Conc c1
+                           <*> Conc c2
+
+conc3 :: (Show e, Typeable e) 
+      => IO (Either e a)
+      -> IO (Either e b)
+      -> IO (Either e c)
+      -> IO (Either e (a,b,c))
+conc3 c1 c2 c3 = runConc $ (,,) <$> Conc c1
+                                <*> Conc c2
+                                <*> Conc c3
+
 {-| 
       Works similarly to 'Control.Concurrent.Async.mapConcurrently' from the
 @async@ package, but if any of the computations fails with @e@, the other are
@@ -588,6 +607,13 @@ instance (Show e, Typeable e) => Applicative (ConcProd b e) where
                                             (elideError $ as producer)
           wait sealing
           return r
+
+concProd :: (Show e, Typeable e) 
+         => (Producer b IO () -> IO (Either e x))
+         -> (Producer b IO () -> IO (Either e y))
+         -> (Producer b IO () -> IO (Either e (x,y)))
+concProd c1 c2 = runConcProd $ (,) <$> ConcProd c1
+                                   <*> ConcProd c2
 
 safely :: (MFunctor t, C.MonadCatch m, MonadIO m) 
        => (t (SafeT m) l -> (SafeT m) x) 

@@ -5,6 +5,7 @@ module Main where
 
 import Data.Maybe
 import Data.Functor.Identity
+import Data.Bifunctor
 import Data.Either
 import Data.Monoid
 import Data.Traversable
@@ -14,11 +15,13 @@ import Control.Monad
 import Control.Monad.Trans.Free
 import Control.Monad.Trans.Either
 import Control.Monad.Error
+--import Control.Monad.State
 import Control.Monad.Writer.Strict
 import Control.Exception
 import Control.Lens
 import Pipes
 import qualified Pipes.Prelude as P
+import qualified Pipes.Parse as P
 import Pipes.Lift
 import Pipes.ByteString
 import qualified Pipes.Text as T
@@ -31,9 +34,14 @@ import System.Process.Streaming
 import System.Exit
 import System.IO.Error
 
--- stdout and stderr to different files, using pipes-safe
+
+import qualified Data.Attoparsec.Text as A
+import Data.Attoparsec.Combinator
+import qualified Pipes.Attoparsec as P
+
+-- stdout and stderr to different files, using pipes-safe.
 example1 :: IO (Either String (ExitCode,()))
-example1 = execute2 "nohandle!" show create $ \(hout,herr) -> mapConcE_ consume' $
+example1 = execute2 "nohandle!" show create $ \(hout,herr) -> mapConc_ consume' $
         [ (hout,"stdout.log"), (herr,"stderr.log") ]
     where
     create = set stream3 pipe2 $ proc "script1.bat" []
@@ -41,13 +49,13 @@ example1 = execute2 "nohandle!" show create $ \(hout,herr) -> mapConcE_ consume'
         safely $ useConsumer ignoreLeftovers $ 
             S.withFile file WriteMode toHandle
 
--- missing executable
+-- Error becasue of missing executable.
 example2 :: IO (Either String (ExitCode,()))
 example2 = execute2 "nohandle!" show create $ \_ -> return $ Right ()
     where
     create = set stream3 pipe2 $ proc "asdfasdf.bat" []
 
----- stream to console the combined lines of stdout and stderr
+---- Stream to a file the combined lines of stdout and stderr.
 example3 :: IO (Either String (ExitCode,()))
 example3 = do
     execute2 "nohandle!" show create $ \(hout,herr) -> consumeCombinedLines show 
@@ -60,6 +68,26 @@ example3 = do
     leftoverp = firstFailingBytes (const "badbytes")
 
 
+-- Ignore stderr, run two attoparsec parsers concurrently on stdout.
+parseChars :: Char -> A.Parser [Char] 
+parseChars c = fmap mconcat $ 
+    many (A.notChar c) *> many1 (some (A.char c) <* many (A.notChar c))
+
+parser1 = parseChars 'o'
+parser2 = parseChars 'a'
+
+example4 ::IO (Either String (ExitCode, ((), ([Char], [Char]))))
+example4 = 
+    execute2 "nohandle!" show create $ \(hout,herr) ->
+       conc (consume show herr $ pure . pure . const ())
+            (consume show hout $
+                ((*> pure ()) . T.decodeIso8859_1)   
+                `lmap`
+                (concProd (P.evalStateT (adapt parser1))
+                          (P.evalStateT (adapt parser2))))
+    where
+    create = set stream3 pipe2 $ proc "script2.bat" []
+    adapt p = bimap (const "parse error") id <$> P.parse p
 
 
 
