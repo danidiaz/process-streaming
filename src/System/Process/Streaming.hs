@@ -147,10 +147,9 @@ consume :: (IOException -> e)
         -> IO (Either e a) 
 consume exHandler h c = try' exHandler $ do 
     (outbox, inbox, seal) <- spawn' Unbounded
-    (_,r) <- concurrently  (do a <- async $ handle2Mailbox h outbox
-                               wait a `finally` atomically seal)
-                           (consumeMailbox inbox c) 
-    return r                                
+    snd <$> concurrently  (do a <- async $ handle2Mailbox h outbox
+                              wait a `finally` atomically seal)
+                          (consumeMailbox inbox c) 
 
 {-|
   Type synonym for a function that takes a 'ByteString' producer, decodes it
@@ -185,7 +184,6 @@ decodeLines decoder transform =  transFreeT transform
                                . decoder
     where 
     viewLines = getConst . T.lines Const
---    viewDecoded = getConst . T.codec aCodec Const
 
 decodeLines' :: T.Codec
              -> (forall r. Producer T.Text IO r -> Producer T.Text IO r) 
@@ -210,11 +208,7 @@ writeLines :: MVar (Output T.Text)
            -> LeftoverPolicy' (Producer ByteString IO ()) e
            -> FreeT (Producer T.Text IO) IO (Producer ByteString IO ())
            -> IO (Either e ())
-writeLines mvar errh freeTLines = do
-    remainingBytes <- iterTLines freeTLines
-    -- We use EitherT here instead of ErrorT to avoid an Error constraint on e.
-    errh remainingBytes
-    -- runEitherT $ runEffect $ hoist lift remainingBytes >-> (await >>= lift . left . errh) 
+writeLines mvar errh freeTLines = iterTLines freeTLines >>= errh
     where
     iterTLines :: forall x. FreeT (Producer T.Text IO) IO x -> IO x
     iterTLines = iterT $ \textProducer -> do
