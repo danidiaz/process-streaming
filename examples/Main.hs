@@ -81,7 +81,7 @@ example4 =
     execute2 "nohandle!" show create $ \(hout,herr) ->
        conc (consume show herr $ pure . pure . const ())
             (consume show hout $
-                ((*> pure ()) . T.decodeIso8859_1)   
+                T.decodeIso8859_1   
                 `lmap`
                 (concProd (P.evalStateT (adapt parser1))
                           (P.evalStateT (adapt parser2))))

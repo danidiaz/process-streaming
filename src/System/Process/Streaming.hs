@@ -586,12 +586,12 @@ mapConc f = revealError .  mapConcurrently (elideError . f)
 mapConc_ :: (Show e, Typeable e, Traversable t) => (a -> IO (Either e b)) -> t a -> IO (Either e ())
 mapConc_ f l = fmap (const ()) <$> mapConc f l
 
-newtype ConcProd b e a = ConcProd { runConcProd :: Producer b IO () -> IO (Either e a) }
+newtype ConcProd b r e a = ConcProd { runConcProd :: Producer b IO r -> IO (Either e a) }
 
-instance Functor (ConcProd b e) where
+instance Functor (ConcProd b r e) where
   fmap f (ConcProd x) = ConcProd $ fmap (fmap (fmap f)) x
 
-instance (Show e, Typeable e) => Applicative (ConcProd b e) where
+instance (Show e, Typeable e) => Applicative (ConcProd b r e) where
   pure = ConcProd . pure . pure . pure
   ConcProd fs <*> ConcProd as = 
       ConcProd $ \producer -> revealError $ do
@@ -609,9 +609,9 @@ instance (Show e, Typeable e) => Applicative (ConcProd b e) where
           return r
 
 concProd :: (Show e, Typeable e) 
-         => (Producer b IO () -> IO (Either e x))
-         -> (Producer b IO () -> IO (Either e y))
-         -> (Producer b IO () -> IO (Either e (x,y)))
+         => (Producer b IO u -> IO (Either e x))
+         -> (Producer b IO u -> IO (Either e y))
+         -> (Producer b IO u -> IO (Either e (x,y)))
 concProd c1 c2 = runConcProd $ (,) <$> ConcProd c1
                                    <*> ConcProd c2
 
