@@ -567,12 +567,12 @@ mapConc f = revealError .  mapConcurrently (elideError . f)
 mapConc_ :: (Show e, Typeable e, Traversable t) => (a -> IO (Either e b)) -> t a -> IO (Either e ())
 mapConc_ f l = fmap (const ()) <$> mapConc f l
 
-newtype ConcProd e a = ConcProd { runConcProd :: Producer ByteString IO () -> IO (Either e a) }
+newtype ConcProd b e a = ConcProd { runConcProd :: Producer b IO () -> IO (Either e a) }
 
-instance Functor (ConcProd e) where
+instance Functor (ConcProd b e) where
   fmap f (ConcProd x) = ConcProd $ fmap (fmap (fmap f)) x
 
-instance (Show e, Typeable e) => Applicative (ConcProd e) where
+instance (Show e, Typeable e) => Applicative (ConcProd b e) where
   pure = ConcProd . pure . pure . pure
   ConcProd fs <*> ConcProd as = 
       ConcProd $ \producer -> revealError $ do
