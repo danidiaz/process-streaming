@@ -148,7 +148,7 @@ consume exHandler h c = try' exHandler $ do
     (outbox, inbox, seal) <- spawn' Unbounded
     snd <$> concurrently  (do a <- async $ handle2Mailbox h outbox
                               wait a `finally` atomically seal)
-                          (consumeMailbox inbox c) 
+                          (consumeMailbox inbox c `finally` atomically seal) 
 
 {-|
   Type synonym for a function that takes a 'ByteString' producer, decodes it
@@ -304,9 +304,11 @@ consumeCombinedLines exHandler actions c = try' exHandler $ do
     (outbox, inbox, seal) <- spawn' Unbounded
     mVar <- newMVar outbox
     r <- runConc $ (,) <$> Conc (finally (mapConc (consume' mVar) actions) 
-                                           (atomically seal)
-                                  )
-                        <*> Conc (consumeMailbox inbox c)
+                                         (atomically seal)
+                                )
+                       <*> Conc (finally (consumeMailbox inbox c)
+                                         (atomically seal)
+                                )
     return $ snd <$> r
     where 
     consume' mVar (h,lineDec,leftoverp) = consume exHandler h $ 
@@ -340,7 +342,7 @@ feed exHandler h c = try' exHandler $ do
     (outbox, inbox, seal) <- spawn' Unbounded
     fst <$> concurrently (do a <- async $ feedMailbox c outbox
                              wait a `finally` atomically seal) 
-                         (mailbox2Handle inbox h)
+                         (mailbox2Handle inbox h `finally` atomically seal)
 
 {-|
     Builds a function that will be plugged into 'feed' out of a 'Producer'.
