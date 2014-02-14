@@ -24,6 +24,7 @@ import qualified Pipes.Prelude as P
 import qualified Pipes.Parse as P
 import Pipes.Lift
 import Pipes.ByteString
+import qualified Pipes.Group as P
 import qualified Pipes.Text as T
 import qualified Pipes.Safe as S
 import qualified Pipes.Safe.Prelude as S
@@ -82,7 +83,7 @@ example4 =
             (consume show hout $
                 T.decodeIso8859_1   
                 `lmap`
-                (leftoverPolicy const (firstFailingBytes $ const "badbytes") $  
+                (leftover' (firstFailingBytes $ const "badbytes") $  
                     forkProd (P.evalStateT $ adapt parser1)
                              (P.evalStateT $ adapt parser2)
                 )
@@ -90,4 +91,20 @@ example4 =
     where
     create = set stream3 pipe2 $ proc "script2.bat" []
     adapt p = bimap (const "parse error") id <$> P.parse p
+
+ 
+-- Gets a list of lines for both stdout and stderr (breaks streaming)
+example5 ::IO (Either String (ExitCode, ([T.Text], [T.Text])))
+example5 = 
+    execute2 "nohandle!" show create $ \(hout,herr) ->
+       conc (operation hout)
+            (operation herr)
+    where
+    create = set stream3 pipe2 $ proc "script1.bat" []
+    operation handle = consume show handle $
+                T.decodeIso8859_1   
+                `lmap`
+                (P.folds (<>) "" id . view T.lines) 
+                `lmap`
+                (leftover' ignoreLeftovers $ surely $ P.toListM)
 

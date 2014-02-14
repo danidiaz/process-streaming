@@ -21,7 +21,8 @@ module System.Process.Streaming (
         LeftoverPolicy,
         ignoreLeftovers,
         firstFailingBytes,
-        leftoverPolicy,
+        leftover,
+        leftover',
         consumeCombinedLines,
         useConsumer,
         -- * Feeding stdin
@@ -40,7 +41,7 @@ module System.Process.Streaming (
         handle3,
         handle2,
         -- * Execution helpers
-        createProcessE,
+        createProcess',
         terminateOnError,
         executeX,
         execute3,
@@ -206,12 +207,12 @@ firstFailingBytes :: (ByteString -> e) -> LeftoverPolicy (Producer ByteString IO
 firstFailingBytes errh remainingBytes = do
     runEitherT . runEffect $ hoist lift remainingBytes >-> (await >>= lift . left . errh)
 
-leftoverPolicy :: (Show e, Typeable e)
-               => (e' -> x -> e) 
-               -> LeftoverPolicy l e' 
-               -> (Producer b IO () -> IO (Either e x))
-               -> Producer b IO l -> IO (Either e x)
-leftoverPolicy errWrapper policy activity producer = revealError $ do
+leftover :: (Show e, Typeable e)
+         => (e' -> x -> e) 
+         -> LeftoverPolicy l e' 
+         -> (Producer b IO () -> IO (Either e x))
+         -> Producer b IO l -> IO (Either e x)
+leftover errWrapper policy activity producer = revealError $ do
     (Output outbox,inbox,seal) <- spawn' Unbounded
     feeding <- async $ runEffect $ 
         producer >-> (P.mapM $ atomically . outbox) >-> P.drain
@@ -221,6 +222,12 @@ leftoverPolicy errWrapper policy activity producer = revealError $ do
     case leftovers of
         Left e' -> elideError . return . Left $ errWrapper e' result   
         Right () -> return result
+
+leftover' :: (Show e, Typeable e)
+          => LeftoverPolicy l e
+          -> (Producer b IO () -> IO (Either e x))
+          -> Producer b IO l -> IO (Either e x)
+leftover' = leftover const
 
 writeLines :: MVar (Output T.Text) 
            -> LeftoverPolicy (Producer ByteString IO ()) e
@@ -461,9 +468,9 @@ handle2 f quad = case impure quad of
 
     > createProcessE = try . createProcess
  -}
-createProcessE :: CreateProcess 
+createProcess' :: CreateProcess 
                -> IO (Either IOException (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle))
-createProcessE = try . createProcess
+createProcess' = try . createProcess
 
 
 {-|
@@ -506,7 +513,7 @@ external process is terminated.
  -}
 executeX :: ((forall m. Applicative m => ((t, ProcessHandle) -> m (t, ProcessHandle)) -> (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) -> m (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle))) -> e -> (IOException -> e) -> CreateProcess -> (t -> IO (Either e a)) -> IO (Either e (ExitCode,a))
 executeX somePrism nomatch exHandler procSpec action = mask $ \restore -> runEitherT $ do
-    maybeHtuple <- bimapEitherT exHandler id $ EitherT $ createProcessE procSpec  
+    maybeHtuple <- bimapEitherT exHandler id $ EitherT $ createProcess' procSpec  
     case getFirst . getConst . somePrism (Const . First . Just) $ maybeHtuple of
         Nothing -> left nomatch 
         Just (htuple,phandle) -> do
