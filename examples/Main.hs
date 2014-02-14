@@ -18,6 +18,7 @@ import Control.Monad.Error
 --import Control.Monad.State
 import Control.Monad.Writer.Strict
 import Control.Exception
+import Control.Concurrent
 import Control.Lens
 import Pipes
 import qualified Pipes.Prelude as P
@@ -60,7 +61,7 @@ example3 :: IO (Either String (ExitCode,()))
 example3 = do
     execute2 "nohandle!" show create $ \(hout,herr) -> consumeCombinedLines show 
         [ (hout, decodeLines T.decodeIso8859_1 id, policy)
-        , (herr, decodeLines T.decodeIso8859_1 $ \x -> yield "errprefix: " *> x , policy) 
+        , (herr, decodeLines T.decodeIso8859_1 $ \x -> P.yield "errprefix: " *> x , policy) 
         ]
         (surely . safely . useConsumer $ S.withFile "combined.txt" WriteMode T.toHandle)
     where
@@ -108,3 +109,20 @@ example5 =
                 `lmap`
                 (leftover' ignoreLeftovers $ surely $ P.toListM)
 
+-- Checking that trying to terminate an already dead process doesn't cause exceptions.
+example6 ::IO (Either String (ExitCode, ((),())))
+example6 = 
+    execute2 "nohandle!" show create $ \(hout,herr) ->
+       conc (consume show herr . surely . useConsumer $ P.drain)
+            (consume show hout $ \_ -> threadDelay (2*10^6) >> (return $ Left "slow return!"))
+    where
+    create = set stream3 pipe2 $ proc "ruby" ["script4.rb"]
+
+-- Checking that returning a Left exits the process early.
+example7 ::IO (Either String (ExitCode, ((),())))
+example7 = 
+    execute2 "nohandle!" show create $ \(hout,herr) ->
+       conc (consume show herr . surely . useConsumer $ P.drain)
+            (consume show hout $ \_ -> return $ Left "fast return!")
+    where
+    create = set stream3 pipe2 $ proc "ruby" ["script3.rb"]

@@ -484,7 +484,11 @@ terminateOnError pHandle action = do
     result <- action
     case result of
         Left e -> do    
-            terminateProcess pHandle  
+            mExitCode <- getProcessExitCode pHandle   
+            case mExitCode of 
+                Nothing -> do 
+                    terminateProcess pHandle  
+                Just _ -> return ()
             return $ Left e
         Right r -> do 
             exitCode <- waitForProcess pHandle 
