@@ -119,31 +119,26 @@ feedMailbox :: (Consumer b IO () -> IO (Either e a)) -> Output b -> IO (Either e
 feedMailbox feeder outMailbox = feeder $ toOutput outMailbox
 
 {-|
-    Type synonym for a function that takes a 'Producer', does something with
-it, and returns a result @a@ or an error @e@. 
-
-    Notice that, even if this package doesn't depend on @pipes-parse@, you can
-convert a @Parser b IO (Either e a)@ to a @Consumption b e a@ by using
-'evalStateT'. 
- -}
-
-{-|
     This function consumes the @stdout@ or @stderr@ of an external process,
 with buffering.    
 
-    It takes an exception handler, a file 'Handle', and a 'Consumption'
-function (type synonym shown expanded) as parameters. Data is read from the
-handle and published as a 'Producer', which is then passed to the 'Consumption'
-function. 
+    It takes as arguments an exception handler, a file 'Handle', and a
+function that does something with a 'Producer'. The 'Producer' publishes the
+data form the 'Handle'.
   
-    The 'Consumption' function can incur in delays without risking deadlocks in
-the external process caused by full output buffers, because data is constantly
-read and stored in an intermediate buffer until it is consumed. 
+    The argument function can incur in delays without risking deadlocks in the
+external process caused by full output buffers, because data is constantly read
+and stored in an intermediate buffer until it is consumed. 
 
-    If the 'Consumption' returns with vale @a@, 'consume' /keeps draining/ the
-'Handle' until it is closed by the external process, and /only then/ returns
-the @a@. If the 'Consumption' fails with @e@, 'consume' returns immediately. So
-failing with @e@ is a good way to interrupt a process.  
+    If the argument function returns with vale @a@, 'consume' /keeps draining/
+the 'Handle' until it is closed by the external process, and /only then/
+returns the @a@. If the argument function fails with @e@, 'consume' returns
+immediately. So failing with @e@ is a good way to interrupt a process.  
+
+    Arguments functions pluggable into 'consume' can be constructed with the
+'useConsumer' function. They can also be constructed out of parses from
+"Pipes.Parse" by running 'evalStateT' on the parser. A third way of
+constructing them is using the folds defined in module 'Pipes.Prelude'.
  -}
 consume :: (IOException -> e) 
         -> Handle 
@@ -170,15 +165,18 @@ an empty producer.
 type LineDecoder = Producer ByteString IO () -> FreeT (Producer T.Text IO) IO (Producer ByteString IO ())
 
 {-|
-    Construct a 'LineDecoder' from a 'T.Codec' and a function that modifies
-each individual line.
+    Constructs a 'LineDecoder'.
 
-    If you want the lines unmodified, just pass @id@. Line prefixes are easy to
-add using applicative notation:
+    The first argument is a function function that decodes 'ByteString' into
+'T.Text'. See the section /Decoding Functions/ in the documentation for the
+"Pipes.Text" module.  
+
+    The second argument is a function that modifies each individual line. The
+line is represented as a 'Producer' to avoid having to keep it wholly in
+memory. If you want the lines unmodified, just pass @id@. Line prefixes are
+easy to add using applicative notation:
 
   > decodeLines utf8 (\x -> yield "prefix: " *> x)
-
-    The modifier function could also be used to add timestamps.
  -}
 decodeLines :: (forall r. Producer ByteString IO r -> Producer T.Text IO (Producer ByteString IO r)) 
             -> (forall r. Producer T.Text IO r -> Producer T.Text IO r) 
@@ -189,6 +187,9 @@ decodeLines decoder transform =  transFreeT transform
     where 
     viewLines = getConst . T.lines Const
 
+{-|
+   Just like 'decodeLines', but it takes a 'Codec' from @pipes-text@ as its first argument.  
+ -}
 decodeLines' :: T.Codec
              -> (forall r. Producer T.Text IO r -> Producer T.Text IO r) 
              -> LineDecoder
@@ -196,17 +197,40 @@ decodeLines' aCodec = decodeLines decoder
     where 
     decoder = getConst . T.codec aCodec Const
 
--- type LeftoverPolicy l e = forall m. MonadIO m => l -> m (Either e ())
-
+{-|
+    In the Pipes ecosystem, leftovers from decoding operations are often stored
+in the result value of 'Producer's (often as 'Producer's themselves). This is a
+type synonym for a function that examines these results values, and may fail
+depending on what it encounters.
+ -}
 type LeftoverPolicy  l e = l -> IO (Either e ())
 
+
+{-|
+    Never fails for any leftover.
+ -}
 ignoreLeftovers :: LeftoverPolicy l e 
 ignoreLeftovers =  const (liftIO . return $ Right ()) 
 
+{-|
+    For 'ByteString' leftovers, fails if it encounters any leftover and
+constructs the error out of the first undedcoded bytes. 
+ -}
 firstFailingBytes :: (ByteString -> e) -> LeftoverPolicy (Producer ByteString IO ()) e 
 firstFailingBytes errh remainingBytes = do
     runEitherT . runEffect $ hoist lift remainingBytes >-> (await >>= lift . left . errh)
 
+{-|
+    'Producers' that represent the results of decoding operations store
+leftovers in their result values. But many functions in this module
+('useConsumer', 'forkProd', and others) work only with 'Producer's that return
+@()@. The 'leftover' function augments these functions with a 'LeftoverPolicy'
+and lets them work with the result of a decoding. 
+
+    It may happen that the argument function returns successfully but leftovers
+exist, indicating a decoding failure. The first argument of 'leftover' lets you
+store the results in the message error.
+ -}
 leftover :: (Show e, Typeable e)
          => (e' -> x -> e) 
          -> LeftoverPolicy l e' 
@@ -223,6 +247,11 @@ leftover errWrapper policy activity producer = revealError $ do
         Left e' -> elideError . return . Left $ errWrapper e' result   
         Right () -> return result
 
+{-|
+    Like 'leftover', but results are ignored if they exist.
+
+    > leftover' = leftover const
+ -}
 leftover' :: (Show e, Typeable e)
           => LeftoverPolicy l e
           -> (Producer b IO () -> IO (Either e x))
@@ -243,22 +272,28 @@ writeLines mvar errh freeTLines = iterTLines freeTLines >>= errh
 
 {-| 
     This function reads bytes from a lists of file handles, converts them into
-text, splits each text stream into lines (possibly modifying the lines in the process) and
-writes all lines to a single stream, concurrently. The combined stream is publishes as a 'Producer', which
-is passed to a 'Consumption' function (type synonym shown expanded). 
+text, splits each text stream into lines (possibly modifying the lines in the
+process) and writes all lines to a single stream, concurrently. The combined
+stream is publishes as a 'Producer', which is them passed to a function that
+does something with it. 
 
-   'consumeCombinedLines' is typically used to consume @stdout@ and @stderr@ together.
+   'consumeCombinedLines' is typically used to consume @stdout@ and @stderr@
+together.
 
-   It takes two error callbacks: one for 'IOException's, and another for decoding errors (the 'ByteString' passed to the callback contains the first bytes that could't be decoded).  
+   The first arguent is an error callback. 
 
-    /Beware!/ 'consumeCombinedLines' avoids situations in which a line
-emitted in @stderr@ cuts a long line emitted in @stdout@, see <http://unix.stackexchange.com/questions/114182/can-redirecting-stdout-and-stderr-to-the-same-file-mangle-lines here> for a description of the problem. 
-To avoid this, the combined text stream is
-locked while writing each individual line. But this means that if the external
-program stops writing to a handle /while in the middle of a line/, lines from the
-other handles won't be consumed, either!
+   A 'LineDecoder' and a 'LeftoverPolicy' must be specified for each handle.
 
-   'consumeCombinedLines' behaves like 'consume' in respect to early termination and draining of leftover data in the handles. 
+    /Beware!/ 'consumeCombinedLines' avoids situations in which a line emitted
+in @stderr@ cuts a long line emitted in @stdout@, see
+<http://unix.stackexchange.com/questions/114182/can-redirecting-stdout-and-stderr-to-the-same-file-mangle-lines
+here> for a description of the problem.  To avoid this, the combined text
+stream is locked while writing each individual line. But this means that if the
+external program stops writing to a handle /while in the middle of a line/,
+lines coming from the other handles won't be printed, either!
+
+   'consumeCombinedLines' behaves like 'consume' in respect to early
+termination and draining of leftover data in the handles. 
  -}
 consumeCombinedLines :: (Show e, Typeable e) 
                      => (IOException -> e) 
@@ -277,66 +312,25 @@ consumeCombinedLines exHandler actions c = try' exHandler $ do
     consume' mVar (h,lineDec,leftoverp) = consume exHandler h $ 
         writeLines mVar leftoverp . lineDec 
 
-
-
 {-|
-    Constructs a 'Consumption' from a 'Consumer'. If basically combines the
-'Producer' and the 'Consumer' in a pipeline and runs it.
+    Builds a function that will be plugged into 'consume' or 'consumeCombinedLines' out of a 'Producer'.
+
+    You may need to use 'surely' for the types to fit.
+
+   >  useProducer producer consumer = runEffect (producer >-> consumer) 
  -}
 
 useConsumer :: Monad m => Consumer b m () -> Producer b m () -> m ()
 useConsumer consumer producer = runEffect $ producer >-> consumer 
 
---useConsumer :: MonadIO m 
---            => LeftoverPolicy l e 
---            -> Consumer b m l 
---            -> Producer b m l -> m (Either e ())
---useConsumer policy consumer producer = do
---    leftovers <- runEffect $ producer >-> consumer 
---    policy leftovers 
---
---useConsumer' :: MonadIO m       
---             => Consumer b m l 
---             -> Producer b m l -> m (Either e ())
---useConsumer' = useConsumer ignoreLeftovers
-
---useSafeConsumer :: Consumer b (SafeT IO) l -> Consumption b l e ()
---useSafeConsumer consumer producer = Right <$> (runSafeT $ runEffect $ hoist lift producer >-> consumer)
---
---{-|
---    Constructs a 'Consumption' from a 'Consumer' that may fail with @e@.
--- -}
---useConsumerE :: Error e => Consumer b (ErrorT e IO) l -> Consumption b l e ()
---useConsumerE consumer producer = runEffect $ runErrorP $ hoist lift producer >-> consumer
---
---{-|
---    Constructs a 'Consumption' from a 'Consumer' that may fail with @e'@ and
---that keeps a monoidal summary @w@ of the consumed data. If the consumer fails
---with @e'@, a failure @e@ is constructed by combining @e'@ and the values
---accumulated up until the error, so that @e@ may include them if the user
---wishes. To ignore them, it is enough to pass 'const' as the first argument. 
--- -}
---useConsumerW :: (Monoid w, Error e') => (w -> e' -> e) -> Consumer b (ErrorT e' (WriterT w IO)) l -> Consumption b l e w 
---useConsumerW resultsUntilError consumer producer = do
---    (r,w) <- runEffect $ runWriterP $ runErrorP $ hoist (lift.lift) producer >-> consumer 
---    case r of
---        Left e' -> return $ Left $ resultsUntilError w e'    
---        Right () -> return $ Right w
---
---useSafeConsumerW :: Monoid w => Consumer b (WriterT w (SafeT IO)) l -> Consumption b l e w 
---useSafeConsumerW consumer producer = do
---    (_,w) <- runSafeT $ runEffect $ runWriterP $ hoist (lift.lift) producer >-> consumer
---    return $ Right w
---
-
 {-|
     This function feeds the stdin of an external process, with buffering.
 
-    It takes an exception handler, a file 'Handle', and a 'Feeding' function (type synonym shown expanded) as parameters. Data is produced and received by the 'Consumer', that writes it to the 'Handler'.
+    It takes as parameters an exception handler, a file 'Handle', and a function that does something with a 'Consumer'. Data is produced and received by the 'Consumer', that writes it to the 'Handler'.
 
-    The 'Feeding' function need not worry about delays caused by the slowness of the external process in reading the data, because the supplied data is buffered and written to the 'Handle' in a separate thread.
+    The argument function need not worry about delays caused by the slowness of the external process in reading the data, because the supplied data is buffered and written to the 'Handle' in a separate thread.
 
-    If the 'Feeding' fails with @e@, 'feed' returns immediately. So failing with @e@ is a good way to interrupt a process.
+    If the argument function fails with @e@, 'feed' returns immediately. So failing with @e@ is a good way to interrupt a process.
  -}
 feed :: (IOException -> e)
      -> Handle 
@@ -349,8 +343,11 @@ feed exHandler h c = try' exHandler $ do
                          (mailbox2Handle inbox h)
 
 {-|
-    Constructs a 'Feeding' from a 'Producer'. If basically combines the
-'Producer' and the 'Consumer' in a pipeline and runs it.
+    Builds a function that will be plugged into 'feed' out of a 'Producer'.
+
+    You may need to use 'surely' for the types to fit.
+
+   >  useProducer producer consumer = runEffect (producer >-> consumer) 
  -}
 useProducer :: Monad m => Producer b m () -> Consumer b m () -> m ()
 useProducer producer consumer = runEffect (producer >-> consumer) 
@@ -422,8 +419,9 @@ pipe3 :: (StdStream,StdStream,StdStream)
 pipe3 = (CreatePipe,CreatePipe,CreatePipe)
 
 {-|
-    Specifies @CreatePipe@ for @std_out@ and @std_err@; @std_in@ is taken as 
-parameter. 
+    Specifies @CreatePipe@ for @std_out@ and @std_err@; @std_in@ is set to 'Inherit'.
+
+    > pipe3 = (Inherit,CreatePipe,CreatePipe)
  -}
 pipe2 :: (StdStream,StdStream,StdStream)
 pipe2 = (Inherit,CreatePipe,CreatePipe)
@@ -491,24 +489,26 @@ terminateOnError pHandle action = do
             return $ Right (exitCode,r)  
 
 {-|
-    > executeX :: Prism' (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) (t, ProcessHandle) -> CreateProcess -> (IOException -> e) -> (t -> IO (Either e a)) -> IO (Either e (ExitCode,a))
+    > executeX :: Prism' (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) (t, ProcessHandle) -> e -> (IOException -> e) -> CreateProcess -> (t -> IO (Either e a)) -> IO (Either e (ExitCode,a))
 
     Convenience function that launches the external process, does stuff with
 its standard streams, and returns the 'ExitCode' upon completion alongside the
 results. 
 
    The first argument is 'Prism' that matches against the tuple returned by
-'createProcess'. If the prism fails to match, an 'error' is raised. 
+'createProcess' and removes the 'Maybe's that wrap the 'Handle's. 
 
-   The second argument is an error callback for exceptions thrown when launching
+   The second argument is the error value for when one of the 'Handles' is unexpectedly 'Nothing'.
+
+   The third argument is an error callback for exceptions thrown when launching
 the process, or while waiting for it to complete.  
 
    The fourth argument is a computation that depends of what the prism matches
-(some subset of the handles) and may fail with error @e@. The compuation is
+(some subset of the handles) and may fail with error @e@. The computation is
 often constructed using the 'Applicative' instance of 'Conc' and functions
 like 'consume', 'consumeCombinedLines' and 'feed'.
 
-   If an asynchronous exception is thrown while this function executes, the
+   If an exception is thrown while this function executes, the
 external process is terminated. 
  -}
 executeX :: ((forall m. Applicative m => ((t, ProcessHandle) -> m (t, ProcessHandle)) -> (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) -> m (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle))) -> e -> (IOException -> e) -> CreateProcess -> (t -> IO (Either e a)) -> IO (Either e (ExitCode,a))
@@ -539,8 +539,6 @@ execute2 :: e -> (IOException -> e) -> CreateProcess -> ((Handle,Handle) -> IO (
 execute2 = executeX handle2
 
 
---
---
 data WrappedError e = WrappedError e
     deriving (Show, Typeable)
 
@@ -557,12 +555,14 @@ revealError action = catch (action >>= return . Right)
     'Conc' is very similar to 'Control.Concurrent.Async.Concurrently' from the
 @async@ package, but it has an explicit error type @e@.
 
-    The 'Applicative' instance is used to run concurrently the actions that
-work over each handle (actions defined using functions like 'consume',
-'consumeCombinedLines' and 'feed') and combine their results. 
+    The 'Applicative' instance is used to run actions concurrently and combine their results. 
 
    If any of the actions fails with @e@ the other actions are immediately
 cancelled and the whole computation fails with @e@. 
+
+    'Conc' and its accompanying functions are useful to run concurrently the
+actions that work over each handle (actions defined using functions like 'consume',
+'consumeCombinedLines' and 'feed').
 -}
 newtype Conc e a = Conc { runConc :: IO (Either e a) }
 
@@ -598,7 +598,7 @@ conc3 c1 c2 c3 = runConc $ (,,) <$> Conc c1
 
 {-| 
       Works similarly to 'Control.Concurrent.Async.mapConcurrently' from the
-@async@ package, but if any of the computations fails with @e@, the other are
+@async@ package, but if any of the computations fails with @e@, the others are
 immediately cancelled and the whole computation fails with @e@. 
  -}
 mapConc :: (Show e, Typeable e, Traversable t) => (a -> IO (Either e b)) -> t a -> IO (Either e (t b))
@@ -607,6 +607,16 @@ mapConc f = revealError .  mapConcurrently (elideError . f)
 mapConc_ :: (Show e, Typeable e, Traversable t) => (a -> IO (Either e b)) -> t a -> IO (Either e ())
 mapConc_ f l = fmap (const ()) <$> mapConc f l
 
+{-| 
+    'ForkProd' is a newtype around a function that does something with a
+'Producer'. The applicative instance fuses these functions, so that each one
+receives its own copy of the 'Producer' and runs concurrently with the others.
+Like with 'Conc', if any of the functions fails with @e@ the others are
+immediately cancelled and the whole computation fails with @e@.   
+
+    'ForkProd' and its accompanying functions are useful to run multiple
+parsers from "Pipes.Parse" in parallel over the same 'Producer'.
+ -}
 newtype ForkProd b e a = ForkProd { runForkProd :: Producer b IO () -> IO (Either e a) }
 
 instance Functor (ForkProd b e) where
@@ -637,9 +647,21 @@ forkProd c1 c2 = runForkProd $ (,) <$> ForkProd c1
                                    <*> ForkProd c2
 
 
+{-| 
+  Useful when you want to plug into 'consume' a function that doesn't return an
+  'Either'. For example folds from "Pipes.Prelude", or functions created from simple
+  'Consumer's with 'useConsumer'. 
+
+  > surely = fmap (fmap Right)
+ -}
 surely :: (Functor f, Functor f') => f (f' a) -> f (f' (Either e a))
 surely = fmap (fmap Right)
 
+
+{-| 
+  Useful when you want to plug into 'consume' a function that does its work in
+the 'SafeT' transformer.
+ -}
 safely :: (MFunctor t, C.MonadCatch m, MonadIO m) 
        => (t (SafeT m) l -> (SafeT m) x) 
        -> (t m l -> m x) 
@@ -650,23 +672,22 @@ fallibly :: (MFunctor t, Monad m, Error e)
          -> (t m l -> m (Either e x)) 
 fallibly activity = runErrorT . activity . hoist lift 
 
---monoidally :: (MFunctor t,Monad m, Monoid w) 
---           => (w -> e -> e)
---           -> (t (WriterT w m) l -> WriterT w m (Either e ()))
---           -> (t m l -> m (Either e w))
---monoidally errh monoidalActivity proxy = do        
---    (r,w) <- runWriterT . monoidalActivity . hoist lift $ proxy
---    case r of 
---        Left e -> return $ Left $ errh w e  
---        Right () -> return $ Right w 
+{-|
+  Usually, it is better to use a fold form "Pipes.Prelude" instead of this
+function.  But this function has the ability to return the monoidal result
+accumulated up until the error happened. 
 
+ The first argument is a function that combines the initial error with the
+monoidal result to build the definitive error value. If you want to discard the
+results, use 'const' as the first argument.  
+ -}
 monoidally :: (MFunctor t,Monad m,Monoid w, Error e') 
-           => (w -> e' -> e) 
+           => (e' -> w -> e) 
            -> (t (ErrorT e' (WriterT w m)) l -> ErrorT e' (WriterT w m) ())
            -> (t m l -> m (Either e w))
 monoidally errh activity proxy = do
     (r,w) <- runWriterT . runErrorT . activity . hoist (lift.lift) $ proxy
     return $ case r of
-        Left e' -> Left $ errh w e'    
+        Left e' -> Left $ errh e' w    
         Right () -> Right $ w
 
