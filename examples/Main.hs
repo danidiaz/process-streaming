@@ -45,8 +45,7 @@ example1 = execute2 "nohandle!" show create $ \(hout,herr) -> mapConc_ consume' 
         [ (hout,"stdout.log"), (herr,"stderr.log") ]
     where
     create = set stream3 pipe2 $ proc "script1.bat" []
-    consume' (h,file) = consume show h $ 
-        safely $ useConsumer ignoreLeftovers $ 
+    consume' (h,file) = consume show h . surely . safely . useConsumer $ 
             S.withFile file WriteMode toHandle
 
 -- Error becasue of missing executable.
@@ -59,13 +58,13 @@ example2 = execute2 "nohandle!" show create $ \_ -> return $ Right ()
 example3 :: IO (Either String (ExitCode,()))
 example3 = do
     execute2 "nohandle!" show create $ \(hout,herr) -> consumeCombinedLines show 
-        [ (hout, decodeLines T.decodeIso8859_1 id, leftoverp)
-        , (herr, decodeLines T.decodeIso8859_1 $ \x -> yield "errprefix: " *> x , leftoverp) 
+        [ (hout, decodeLines T.decodeIso8859_1 id, policy)
+        , (herr, decodeLines T.decodeIso8859_1 $ \x -> yield "errprefix: " *> x , policy) 
         ]
-        (safely $ useConsumer' $ S.withFile "combined.txt" WriteMode T.toHandle)
+        (surely . safely . useConsumer $ S.withFile "combined.txt" WriteMode T.toHandle)
     where
     create = set stream3 pipe2 $ proc "script1.bat" []
-    leftoverp = firstFailingBytes (const "badbytes")
+    policy = firstFailingBytes (const "badbytes")
 
 
 -- Ignore stderr, run two attoparsec parsers concurrently on stdout.
@@ -79,15 +78,16 @@ parser2 = parseChars 'a'
 example4 ::IO (Either String (ExitCode, ((), ([Char], [Char]))))
 example4 = 
     execute2 "nohandle!" show create $ \(hout,herr) ->
-       conc (consume show herr $ useConsumer' P.drain)
+       conc (consume show herr . surely . useConsumer $ P.drain)
             (consume show hout $
                 T.decodeIso8859_1   
                 `lmap`
-                (concProd (P.evalStateT (adapt parser1))
-                          (P.evalStateT (adapt parser2))))
+                (leftoverPolicy const (firstFailingBytes $ const "badbytes") $  
+                    forkProd (P.evalStateT $ adapt parser1)
+                             (P.evalStateT $ adapt parser2)
+                )
+            )
     where
     create = set stream3 pipe2 $ proc "script2.bat" []
     adapt p = bimap (const "parse error") id <$> P.parse p
-
-
 
