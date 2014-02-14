@@ -9,7 +9,7 @@ The basic goals:
 - Concurrent, buffered, streaming access to stdin, stdout and stderr.
 
 - Easy integration with parsers pipes-parse package and folds from
-  Pipes.Prelude/pipes-group.
+  Pipes.Prelude.
 
 - Avoid launching exceptions: use Either or similar solution to signal error
   conditions.
