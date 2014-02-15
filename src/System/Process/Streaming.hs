@@ -101,10 +101,11 @@ mailbox2Handle mailbox handle =
      finally (runEffect $ fromInput mailbox >-> toHandle handle)
              (hClose handle) 
 
-handle2Mailbox :: Handle -> Output ByteString -> IO ()
-handle2Mailbox handle mailbox = 
+handle2Mailbox :: Handle -> Output ByteString -> IO (Either e ())
+handle2Mailbox handle mailbox = do 
      finally (runEffect $ fromHandle handle >-> toOutput mailbox)
              (hClose handle) 
+     return $ Right ()
 
 consumeMailbox :: Input b -> (Producer b IO () -> IO (Either e a)) -> IO (Either e a)
 consumeMailbox inMailbox consumer = do
@@ -140,15 +141,18 @@ immediately. So failing with @e@ is a good way to interrupt a process.
 "Pipes.Parse" by running 'evalStateT' on the parser. A third way of
 constructing them is using the folds defined in module 'Pipes.Prelude'.
  -}
-consume :: (IOException -> e) 
+consume :: (Show e, Typeable e) 
+        => (IOException -> e) 
         -> Handle 
         -> (Producer ByteString IO () -> IO (Either e a))
         -> IO (Either e a) 
 consume exHandler h c = try' exHandler $ do 
     (outbox, inbox, seal) <- spawn' Unbounded
-    snd <$> concurrently  (do a <- async $ handle2Mailbox h outbox
-                              wait a `finally` atomically seal)
-                          (consumeMailbox inbox c `finally` atomically seal) 
+    r <- conc (do a <- async $ handle2Mailbox h outbox
+                  wait a `finally` atomically seal)
+              (consumeMailbox inbox c `finally` atomically seal) 
+    return $ snd <$> r
+    
 
 {-|
   Type synonym for a function that takes a 'ByteString' producer, decodes it
