@@ -96,10 +96,11 @@ import System.Exit
 try' :: (IOException -> e) -> IO (Either e a) -> IO (Either e a)
 try' handler action = try action >>= either (return . Left . handler) return
 
-mailbox2Handle :: Input ByteString -> Handle -> IO ()
-mailbox2Handle mailbox handle = 
+mailbox2Handle :: Input ByteString -> Handle -> IO (Either e ())
+mailbox2Handle mailbox handle = do
      finally (runEffect $ fromInput mailbox >-> toHandle handle)
              (hClose handle) 
+     return $ Right ()
 
 handle2Mailbox :: Handle -> Output ByteString -> IO (Either e ())
 handle2Mailbox handle mailbox = do 
@@ -338,15 +339,17 @@ useConsumer consumer producer = runEffect $ producer >-> consumer
 
     If the argument function fails with @e@, 'feed' returns immediately. So failing with @e@ is a good way to interrupt a process.
  -}
-feed :: (IOException -> e)
+feed :: (Show e, Typeable e)  
+     => (IOException -> e)
      -> Handle 
      -> (Consumer ByteString IO () -> IO (Either e a))
      -> IO (Either e a) 
 feed exHandler h c = try' exHandler $ do 
     (outbox, inbox, seal) <- spawn' Unbounded
-    fst <$> concurrently (do a <- async $ feedMailbox c outbox
-                             wait a `finally` atomically seal) 
-                         (mailbox2Handle inbox h `finally` atomically seal)
+    r <- conc (do a <- async $ feedMailbox c outbox
+                  wait a `finally` atomically seal) 
+              (mailbox2Handle inbox h `finally` atomically seal)
+    return $ fst <$> r
 
 {-|
     Builds a function that will be plugged into 'feed' out of a 'Producer'.
