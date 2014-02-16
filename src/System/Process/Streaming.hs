@@ -15,7 +15,7 @@
 {-# LANGUAGE RankNTypes #-}
 
 module System.Process.Streaming ( 
-        -- * Execution
+        -- * Execution helpers
         execute2,
         execute3,
         executeX,
@@ -30,7 +30,7 @@ module System.Process.Streaming (
         firstFailingBytes,
         execute2cl,
         execute3cl,
-        -- * Constructing computations
+        -- * Constructing feeding/consuming functions
         useConsumer,
         useProducer,
         surely,
@@ -100,46 +100,6 @@ import System.Exit
 try' :: (IOException -> e) -> IO (Either e a) -> IO (Either e a)
 try' handler action = try action >>= either (return . Left . handler) return
 
-mailbox2Handle :: Input ByteString -> Handle -> IO (Either e ())
-mailbox2Handle mailbox handle = do
-     finally (runEffect $ fromInput mailbox >-> toHandle handle)
-             (hClose handle) 
-     return $ Right ()
-
-handle2Mailbox :: Handle -> Output ByteString -> IO (Either e ())
-handle2Mailbox handle mailbox = do 
-     finally (runEffect $ fromHandle handle >-> toOutput mailbox)
-             (hClose handle) 
-     return $ Right ()
-
-consumeMailbox :: Input b -> (Producer b IO () -> IO (Either e a)) -> IO (Either e a)
-consumeMailbox inMailbox consumer = do
-    result <- consumer $ fromInput inMailbox
-    case result of 
-        Left e -> return $ Left e
-        Right r -> do
-            runEffect $ fromInput inMailbox >-> P.drain 
-            return $ result
-
-
-
-
-writeLines :: MVar (Output T.Text) 
-           -> LeftoverPolicy (Producer ByteString IO ()) e
-           -> FreeT (Producer T.Text IO) IO (Producer ByteString IO ())
-           -> IO (Either e ())
-writeLines mvar errh freeTLines = iterTLines freeTLines >>= errh
-    where
-    iterTLines :: forall x. FreeT (Producer T.Text IO) IO x -> IO x
-    iterTLines = iterT $ \textProducer -> do
-        -- the P.drain bit was difficult to figure out!!!
-        join $ withMVar mvar $ \output -> do
-            runEffect $ (textProducer <* P.yield (singleton '\n')) >-> (toOutput output >> P.drain)
-
-
-
-
-
 {-|
     This function takes a 'CreateProcess' record, an exception handler, one
 function to consume the stdout 'Producer' and another function to consume the
@@ -150,8 +110,8 @@ buffered in memory, so the consuming functions can have delays without risking
 causing deadlocks in the external process due to full output buffers. 
 
     When a consuming function returns successfully, the `Handle` from the
-external process keeps being drained until the process closes it, and /only
-then/ the result is returned. When both consuming functions finish
+external process keeps being drained until the process closes it, and /only then/ 
+the result is returned. When both consuming functions finish
 successfully, their return values are aggregated. 
 
     If one of the consuming functions fails with @e@, the whole computation is
@@ -160,10 +120,10 @@ immediately aborted and @e@ is returned.
     'execute2' tries to avoid launching exceptions, and represents all errors
 as @e@ values.
 
-   If an exception is thrown while this function executes, the external process
-is terminated.
+   If an error or asynchronous exception happens, the external process is
+terminated.
 
-   This function sets the std_out and std_err fields in the 'CreateProcess'
+   This function sets the @std_out@ and @std_err@ fields in the 'CreateProcess'
 record to 'CreatePipe'.
  -}
 execute2 :: (Show e, Typeable e) 
@@ -184,12 +144,11 @@ execute2 spec ehandler consumout consumerr = do
 
 {-|
     Like `execute2` but with an additional argument consisting in a /feeding/
-function that takes the stdin 'Consumer' and writes to it. 
+function that takes the @stdin@ 'Consumer' and writes to it. 
 
     The feeding function can return a value.
 
-
-   This function sets the std_in, std_out and std_err fields in the
+   This function sets the @std_in@, @std_out@ and @std_err@ fields in the
 'CreateProcess' record to 'CreatePipe'.
  -}
 execute3 :: (Show e, Typeable e)
@@ -360,16 +319,18 @@ firstFailingBytes errh remainingBytes = do
     runEitherT . runEffect $ hoist lift remainingBytes >-> (await >>= lift . left . errh)
 
 {-|
-    Like 'execute2', but stdout and stderr are decoded into 'Text', splitted into lines (maybe applying some transformation to each line) and then combined and consumed by the same function.
+    Like 'execute2', but @stdout@ and @stderr@ are decoded into 'Text', splitted
+into lines (maybe applying some transformation to each line) and then combined
+and consumed by the same function.
 
     For both @stdout@ and @stderr@, a 'LineDecoder' must be supplied, along with a 'LeftoverPolicy'.
 
-    /Beware!/ 'execute2cl ' avoids situations in which a line emitted
+    /Beware!/ 'execute2cl' avoids situations in which a line emitted
 in @stderr@ cuts a long line emitted in @stdout@, see
 <http://unix.stackexchange.com/questions/114182/can-redirecting-stdout-and-stderr-to-the-same-file-mangle-lines here> for a description of the problem.  To avoid this, the combined text
 stream is locked while writing each individual line. But this means that if the
 external program stops writing to a handle /while in the middle of a line/,
-lines coming from the other handles won't be printed, either!
+lines coming from the other handles won't get printed, either!
  -}
 execute2cl :: (Show e, Typeable e) 
            => CreateProcess 
@@ -521,6 +482,9 @@ leftovers errWrapper policy activity producer = revealError $ do
         Left e' -> elideError . return . Left $ errWrapper e' result   
         Right () -> return result
 
+{-|
+    > leftovers_ = leftovers const
+  -}
 leftovers_ :: (Show e, Typeable e)
            => LeftoverPolicy l e 
            -> (Producer b IO () -> IO (Either e x))
@@ -634,6 +598,14 @@ forkProd :: (Show e, Typeable e)
 forkProd c1 c2 = runForkProd $ (,) <$> ForkProd c1
                                    <*> ForkProd c2
 
+consumeMailbox :: Input b -> (Producer b IO () -> IO (Either e a)) -> IO (Either e a)
+consumeMailbox inMailbox consumer = do
+    result <- consumer $ fromInput inMailbox
+    case result of 
+        Left e -> return $ Left e
+        Right r -> do
+            runEffect $ fromInput inMailbox >-> P.drain 
+            return $ result
 
 {-|
     Transforms a 'Producer' handler function, adding a layer of buffering.
@@ -665,7 +637,6 @@ buffer f producer = do
     This auxiliary function is used by 'execute2cl' and 'execute3cl' to merge the output
 streams.
  -}
-
 combineLines :: (Show e, Typeable e) 
               => [(Producer ByteString IO (), LineDecoder, LeftoverPolicy (Producer ByteString IO ()) e)]
         	  -> (Producer T.Text IO () -> IO (Either e a))
@@ -683,7 +654,17 @@ combineLines actions producer = do
     where 
     consume' mVar (producer,lineDec,leftoverp) = 
         (buffer $ writeLines mVar leftoverp . lineDec) producer 
-
+    writeLines :: MVar (Output T.Text) 
+               -> LeftoverPolicy (Producer ByteString IO ()) e
+               -> FreeT (Producer T.Text IO) IO (Producer ByteString IO ())
+               -> IO (Either e ())
+    writeLines mvar errh freeTLines = iterTLines freeTLines >>= errh
+        where
+        iterTLines :: forall x. FreeT (Producer T.Text IO) IO x -> IO x
+        iterTLines = iterT $ \textProducer -> do
+            -- the P.drain bit was difficult to figure out!!!
+            join $ withMVar mvar $ \output -> do
+                runEffect $ (textProducer <* P.yield (singleton '\n')) >-> (toOutput output >> P.drain)
 
 {-|
     > _cmdspec :: Lens' CreateProcess CmdSpec 
