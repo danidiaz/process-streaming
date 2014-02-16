@@ -1,4 +1,4 @@
-IO.sync=true
+#IO.sync=true
 $stdout.puts "aaaaaaaaaaaaaaaaaaaaaa aaaaaaaa"
 $stderr.puts "xxxxxxxxxxx xxxxxxxxxxxxx xxxxx"
 $stdout.puts "bbbbbbbbbbbbbbbbb bbbbbbbbbbbbb"

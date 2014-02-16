@@ -412,6 +412,14 @@ createProcess' = try . createProcess
     Terminate the external process is the computation fails, otherwise return
 the 'ExitCode' alongside the result. 
  -}
+
+terminateCarefully :: ProcessHandle -> IO ()
+terminateCarefully pHandle = do
+    mExitCode <- getProcessExitCode pHandle   
+    case mExitCode of 
+        Nothing -> terminateProcess pHandle  
+        Just _ -> return ()
+
 terminateOnError :: ProcessHandle 
                  -> IO (Either e a)
                  -> IO (Either e (ExitCode,a))
@@ -419,11 +427,7 @@ terminateOnError pHandle action = do
     result <- action
     case result of
         Left e -> do    
-            mExitCode <- getProcessExitCode pHandle   
-            case mExitCode of 
-                Nothing -> do 
-                    terminateProcess pHandle  
-                Just _ -> return ()
+            terminateCarefully pHandle
             return $ Left e
         Right r -> do 
             exitCode <- waitForProcess pHandle 
@@ -452,16 +456,22 @@ like 'consume', 'consumeCombinedLines' and 'feed'.
    If an exception is thrown while this function executes, the
 external process is terminated. 
  -}
-executeX :: ((forall m. Applicative m => ((t, ProcessHandle) -> m (t, ProcessHandle)) -> (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) -> m (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle))) -> CreateProcess -> (IOException -> e) -> ((forall z. IO z -> IO z) -> t -> IO (Either e a)) -> IO (Either e (ExitCode,a))
+executeX :: ((forall m. Applicative m => ((t, ProcessHandle) -> m (t, ProcessHandle)) -> (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) -> m (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle))) -> CreateProcess -> (IOException -> e) -> (t -> (IO (Either e a), IO())) -> IO (Either e (ExitCode,a))
 executeX somePrism procSpec exHandler action = mask $ \restore -> runEitherT $ do
     maybeHtuple <- bimapEitherT exHandler id $ EitherT $ createProcess' procSpec  
-    case getFirst . getConst . somePrism (Const . First . Just) $ maybeHtuple of
-        Nothing -> left $ exHandler $ userError "stdin/stdout/stderr handle unexpectedly null" 
-        Just (htuple,phandle) -> do
-            EitherT $ try' exHandler $ 
-                (terminateOnError phandle $ action restore htuple)
-                `onException`
-                terminateProcess phandle -- pending -- terminate even on prism failure                           
+    EitherT $ try' exHandler $ 
+        case getFirst . getConst . somePrism (Const . First . Just) $ maybeHtuple of
+            Nothing -> 
+                throwIO (userError "stdin/stdout/stderr handle unexpectedly null")
+                `finally`
+                let (_,_,_,phandle) = maybeHtuple 
+                in terminateCarefully phandle 
+            Just (htuple,phandle) -> let (a, cleanup) = action htuple in 
+                -- Handles must be closed *after* terminating the process, because a close
+                -- operation may block if the external process has unflushed bytes in the stream.
+                (terminateOnError phandle $ restore a `onException` terminateCarefully phandle) 
+                `finally` 
+                cleanup 
 
 {-|
     When we want to work with @stdin@, @stdout@ and @stderr@.
@@ -476,14 +486,11 @@ execute3 :: (Show e, Typeable e)
          -> (Producer ByteString IO () -> IO (Either e c))
          -> IO (Either e (ExitCode,(a,b,c)))
 execute3 spec ehandler feeder consumout consumerr = do
-    executeX handle3 spec' ehandler $ \unmask (hin,hout,herr) ->
-        (unmask $ try' ehandler $ -- maybe repeat this for each job, with annotations 
-             conc3 ((feeder $ toHandle hin) `finally` hClose hin)
-                   ((buffer consumout $ fromHandle hout) `finally` hClose hout)
-                   ((buffer consumerr $ fromHandle herr)`finally` hClose herr))
-        `finally` hClose hin
-        `finally` hClose hout
-        `finally` hClose herr
+    executeX handle3 spec' ehandler $ \(hin,hout,herr) ->
+        (,) (conc3 (feeder           $ toHandle hin)
+                   (buffer consumout $ fromHandle hout)
+                   (buffer consumerr $ fromHandle herr))
+            (hClose hin `finally` hClose hout `finally` hClose herr)
     where 
     spec' = spec { std_in = CreatePipe
                  , std_out = CreatePipe
@@ -502,12 +509,10 @@ execute2 :: (Show e, Typeable e)
          -> (Producer ByteString IO () -> IO (Either e b))
          -> IO (Either e (ExitCode,(a,b)))
 execute2 spec ehandler consumout consumerr = do
-    executeX handle2 spec' ehandler $ \unmask (hout,herr) ->
-        (unmask $ try' ehandler $ -- maybe repeat this for each job, with annotations 
-            conc ((buffer consumout $ fromHandle hout) `finally` hClose hout)
-                 ((buffer consumerr $ fromHandle herr) `finally` hClose herr))
-        `finally` hClose hout
-        `finally` hClose herr
+    executeX handle2 spec' ehandler $ \(hout,herr) ->
+        (,) (conc (buffer consumout $ fromHandle hout )
+                  (buffer consumerr $ fromHandle herr ))
+            (hClose hout `finally` hClose herr)
     where 
     spec' = spec { std_out = CreatePipe
                  , std_err = CreatePipe
@@ -524,19 +529,15 @@ execute3cl :: (Show e, Typeable e)
            -> (Producer T.Text IO () -> IO (Either e b))
            -> IO (Either e (ExitCode,(a,b)))
 execute3cl spec ehandler feeder ld1 lop1 ld2 lop2 combinedConsumer = 
-    executeX handle3 spec' ehandler $ \unmask (hin,hout,herr) -> 
-        (unmask $ try' ehandler $ 
-            conc (feeder (toHandle hin) 
-                  `finally` hClose hin)
-                 (combinedLines [ (fromHandle hout,ld1,lop1)
-                                , (fromHandle herr,ld2,lop2)
-                                ]
-                                combinedConsumer 
-                  `finally` hClose hout 
-                  `finally` hClose herr)
-        `finally` hClose hin
-        `finally` hClose hout
-        `finally` hClose herr)
+    executeX handle3 spec' ehandler $ \(hin,hout,herr) -> 
+        (,)  (conc (feeder (toHandle hin))
+                   (combinedLines [ (fromHandle hout,ld1,lop1)
+                                  , (fromHandle herr,ld2,lop2) 
+                                  ]
+                                  combinedConsumer 
+                   )
+             )
+             (hClose hin `finally` hClose hout `finally` hClose herr)
     where
     spec' = spec { std_in = CreatePipe
                  , std_out = CreatePipe
@@ -554,17 +555,18 @@ execute2cl :: (Show e, Typeable e)
            -> IO (Either e (ExitCode,a))
 
 execute2cl spec ehandler ld1 lop1 ld2 lop2 combinedConsumer = do
-    executeX handle2 spec' ehandler $ \unmask (hout,herr) -> 
-        (unmask $ try' ehandler $ 
-            combinedLines [(fromHandle hout,ld1,lop1),
-                           (fromHandle herr,ld2,lop2)]
-                          combinedConsumer)
-        `finally` hClose hout
-        `finally` hClose herr
+    executeX handle2 spec' ehandler $ \(hout,herr) -> 
+        (,) (combinedLines [ (fromHandle hout,ld1,lop1)
+                           , (fromHandle herr,ld2,lop2)
+                           ]
+                          combinedConsumer
+            )
+            (hClose hout `finally` hClose herr)
     where 
     spec' = spec { std_out = CreatePipe
                  , std_err = CreatePipe
                  } 
+
 data WrappedError e = WrappedError e
     deriving (Show, Typeable)
 
