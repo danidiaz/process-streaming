@@ -28,6 +28,8 @@ import Pipes.Lift
 import Pipes.ByteString
 import qualified Pipes.Group as P
 import qualified Pipes.Text as T
+import qualified Pipes.Text.Encoding as T
+import qualified Pipes.Text.IO as T
 import qualified Pipes.Safe as S
 import qualified Pipes.Safe.Prelude as S
 import Pipes.Concurrent
