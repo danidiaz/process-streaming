@@ -78,15 +78,15 @@ parseChars c = fmap mconcat $
 parser1 = parseChars 'o'
 parser2 = parseChars 'a'
 
-example4 ::IO (Either String (ExitCode, ((), ([Char], [Char]))))
+example4 ::IO (Either String (ExitCode, (([Char], [Char]),())))
 example4 = execute2 (proc "script2.bat" []) 
                     show
-                    purge 
                     (T.decodeIso8859_1   
                      `lmap`
                      (leftovers_ (firstFailingBytes $ const "badbytes") $  
-                         forkProd (P.evalStateT $ adapt parser1)
-                                  (P.evalStateT $ adapt parser2))) 
+                          forkProd (P.evalStateT $ adapt parser1)
+                                   (P.evalStateT $ adapt parser2)))
+                    purge 
     where
     adapt p = bimap (const "parse error") id <$> P.parse p
 
