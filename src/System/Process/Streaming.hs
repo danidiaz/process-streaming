@@ -13,18 +13,42 @@
 {-# LANGUAGE RankNTypes #-}
 
 module System.Process.Streaming ( 
-        -- * Consuming stdout/stderr
+        -- * Execution
+        execute2,
+        execute3,
+        executeX,
+        ec,
+        createProcess',
+        terminateOnError,
+        -- * Execution with combined stdout/stderr
+        LineDecoder,
+        decodeLines,
         LeftoverPolicy,
         ignoreLeftovers,
         firstFailingBytes,
+        execute2cl,
+        execute3cl,
+        -- * Constructing computations
+        useConsumer,
+        useProducer,
+        surely,
+        safely,
+        fallibly,
+        monoidally,
+        exceptionally,
+        purge,
         leftovers,
         leftovers_,
-        LineDecoder,
-        decodeLines,
-        combinedLines,
-        useConsumer,
-        -- * Feeding stdin
-        useProducer,
+        -- * Concurrency helpers
+        Conc (..),
+        conc,
+        conc3,
+        mapConc,
+        mapConc_,
+        ForkProd (..),
+        forkProd,
+        buffer,
+        combineLines,
         -- * Prisms and lenses
         _cmdspec,
         _ShellCommand,
@@ -37,31 +61,6 @@ module System.Process.Streaming (
         pipe2h,
         handle3,
         handle2,
-        -- * Execution helpers
-        createProcess',
-        terminateOnError,
-        executeX,
-        execute3,
-        execute2,
-        execute3cl,
-        execute2cl,
-        ec,
-        -- * Concurrency helpers
-        Conc (..),
-        conc,
-        conc3,
-        mapConc,
-        mapConc_,
-        ForkProd (..),
-        forkProd,
-        buffer,
-        -- * Other helpers
-        surely,
-        safely,
-        fallibly,
-        monoidally,
-        exceptionally,
-        purge
     ) where
 
 import Data.Maybe
@@ -251,11 +250,11 @@ lines coming from the other handles won't be printed, either!
 termination and draining of leftover data in the handles. 
  -}
 
-combinedLines :: (Show e, Typeable e) 
+combineLines :: (Show e, Typeable e) 
               => [(Producer ByteString IO (), LineDecoder, LeftoverPolicy (Producer ByteString IO ()) e)]
         	  -> (Producer T.Text IO () -> IO (Either e a))
         	  -> IO (Either e a) 
-combinedLines actions producer = do
+combineLines actions producer = do
     (outbox, inbox, seal) <- spawn' Unbounded
     mVar <- newMVar outbox
     r <- runConc $ (,) <$> Conc (finally (mapConc (consume' mVar) actions) 
@@ -435,8 +434,6 @@ terminateOnError pHandle action = do
             return $ Right (exitCode,r)  
 
 {-|
-    > executeX :: Prism' (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) (t, ProcessHandle) -> e -> (IOException -> e) -> CreateProcess -> (t -> IO (Either e a)) -> IO (Either e (ExitCode,a))
-
     Convenience function that launches the external process, does stuff with
 its standard streams, and returns the 'ExitCode' upon completion alongside the
 results. 
@@ -532,7 +529,7 @@ execute3cl :: (Show e, Typeable e)
 execute3cl spec ehandler feeder ld1 lop1 ld2 lop2 combinedConsumer = 
     executeX handle3 spec' ehandler $ \(hin,hout,herr) -> 
         (,)  (conc (feeder (toHandle hin))
-                   (combinedLines [ (fromHandle hout,ld1,lop1)
+                   (combineLines [ (fromHandle hout,ld1,lop1)
                                   , (fromHandle herr,ld2,lop2) 
                                   ]
                                   combinedConsumer 
@@ -557,7 +554,7 @@ execute2cl :: (Show e, Typeable e)
 
 execute2cl spec ehandler ld1 lop1 ld2 lop2 combinedConsumer = do
     executeX handle2 spec' ehandler $ \(hout,herr) -> 
-        (,) (combinedLines [ (fromHandle hout,ld1,lop1)
+        (,) (combineLines [ (fromHandle hout,ld1,lop1)
                            , (fromHandle herr,ld2,lop2)
                            ]
                           combinedConsumer
