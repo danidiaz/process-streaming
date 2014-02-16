@@ -3,9 +3,11 @@
 -- This module contains helper functions and types built on top of
 -- @System.Process@.
 --
--- See the functions 'execute3', 'execute2' and 'executeX' for an entry point.
--- Then read about 'consume' and 'feed' and how to combine the actions
--- concurrently using 'Conc'.
+-- See the functions 'execute2' and 'execute3' for an entry point.
+--
+-- Regular 'Consumer's, 'Parser's from @pipes-parse@ and folds from
+-- "Pipes.Prelude" can be used to consume the output streams of the external
+-- processes.
 --
 -----------------------------------------------------------------------------
 
@@ -119,61 +121,182 @@ consumeMailbox inMailbox consumer = do
             runEffect $ fromInput inMailbox >-> P.drain 
             return $ result
 
-{-|
-    In the Pipes ecosystem, leftovers from decoding operations are often stored
-in the result value of 'Producer's (often as 'Producer's themselves). This is a
-type synonym for a function that examines these results values, and may fail
-depending on what it encounters.
- -}
-type LeftoverPolicy  l e = l -> IO (Either e ())
 
 
-{-|
-    Never fails for any leftover.
- -}
-ignoreLeftovers :: LeftoverPolicy l e 
-ignoreLeftovers =  const (liftIO . return $ Right ()) 
 
-{-|
-    For 'ByteString' leftovers, fails if it encounters any leftover and
-constructs the error out of the first undedcoded bytes. 
- -}
-firstFailingBytes :: (ByteString -> e) -> LeftoverPolicy (Producer ByteString IO ()) e 
-firstFailingBytes errh remainingBytes = do
-    runEitherT . runEffect $ hoist lift remainingBytes >-> (await >>= lift . left . errh)
+writeLines :: MVar (Output T.Text) 
+           -> LeftoverPolicy (Producer ByteString IO ()) e
+           -> FreeT (Producer T.Text IO) IO (Producer ByteString IO ())
+           -> IO (Either e ())
+writeLines mvar errh freeTLines = iterTLines freeTLines >>= errh
+    where
+    iterTLines :: forall x. FreeT (Producer T.Text IO) IO x -> IO x
+    iterTLines = iterT $ \textProducer -> do
+        -- the P.drain bit was difficult to figure out!!!
+        join $ withMVar mvar $ \output -> do
+            runEffect $ (textProducer <* P.yield (singleton '\n')) >-> (toOutput output >> P.drain)
+
+
+
+
 
 {-|
-    'Producers' that represent the results of decoding operations store
-leftovers in their result values. But many functions in this module
-('useConsumer', 'forkProd', and others) work only with 'Producer's that return
-@()@. The 'leftover' function augments these functions with a 'LeftoverPolicy'
-and lets them work with the result of a decoding. 
+    This function takes a 'CreateProcess' record, an exception handler, one
+function to consume the stdout 'Producer' and another function to consume the
+stderr 'Producer'. The consuming functions are executed concurrently.  
 
-    It may happen that the argument function returns successfully but leftovers
-exist, indicating a decoding failure. The first argument of 'leftover' lets you
-store the results in the message error.
+    Data from the external process' output handles is continuosuly read and
+buffered in memory, so the consuming functions can have delays without risking
+causing deadlocks in the external process due to full output buffers. 
+
+    When a consuming function returns successfully, the `Handle` from the
+external process keeps being drained until the process closes it, and /only
+then/ the result is returned. When both consuming functions finish
+successfully, their return values are aggregated. 
+
+    If one of the consuming functions fails with @e@, the whole computation is
+immediately aborted and @e@ is returned.  
+
+    'execute2' tries to avoid launching exceptions, and represents all errors
+as @e@ values.
+
+   If an exception is thrown while this function executes, the external process
+is terminated.
+
+   This function sets the std_out and std_err fields in the 'CreateProcess'
+record to 'CreatePipe'.
  -}
-leftovers :: (Show e, Typeable e)
-         => (e' -> x -> e) 
-         -> LeftoverPolicy l e' 
-         -> (Producer b IO () -> IO (Either e x))
-         -> Producer b IO l -> IO (Either e x)
-leftovers errWrapper policy activity producer = revealError $ do
-    (Output outbox,inbox,seal) <- spawn' Unbounded
-    feeding <- async $ runEffect $ 
-        producer >-> (P.mapM $ atomically . outbox) >-> P.drain
-    sealing <- async $ wait feeding <* atomically seal
-    result <- elideError $ activity $ fromInput inbox 
-    leftovers <- wait sealing >>= policy
-    case leftovers of
-        Left e' -> elideError . return . Left $ errWrapper e' result   
-        Right () -> return result
+execute2 :: (Show e, Typeable e) 
+         => CreateProcess 
+         -> (IOException -> e)
+         -> (Producer ByteString IO () -> IO (Either e a))
+         -> (Producer ByteString IO () -> IO (Either e b))
+         -> IO (Either e (ExitCode,(a,b)))
+execute2 spec ehandler consumout consumerr = do
+    executeX handle2 spec' ehandler $ \(hout,herr) ->
+        (,) (conc (buffer consumout $ fromHandle hout )
+                  (buffer consumerr $ fromHandle herr ))
+            (hClose hout `finally` hClose herr)
+    where 
+    spec' = spec { std_out = CreatePipe
+                 , std_err = CreatePipe
+                 } 
 
-leftovers_ :: (Show e, Typeable e)
-           => LeftoverPolicy l e 
-           -> (Producer b IO () -> IO (Either e x))
-           -> Producer b IO l -> IO (Either e x)
-leftovers_ = leftovers const
+{-|
+    Like `execute2` but with an additional argument consisting in a /feeding/
+function that takes the stdin 'Consumer' and writes to it. 
+
+    The feeding function can return a value.
+
+
+   This function sets the std_in, std_out and std_err fields in the
+'CreateProcess' record to 'CreatePipe'.
+ -}
+execute3 :: (Show e, Typeable e)
+         => CreateProcess 
+         -> (IOException -> e)
+         -> (Consumer ByteString IO () -> IO (Either e a))
+         -> (Producer ByteString IO () -> IO (Either e b))
+         -> (Producer ByteString IO () -> IO (Either e c))
+         -> IO (Either e (ExitCode,(a,b,c)))
+execute3 spec ehandler feeder consumout consumerr = do
+    executeX handle3 spec' ehandler $ \(hin,hout,herr) ->
+        (,) (conc3 (feeder (toHandle hin) `finally` hClose hin)
+                   (buffer consumout $ fromHandle hout)
+                   (buffer consumerr $ fromHandle herr))
+            (hClose hin `finally` hClose hout `finally` hClose herr)
+    where 
+    spec' = spec { std_in = CreatePipe
+                 , std_out = CreatePipe
+                 , std_err = CreatePipe
+                 } 
+
+{-|
+   Generic execution function out of which construct more specific execution
+functions are constructed.
+
+   The first argument is 'Prism' that matches against the tuple returned by
+'createProcess' and removes the 'Maybe's that wrap the 'Handle's. 
+
+   The second argument is a CreateProcess record.
+
+   The third argument is an error callback for exceptions thrown when launching
+the process, or while waiting for it to complete.  
+
+   The fourth argument is a computation that depends of what the prism matches
+(some subset of the handles) and may fail with error @e@. The computation is
+often constructed using the 'Applicative' instance of 'Conc'. Besides the
+computation itself, a cleanup action is also returned.
+
+   If an exception is thrown while this function executes, the external process
+is terminated. 
+ -}
+executeX :: ((forall m. Applicative m => ((t, ProcessHandle) -> m (t, ProcessHandle)) -> (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) -> m (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle))) -> CreateProcess -> (IOException -> e) -> (t -> (IO (Either e a), IO())) -> IO (Either e (ExitCode,a))
+executeX somePrism procSpec exHandler action = mask $ \restore -> runEitherT $ do
+    maybeHtuple <- bimapEitherT exHandler id $ EitherT $ createProcess' procSpec  
+    EitherT $ try' exHandler $ 
+        case getFirst . getConst . somePrism (Const . First . Just) $ maybeHtuple of
+            Nothing -> 
+                throwIO (userError "stdin/stdout/stderr handle unexpectedly null")
+                `finally`
+                let (_,_,_,phandle) = maybeHtuple 
+                in terminateCarefully phandle 
+            Just (htuple,phandle) -> let (a, cleanup) = action htuple in 
+                -- Handles must be closed *after* terminating the process, because a close
+                -- operation may block if the external process has unflushed bytes in the stream.
+                (terminateOnError phandle $ restore a `onException` terminateCarefully phandle) 
+                `finally` 
+                cleanup 
+
+{-|
+    Convenience function that merges 'ExitFailure' values into the @e@ value.
+
+    The @e@ value is created from the return code. 
+
+    Usually composed with the @execute@ functions. 
+  -}
+ec :: (Int -> e) -> IO (Either e (ExitCode,a)) -> IO (Either e a)
+ec f m = conversion <$> m 
+    where
+    conversion r = case r of
+        Left e -> Left e   
+        Right (code,a) -> case code of
+            ExitSuccess	-> Right a
+            ExitFailure i -> Left $ f i 
+
+{-|
+    Exactly like 'createProcess' but uses 'Either' instead of throwing 'IOExceptions'.
+
+    > createProcessE = try . createProcess
+ -}
+createProcess' :: CreateProcess 
+               -> IO (Either IOException (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle))
+createProcess' = try . createProcess
+
+
+terminateCarefully :: ProcessHandle -> IO ()
+terminateCarefully pHandle = do
+    mExitCode <- getProcessExitCode pHandle   
+    case mExitCode of 
+        Nothing -> terminateProcess pHandle  
+        Just _ -> return ()
+
+{-|
+    Terminate the external process is the computation fails, otherwise return
+the 'ExitCode' alongside the result. 
+ -}
+terminateOnError :: ProcessHandle 
+                 -> IO (Either e a)
+                 -> IO (Either e (ExitCode,a))
+terminateOnError pHandle action = do
+    result <- action
+    case result of
+        Left e -> do    
+            terminateCarefully pHandle
+            return $ Left e
+        Right r -> do 
+            exitCode <- waitForProcess pHandle 
+            return $ Right (exitCode,r)  
 
 {-|
   Type synonym for a function that takes a 'ByteString' producer, decodes it
@@ -212,323 +335,77 @@ decodeLines decoder transform =  transFreeT transform
     where 
     viewLines = getConst . T.lines Const
 
-writeLines :: MVar (Output T.Text) 
-           -> LeftoverPolicy (Producer ByteString IO ()) e
-           -> FreeT (Producer T.Text IO) IO (Producer ByteString IO ())
-           -> IO (Either e ())
-writeLines mvar errh freeTLines = iterTLines freeTLines >>= errh
-    where
-    iterTLines :: forall x. FreeT (Producer T.Text IO) IO x -> IO x
-    iterTLines = iterT $ \textProducer -> do
-        -- the P.drain bit was difficult to figure out!!!
-        join $ withMVar mvar $ \output -> do
-            runEffect $ (textProducer <* P.yield (singleton '\n')) >-> (toOutput output >> P.drain)
 
-{-| 
-    This function reads bytes from a lists of file handles, converts them into
-text, splits each text stream into lines (possibly modifying the lines in the
-process) and writes all lines to a single stream, concurrently. The combined
-stream is publishes as a 'Producer', which is them passed to a function that
-does something with it. 
+{-|
+    In the Pipes ecosystem, leftovers from decoding operations are often stored
+in the result value of 'Producer's (often as 'Producer's themselves). This is a
+type synonym for a function that examines these results values, and may fail
+depending on what it encounters.
+ -}
+type LeftoverPolicy  l e = l -> IO (Either e ())
 
-   'consumeCombinedLines' is typically used to consume @stdout@ and @stderr@
-together.
 
-   The first arguent is an error callback. 
+{-|
+    Never fails for any leftover.
+ -}
+ignoreLeftovers :: LeftoverPolicy l e 
+ignoreLeftovers =  const (liftIO . return $ Right ()) 
 
-   A 'LineDecoder' and a 'LeftoverPolicy' must be specified for each handle.
+{-|
+    For 'ByteString' leftovers, fails if it encounters any leftover and
+constructs the error out of the first undedcoded bytes. 
+ -}
+firstFailingBytes :: (ByteString -> e) -> LeftoverPolicy (Producer ByteString IO ()) e 
+firstFailingBytes errh remainingBytes = do
+    runEitherT . runEffect $ hoist lift remainingBytes >-> (await >>= lift . left . errh)
 
-    /Beware!/ 'consumeCombinedLines' avoids situations in which a line emitted
+{-|
+    Like 'execute2', but stdout and stderr are decoded into 'Text', splitted into lines (maybe applying some transformation to each line) and then combined and consumed by the same function.
+
+    For both @stdout@ and @stderr@, a 'LineDecoder' must be supplied, along with a 'LeftoverPolicy'.
+
+    /Beware!/ 'execute2cl ' avoids situations in which a line emitted
 in @stderr@ cuts a long line emitted in @stdout@, see
-<http://unix.stackexchange.com/questions/114182/can-redirecting-stdout-and-stderr-to-the-same-file-mangle-lines
-here> for a description of the problem.  To avoid this, the combined text
+<http://unix.stackexchange.com/questions/114182/can-redirecting-stdout-and-stderr-to-the-same-file-mangle-lines here> for a description of the problem.  To avoid this, the combined text
 stream is locked while writing each individual line. But this means that if the
 external program stops writing to a handle /while in the middle of a line/,
 lines coming from the other handles won't be printed, either!
-
-   'consumeCombinedLines' behaves like 'consume' in respect to early
-termination and draining of leftover data in the handles. 
  -}
+execute2cl :: (Show e, Typeable e) 
+           => CreateProcess 
+           -> (IOException -> e)
+           -> (LineDecoder, LeftoverPolicy (Producer ByteString IO ()) e)
+           -> (LineDecoder, LeftoverPolicy (Producer ByteString IO ()) e)
+           -> (Producer T.Text IO () -> IO (Either e a))
+           -> IO (Either e (ExitCode,a))
 
-combineLines :: (Show e, Typeable e) 
-              => [(Producer ByteString IO (), LineDecoder, LeftoverPolicy (Producer ByteString IO ()) e)]
-        	  -> (Producer T.Text IO () -> IO (Either e a))
-        	  -> IO (Either e a) 
-combineLines actions producer = do
-    (outbox, inbox, seal) <- spawn' Unbounded
-    mVar <- newMVar outbox
-    r <- runConc $ (,) <$> Conc (finally (mapConc (consume' mVar) actions) 
-                                         (atomically seal)
-                                )
-                       <*> Conc (finally (consumeMailbox inbox producer)
-                                         (atomically seal)
-                                )
-    return $ snd <$> r
-    where 
-    consume' mVar (producer,lineDec,leftoverp) = 
-        (buffer $ writeLines mVar leftoverp . lineDec) producer 
-
-{-|
-    Builds a function that will be plugged into 'consume' or 'consumeCombinedLines' out of a 'Producer'.
-
-    You may need to use 'surely' for the types to fit.
-
-   >  useProducer producer consumer = runEffect (producer >-> consumer) 
- -}
-
-useConsumer :: Monad m => Consumer b m () -> Producer b m () -> m ()
-useConsumer consumer producer = runEffect $ producer >-> consumer 
-
-{-|
-    Builds a function that will be plugged into 'feed' out of a 'Producer'.
-
-    You may need to use 'surely' for the types to fit.
-
-   >  useProducer producer consumer = runEffect (producer >-> consumer) 
- -}
-useProducer :: Monad m => Producer b m () -> Consumer b m () -> m ()
-useProducer producer consumer = runEffect (producer >-> consumer) 
-
-{-|
-    > _cmdspec :: Lens' CreateProcess CmdSpec 
--}
-_cmdspec :: forall f. Functor f => (CmdSpec -> f CmdSpec) -> CreateProcess -> f CreateProcess 
-_cmdspec f c = setCmdSpec c <$> f (cmdspec c)
-    where
-    setCmdSpec c cmdspec' = c { cmdspec = cmdspec' } 
-
-{-|
-    > _ShellCommand :: Prism' CmdSpec String
--}
-_ShellCommand :: forall m. Applicative m => (String -> m String) -> CmdSpec -> m CmdSpec 
-_ShellCommand f quad = case impure quad of
-    Left l -> pure l
-    Right r -> fmap ShellCommand (f r)
-    where    
-    impure (ShellCommand str) = Right str
-    impure x = Left x
-
-{-|
-    > _RawCommand :: Prism' CmdSpec (FilePath,[String])
--}
-_RawCommand :: forall m. Applicative m => ((FilePath,[String]) -> m (FilePath,[String])) -> CmdSpec -> m CmdSpec 
-_RawCommand f quad = case impure quad of
-    Left l -> pure l
-    Right r -> fmap justify (f r)
-    where    
-    impure (RawCommand fpath strs) = Right (fpath,strs)
-    impure x = Left x
-    justify (fpath,strs) = RawCommand fpath strs
-
-{-|
-    > _cwd :: Lens' CreateProcess (Maybe FilePath)
--}
-_cwd :: forall f. Functor f => (Maybe FilePath -> f (Maybe FilePath)) -> CreateProcess -> f CreateProcess 
-_cwd f c = setCwd c <$> f (cwd c)
-    where
-    setCwd c cwd' = c { cwd = cwd' } 
-
-{-|
-    > _env :: Lens' CreateProcess (Maybe [(String,String)])
--}
-_env :: forall f. Functor f => (Maybe [(String, String)] -> f (Maybe [(String, String)])) -> CreateProcess -> f CreateProcess 
-_env f c = setEnv c <$> f (env c)
-    where
-    setEnv c env' = c { env = env' } 
-
-{-| 
-    A lens for the @(std_in,std_out,std_err)@ triplet.  
-
-    > stream3 :: Lens' CreateProcess (StdStream,StdStream,StdStream)
--}
-stream3 :: forall f. Functor f => ((StdStream,StdStream,StdStream) -> f (StdStream,StdStream,StdStream)) -> CreateProcess -> f CreateProcess 
-stream3 f c = setStreams c <$> f (getStreams c)
-    where 
-    getStreams c = (std_in c,std_out c, std_err c)
-    setStreams c (s1,s2,s3) = c { std_in  = s1 
-                                , std_out = s2 
-                                , std_err = s3 
-                                } 
-{-|
-    > pipe3 = (CreatePipe,CreatePipe,CreatePipe)
--} 
-pipe3 :: (StdStream,StdStream,StdStream)
-pipe3 = (CreatePipe,CreatePipe,CreatePipe)
-
-{-|
-    Specifies @CreatePipe@ for @std_out@ and @std_err@; @std_in@ is set to 'Inherit'.
-
-    > pipe3 = (Inherit,CreatePipe,CreatePipe)
- -}
-pipe2 :: (StdStream,StdStream,StdStream)
-pipe2 = (Inherit,CreatePipe,CreatePipe)
-
-{-|
-    Specifies @CreatePipe@ for @std_out@ and @std_err@; @std_in@ is taken as 
-parameter. 
- -}
-pipe2h :: Handle -> (StdStream,StdStream,StdStream)
-pipe2h handle = (UseHandle handle,CreatePipe,CreatePipe)
-
-{-|
-    A 'Prism' for the return value of 'createProcess' that removes the 'Maybe's from @stdin@, @stdout@ and @stderr@ or fails to match if any of them is 'Nothing'.
-
-    > handle3 :: Prism' (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) -> ((Handle, Handle, Handle), ProcessHandle)
- -}
-handle3 :: forall m. Applicative m => (((Handle, Handle, Handle), ProcessHandle) -> m ((Handle, Handle, Handle), ProcessHandle)) -> (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) -> m (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle)
-handle3 f quad = case impure quad of
-    Left l -> pure l
-    Right r -> fmap justify (f r)
-    where    
-    impure (Just h1, Just h2, Just h3, phandle) = Right ((h1, h2, h3), phandle) 
-    impure x = Left x
-    justify ((h1, h2, h3), phandle) = (Just h1, Just h2, Just h3, phandle)  
-
-{-|
-    A 'Prism' for the return value of 'createProcess' that removes the 'Maybe's from @stdout@ and @stderr@ or fails to match if any of them is 'Nothing'.
-
-    > handle2 :: Prism' (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) -> ((Handle, Handle), ProcessHandle)
- -}
-handle2 :: forall m. Applicative m => (((Handle, Handle), ProcessHandle) -> m ((Handle, Handle), ProcessHandle)) -> (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) -> m (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle)
-handle2 f quad = case impure quad of
-    Left l -> pure l
-    Right r -> fmap justify (f r)
-    where    
-    impure (Nothing, Just h2, Just h3, phandle) = Right ((h2, h3), phandle) 
-    impure x = Left x
-    justify ((h2, h3), phandle) = (Nothing, Just h2, Just h3, phandle)  
-
-{-|
-    Exactly like 'createProcess' but uses 'Either' instead of throwing 'IOExceptions'.
-
-    > createProcessE = try . createProcess
- -}
-createProcess' :: CreateProcess 
-               -> IO (Either IOException (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle))
-createProcess' = try . createProcess
-
-
-{-|
-    Terminate the external process is the computation fails, otherwise return
-the 'ExitCode' alongside the result. 
- -}
-
-terminateCarefully :: ProcessHandle -> IO ()
-terminateCarefully pHandle = do
-    mExitCode <- getProcessExitCode pHandle   
-    case mExitCode of 
-        Nothing -> terminateProcess pHandle  
-        Just _ -> return ()
-
-terminateOnError :: ProcessHandle 
-                 -> IO (Either e a)
-                 -> IO (Either e (ExitCode,a))
-terminateOnError pHandle action = do
-    result <- action
-    case result of
-        Left e -> do    
-            terminateCarefully pHandle
-            return $ Left e
-        Right r -> do 
-            exitCode <- waitForProcess pHandle 
-            return $ Right (exitCode,r)  
-
-{-|
-    Convenience function that launches the external process, does stuff with
-its standard streams, and returns the 'ExitCode' upon completion alongside the
-results. 
-
-   The first argument is 'Prism' that matches against the tuple returned by
-'createProcess' and removes the 'Maybe's that wrap the 'Handle's. 
-
-   The second argument is the error value for when one of the 'Handles' is unexpectedly 'Nothing'.
-
-   The third argument is an error callback for exceptions thrown when launching
-the process, or while waiting for it to complete.  
-
-   The fourth argument is a computation that depends of what the prism matches
-(some subset of the handles) and may fail with error @e@. The computation is
-often constructed using the 'Applicative' instance of 'Conc' and functions
-like 'consume', 'consumeCombinedLines' and 'feed'.
-
-   If an exception is thrown while this function executes, the
-external process is terminated. 
- -}
-executeX :: ((forall m. Applicative m => ((t, ProcessHandle) -> m (t, ProcessHandle)) -> (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) -> m (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle))) -> CreateProcess -> (IOException -> e) -> (t -> (IO (Either e a), IO())) -> IO (Either e (ExitCode,a))
-executeX somePrism procSpec exHandler action = mask $ \restore -> runEitherT $ do
-    maybeHtuple <- bimapEitherT exHandler id $ EitherT $ createProcess' procSpec  
-    EitherT $ try' exHandler $ 
-        case getFirst . getConst . somePrism (Const . First . Just) $ maybeHtuple of
-            Nothing -> 
-                throwIO (userError "stdin/stdout/stderr handle unexpectedly null")
-                `finally`
-                let (_,_,_,phandle) = maybeHtuple 
-                in terminateCarefully phandle 
-            Just (htuple,phandle) -> let (a, cleanup) = action htuple in 
-                -- Handles must be closed *after* terminating the process, because a close
-                -- operation may block if the external process has unflushed bytes in the stream.
-                (terminateOnError phandle $ restore a `onException` terminateCarefully phandle) 
-                `finally` 
-                cleanup 
-
-{-|
-    When we want to work with @stdin@, @stdout@ and @stderr@.
-
-    > execute3 = executeX handle3
- -}
-execute3 :: (Show e, Typeable e)
-         => CreateProcess 
-         -> (IOException -> e)
-         -> (Consumer ByteString IO () -> IO (Either e a))
-         -> (Producer ByteString IO () -> IO (Either e b))
-         -> (Producer ByteString IO () -> IO (Either e c))
-         -> IO (Either e (ExitCode,(a,b,c)))
-execute3 spec ehandler feeder consumout consumerr = do
-    executeX handle3 spec' ehandler $ \(hin,hout,herr) ->
-        (,) (conc3 (feeder           $ toHandle hin)
-                   (buffer consumout $ fromHandle hout)
-                   (buffer consumerr $ fromHandle herr))
-            (hClose hin `finally` hClose hout `finally` hClose herr)
-    where 
-    spec' = spec { std_in = CreatePipe
-                 , std_out = CreatePipe
-                 , std_err = CreatePipe
-                 } 
-
-{-|
-    When we only want to work with @stdout@ and @stderr@.
-
-    > execute2 = executeX handle2
- -}
-execute2 :: (Show e, Typeable e) 
-         => CreateProcess 
-         -> (IOException -> e)
-         -> (Producer ByteString IO () -> IO (Either e a))
-         -> (Producer ByteString IO () -> IO (Either e b))
-         -> IO (Either e (ExitCode,(a,b)))
-execute2 spec ehandler consumout consumerr = do
-    executeX handle2 spec' ehandler $ \(hout,herr) ->
-        (,) (conc (buffer consumout $ fromHandle hout )
-                  (buffer consumerr $ fromHandle herr ))
+execute2cl spec ehandler (ld1,lop1) (ld2,lop2) combinedConsumer = do
+    executeX handle2 spec' ehandler $ \(hout,herr) -> 
+        (,) (combineLines [ (fromHandle hout,ld1,lop1)
+                           , (fromHandle herr,ld2,lop2)
+                           ]
+                          combinedConsumer
+            )
             (hClose hout `finally` hClose herr)
     where 
     spec' = spec { std_out = CreatePipe
                  , std_err = CreatePipe
                  } 
-
+{-|
+    Like `execute2cl` but with an additional argument consisting in a /feeding/
+function that takes the stdin 'Consumer' and writes to it. 
+ -}
 execute3cl :: (Show e, Typeable e) 
            => CreateProcess 
            -> (IOException -> e)
            -> (Consumer ByteString IO () -> IO (Either e a))
-           -> LineDecoder
-           -> LeftoverPolicy (Producer ByteString IO ()) e
-           -> LineDecoder
-           -> LeftoverPolicy (Producer ByteString IO ()) e
+           -> (LineDecoder, LeftoverPolicy (Producer ByteString IO ()) e)
+           -> (LineDecoder, LeftoverPolicy (Producer ByteString IO ()) e)
            -> (Producer T.Text IO () -> IO (Either e b))
            -> IO (Either e (ExitCode,(a,b)))
-execute3cl spec ehandler feeder ld1 lop1 ld2 lop2 combinedConsumer = 
+execute3cl spec ehandler feeder (ld1,lop1) (ld2,lop2) combinedConsumer = 
     executeX handle3 spec' ehandler $ \(hin,hout,herr) -> 
-        (,)  (conc (feeder (toHandle hin))
+        (,)  (conc (feeder (toHandle hin) `finally` hClose hin)
                    (combineLines [ (fromHandle hout,ld1,lop1)
                                   , (fromHandle herr,ld2,lop2) 
                                   ]
@@ -542,37 +419,113 @@ execute3cl spec ehandler feeder ld1 lop1 ld2 lop2 combinedConsumer =
                  , std_err = CreatePipe
                  } 
 
-execute2cl :: (Show e, Typeable e) 
-           => CreateProcess 
-           -> (IOException -> e)
-           -> LineDecoder
-           -> LeftoverPolicy (Producer ByteString IO ()) e
-           -> LineDecoder
-           -> LeftoverPolicy (Producer ByteString IO ()) e
-           -> (Producer T.Text IO () -> IO (Either e a))
-           -> IO (Either e (ExitCode,a))
 
-execute2cl spec ehandler ld1 lop1 ld2 lop2 combinedConsumer = do
-    executeX handle2 spec' ehandler $ \(hout,herr) -> 
-        (,) (combineLines [ (fromHandle hout,ld1,lop1)
-                           , (fromHandle herr,ld2,lop2)
-                           ]
-                          combinedConsumer
-            )
-            (hClose hout `finally` hClose herr)
-    where 
-    spec' = spec { std_out = CreatePipe
-                 , std_err = CreatePipe
-                 } 
+{-|
+    Useful for constructing @stdout@ and @stderr@-consuming functions that are
+plugged into the @execute@ function. 
 
-ec :: (Int -> e) -> IO (Either e (ExitCode,a)) -> IO (Either e a)
-ec f m = conversion <$> m 
-    where
-    conversion r = case r of
-        Left e -> Left e   
-        Right (code,a) -> case code of
-            ExitSuccess	-> Right a
-            ExitFailure i -> Left $ f i 
+    You may need to use 'surely' for the types to fit.
+ -}
+
+useConsumer :: Monad m => Consumer b m () -> Producer b m () -> m ()
+useConsumer consumer producer = runEffect $ producer >-> consumer 
+
+{-|
+    Useful for constructing @stdin@ feeding functions that are
+plugged into the @execute3@ and @execute3cl@ functions. 
+
+    You may need to use 'surely' for the types to fit.
+ -}
+useProducer :: Monad m => Producer b m () -> Consumer b m () -> m ()
+useProducer producer consumer = runEffect (producer >-> consumer) 
+
+{-| 
+  Useful when we want to plug into an 'execute' function a handler that doesn't
+return an 'Either'. For example folds from "Pipes.Prelude", or functions
+created from simple 'Consumer's with 'useConsumer'. 
+
+  > surely = fmap (fmap Right)
+ -}
+surely :: (Functor f, Functor f') => f (f' a) -> f (f' (Either e a))
+surely = fmap (fmap Right)
+
+{-| 
+  Useful when we want to plug into an 'execute' function a handler that does
+its work in the 'SafeT' transformer.
+ -}
+safely :: (MFunctor t, C.MonadCatch m, MonadIO m) 
+       => (t (SafeT m) l -> (SafeT m) x) 
+       -> (t m l -> m x) 
+safely activity = runSafeT . activity . hoist lift 
+
+fallibly :: (MFunctor t, Monad m, Error e) 
+         => (t (ErrorT e m) l -> (ErrorT e m) x) 
+         -> (t m l -> m (Either e x)) 
+fallibly activity = runErrorT . activity . hoist lift 
+
+{-|
+  Usually, it is better to use a fold form "Pipes.Prelude" instead of this
+function.  But this function has the ability to return the monoidal result
+accumulated up until the error happened. 
+
+ The first argument is a function that combines the initial error with the
+monoidal result to build the definitive error value. If you want to discard the
+results, use 'const' as the first argument.  
+ -}
+monoidally :: (MFunctor t,Monad m,Monoid w, Error e') 
+           => (e' -> w -> e) 
+           -> (t (ErrorT e' (WriterT w m)) l -> ErrorT e' (WriterT w m) ())
+           -> (t m l -> m (Either e w))
+monoidally errh activity proxy = do
+    (r,w) <- runWriterT . runErrorT . activity . hoist (lift.lift) $ proxy
+    return $ case r of
+        Left e' -> Left $ errh e' w    
+        Right () -> Right $ w
+
+exceptionally :: (IOException -> e) 
+              -> (x -> IO (Either e a))
+              -> (x -> IO (Either e a)) 
+exceptionally handler operation x = try' handler (operation x) 
+
+{-|
+    Value to plug into an 'execute' function when we are not interested in
+doing anything with the handle.
+  -}
+purge :: Producer b IO () -> IO (Either e ())
+purge = surely . useConsumer $ P.drain
+
+{-|
+    'Producers' that represent the results of decoding operations store
+leftovers in their result values. But many functions in this module
+('useConsumer', 'forkProd', and others) work only with 'Producer's that return
+@()@. The 'leftover' function augments these functions with a 'LeftoverPolicy'
+and lets them work with the result of a decoding. 
+
+    It may happen that the argument function returns successfully but leftovers
+exist, indicating a decoding failure. The first argument of 'leftover' lets you
+store the results in the message error.
+ -}
+leftovers :: (Show e, Typeable e)
+         => (e' -> x -> e) 
+         -> LeftoverPolicy l e' 
+         -> (Producer b IO () -> IO (Either e x))
+         -> Producer b IO l -> IO (Either e x)
+leftovers errWrapper policy activity producer = revealError $ do
+    (Output outbox,inbox,seal) <- spawn' Unbounded
+    feeding <- async $ runEffect $ 
+        producer >-> (P.mapM $ atomically . outbox) >-> P.drain
+    sealing <- async $ wait feeding <* atomically seal
+    result <- elideError $ activity $ fromInput inbox 
+    leftovers <- wait sealing >>= policy
+    case leftovers of
+        Left e' -> elideError . return . Left $ errWrapper e' result   
+        Right () -> return result
+
+leftovers_ :: (Show e, Typeable e)
+           => LeftoverPolicy l e 
+           -> (Producer b IO () -> IO (Either e x))
+           -> Producer b IO l -> IO (Either e x)
+leftovers_ = leftovers const
 
 data WrappedError e = WrappedError e
     deriving (Show, Typeable)
@@ -683,26 +636,15 @@ forkProd c1 c2 = runForkProd $ (,) <$> ForkProd c1
 
 
 {-|
-    This function consumes the @stdout@ or @stderr@ of an external process,
-with buffering.    
+    Transforms a 'Producer' handler function, adding a layer of buffering.
 
-    It takes as arguments an exception handler, a file 'Handle', and a
-function that does something with a 'Producer'. The 'Producer' publishes the
-data form the 'Handle'.
-  
-    The argument function can incur in delays without risking deadlocks in the
+    The handler function can incur in delays without risking deadlocks in the
 external process caused by full output buffers, because data is constantly read
 and stored in an intermediate buffer until it is consumed. 
 
-    If the argument function returns with vale @a@, 'consume' /keeps draining/
-the 'Handle' until it is closed by the external process, and /only then/
-returns the @a@. If the argument function fails with @e@, 'consume' returns
-immediately. So failing with @e@ is a good way to interrupt a process.  
-
-    Arguments functions pluggable into 'consume' can be constructed with the
-'useConsumer' function. They can also be constructed out of parses from
-"Pipes.Parse" by running 'evalStateT' on the parser. A third way of
-constructing them is using the folds defined in module 'Pipes.Prelude'.
+    If the handler function returns with vale @a@, 'buffer' /keeps draining/
+the 'Producer' until it is finished, and /only then/ returns the @a@. If the
+argument function fails with @e@, 'buffer' returns immediately.
  -}
 buffer :: (Show e, Typeable e) 
        => (Producer ByteString IO () -> IO (Either e a))
@@ -719,56 +661,136 @@ buffer f producer = do
          runEffect $ producer >-> toOutput mailbox
          return $ Right ()
 
-
 {-| 
-  Useful when you want to plug into 'consume' a function that doesn't return an
-  'Either'. For example folds from "Pipes.Prelude", or functions created from simple
-  'Consumer's with 'useConsumer'. 
-
-  > surely = fmap (fmap Right)
+    This auxiliary function is used by 'execute2cl' and 'execute3cl' to merge the output
+streams.
  -}
-surely :: (Functor f, Functor f') => f (f' a) -> f (f' (Either e a))
-surely = fmap (fmap Right)
 
+combineLines :: (Show e, Typeable e) 
+              => [(Producer ByteString IO (), LineDecoder, LeftoverPolicy (Producer ByteString IO ()) e)]
+        	  -> (Producer T.Text IO () -> IO (Either e a))
+        	  -> IO (Either e a) 
+combineLines actions producer = do
+    (outbox, inbox, seal) <- spawn' Unbounded
+    mVar <- newMVar outbox
+    r <- runConc $ (,) <$> Conc (finally (mapConc (consume' mVar) actions) 
+                                         (atomically seal)
+                                )
+                       <*> Conc (finally (consumeMailbox inbox producer)
+                                         (atomically seal)
+                                )
+    return $ snd <$> r
+    where 
+    consume' mVar (producer,lineDec,leftoverp) = 
+        (buffer $ writeLines mVar leftoverp . lineDec) producer 
 
-{-| 
-  Useful when you want to plug into 'consume' a function that does its work in
-the 'SafeT' transformer.
- -}
-safely :: (MFunctor t, C.MonadCatch m, MonadIO m) 
-       => (t (SafeT m) l -> (SafeT m) x) 
-       -> (t m l -> m x) 
-safely activity = runSafeT . activity . hoist lift 
-
-fallibly :: (MFunctor t, Monad m, Error e) 
-         => (t (ErrorT e m) l -> (ErrorT e m) x) 
-         -> (t m l -> m (Either e x)) 
-fallibly activity = runErrorT . activity . hoist lift 
 
 {-|
-  Usually, it is better to use a fold form "Pipes.Prelude" instead of this
-function.  But this function has the ability to return the monoidal result
-accumulated up until the error happened. 
+    > _cmdspec :: Lens' CreateProcess CmdSpec 
+-}
+_cmdspec :: forall f. Functor f => (CmdSpec -> f CmdSpec) -> CreateProcess -> f CreateProcess 
+_cmdspec f c = setCmdSpec c <$> f (cmdspec c)
+    where
+    setCmdSpec c cmdspec' = c { cmdspec = cmdspec' } 
 
- The first argument is a function that combines the initial error with the
-monoidal result to build the definitive error value. If you want to discard the
-results, use 'const' as the first argument.  
+{-|
+    > _ShellCommand :: Prism' CmdSpec String
+-}
+_ShellCommand :: forall m. Applicative m => (String -> m String) -> CmdSpec -> m CmdSpec 
+_ShellCommand f quad = case impure quad of
+    Left l -> pure l
+    Right r -> fmap ShellCommand (f r)
+    where    
+    impure (ShellCommand str) = Right str
+    impure x = Left x
+
+{-|
+    > _RawCommand :: Prism' CmdSpec (FilePath,[String])
+-}
+_RawCommand :: forall m. Applicative m => ((FilePath,[String]) -> m (FilePath,[String])) -> CmdSpec -> m CmdSpec 
+_RawCommand f quad = case impure quad of
+    Left l -> pure l
+    Right r -> fmap justify (f r)
+    where    
+    impure (RawCommand fpath strs) = Right (fpath,strs)
+    impure x = Left x
+    justify (fpath,strs) = RawCommand fpath strs
+
+{-|
+    > _cwd :: Lens' CreateProcess (Maybe FilePath)
+-}
+_cwd :: forall f. Functor f => (Maybe FilePath -> f (Maybe FilePath)) -> CreateProcess -> f CreateProcess 
+_cwd f c = setCwd c <$> f (cwd c)
+    where
+    setCwd c cwd' = c { cwd = cwd' } 
+
+{-|
+    > _env :: Lens' CreateProcess (Maybe [(String,String)])
+-}
+_env :: forall f. Functor f => (Maybe [(String, String)] -> f (Maybe [(String, String)])) -> CreateProcess -> f CreateProcess 
+_env f c = setEnv c <$> f (env c)
+    where
+    setEnv c env' = c { env = env' } 
+
+{-| 
+    A lens for the @(std_in,std_out,std_err)@ triplet.  
+
+    > stream3 :: Lens' CreateProcess (StdStream,StdStream,StdStream)
+-}
+stream3 :: forall f. Functor f => ((StdStream,StdStream,StdStream) -> f (StdStream,StdStream,StdStream)) -> CreateProcess -> f CreateProcess 
+stream3 f c = setStreams c <$> f (getStreams c)
+    where 
+    getStreams c = (std_in c,std_out c, std_err c)
+    setStreams c (s1,s2,s3) = c { std_in  = s1 
+                                , std_out = s2 
+                                , std_err = s3 
+                                } 
+{-|
+    > pipe3 = (CreatePipe,CreatePipe,CreatePipe)
+-} 
+pipe3 :: (StdStream,StdStream,StdStream)
+pipe3 = (CreatePipe,CreatePipe,CreatePipe)
+
+{-|
+    Specifies @CreatePipe@ for @std_out@ and @std_err@; @std_in@ is set to 'Inherit'.
+
+    > pipe3 = (Inherit,CreatePipe,CreatePipe)
  -}
-monoidally :: (MFunctor t,Monad m,Monoid w, Error e') 
-           => (e' -> w -> e) 
-           -> (t (ErrorT e' (WriterT w m)) l -> ErrorT e' (WriterT w m) ())
-           -> (t m l -> m (Either e w))
-monoidally errh activity proxy = do
-    (r,w) <- runWriterT . runErrorT . activity . hoist (lift.lift) $ proxy
-    return $ case r of
-        Left e' -> Left $ errh e' w    
-        Right () -> Right $ w
+pipe2 :: (StdStream,StdStream,StdStream)
+pipe2 = (Inherit,CreatePipe,CreatePipe)
 
-exceptionally :: (IOException -> e) 
-              -> (x -> IO (Either e a))
-              -> (x -> IO (Either e a)) 
-exceptionally handler operation x = try' handler (operation x) 
+{-|
+    Specifies @CreatePipe@ for @std_out@ and @std_err@; @std_in@ is taken as 
+parameter. 
+ -}
+pipe2h :: Handle -> (StdStream,StdStream,StdStream)
+pipe2h handle = (UseHandle handle,CreatePipe,CreatePipe)
 
-purge :: Producer b IO () -> IO (Either e ())
-purge = surely . useConsumer $ P.drain
+{-|
+    A 'Prism' for the return value of 'createProcess' that removes the 'Maybe's from @stdin@, @stdout@ and @stderr@ or fails to match if any of them is 'Nothing'.
+
+    > handle3 :: Prism' (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) -> ((Handle, Handle, Handle), ProcessHandle)
+ -}
+handle3 :: forall m. Applicative m => (((Handle, Handle, Handle), ProcessHandle) -> m ((Handle, Handle, Handle), ProcessHandle)) -> (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) -> m (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle)
+handle3 f quad = case impure quad of
+    Left l -> pure l
+    Right r -> fmap justify (f r)
+    where    
+    impure (Just h1, Just h2, Just h3, phandle) = Right ((h1, h2, h3), phandle) 
+    impure x = Left x
+    justify ((h1, h2, h3), phandle) = (Just h1, Just h2, Just h3, phandle)  
+
+{-|
+    A 'Prism' for the return value of 'createProcess' that removes the 'Maybe's from @stdout@ and @stderr@ or fails to match if any of them is 'Nothing'.
+
+    > handle2 :: Prism' (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) -> ((Handle, Handle), ProcessHandle)
+ -}
+handle2 :: forall m. Applicative m => (((Handle, Handle), ProcessHandle) -> m ((Handle, Handle), ProcessHandle)) -> (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) -> m (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle)
+handle2 f quad = case impure quad of
+    Left l -> pure l
+    Right r -> fmap justify (f r)
+    where    
+    impure (Nothing, Just h2, Just h3, phandle) = Right ((h2, h3), phandle) 
+    impure x = Left x
+    justify ((h2, h3), phandle) = (Nothing, Just h2, Just h3, phandle)  
 

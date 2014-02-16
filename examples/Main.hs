@@ -63,15 +63,13 @@ example3 :: IO (Either String ())
 example3 = ec show $ 
    execute2cl (proc "script1.bat" []) 
               show
-              (decoding id)
-              policy
-              (decoding $ \x -> P.yield "errprefix: " *> x)
-              policy
+              (decodeLines T.decodeIso8859_1 id, policy)
+              (decodeLines T.decodeIso8859_1 annotate, policy)
               (surely . safely . useConsumer $ 
                   S.withFile "combined.txt" WriteMode T.toHandle)
     where
-    decoding = decodeLines T.decodeIso8859_1 
     policy = firstFailingBytes (const "badbytes")
+    annotate x = P.yield "errprefix: " *> x
 
 -- Ignore stderr, run two attoparsec parsers concurrently on stdout.
 parseChars :: Char -> A.Parser [Char] 
