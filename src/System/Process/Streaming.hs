@@ -517,11 +517,13 @@ execute3cl :: (Show e, Typeable e)
            => CreateProcess 
            -> (IOException -> e)
            -> (Consumer ByteString IO () -> IO (Either e a))
-           -> (LineDecoder, LeftoverPolicy (Producer ByteString IO ()) e)
-           -> (LineDecoder, LeftoverPolicy (Producer ByteString IO ()) e)
+           -> LineDecoder
+           -> LeftoverPolicy (Producer ByteString IO ()) e
+           -> LineDecoder
+           -> LeftoverPolicy (Producer ByteString IO ()) e
            -> (Producer T.Text IO () -> IO (Either e b))
            -> IO (Either e (ExitCode,(a,b)))
-execute3cl spec ehandler feeder (ld1,lop1) (ld2,lop2) combinedConsumer = 
+execute3cl spec ehandler feeder ld1 lop1 ld2 lop2 combinedConsumer = 
     executeX handle3 spec' ehandler $ \unmask (hin,hout,herr) -> 
         (unmask $ try' ehandler $ 
             conc (feeder (toHandle hin) 
@@ -544,12 +546,14 @@ execute3cl spec ehandler feeder (ld1,lop1) (ld2,lop2) combinedConsumer =
 execute2cl :: (Show e, Typeable e) 
            => CreateProcess 
            -> (IOException -> e)
-           -> (LineDecoder, LeftoverPolicy (Producer ByteString IO ()) e)
-           -> (LineDecoder, LeftoverPolicy (Producer ByteString IO ()) e)
+           -> LineDecoder
+           -> LeftoverPolicy (Producer ByteString IO ()) e
+           -> LineDecoder
+           -> LeftoverPolicy (Producer ByteString IO ()) e
            -> (Producer T.Text IO () -> IO (Either e a))
            -> IO (Either e (ExitCode,a))
 
-execute2cl spec ehandler (ld1,lop1) (ld2,lop2) combinedConsumer = do
+execute2cl spec ehandler ld1 lop1 ld2 lop2 combinedConsumer = do
     executeX handle2 spec' ehandler $ \unmask (hout,herr) -> 
         (unmask $ try' ehandler $ 
             combinedLines [(fromHandle hout,ld1,lop1),

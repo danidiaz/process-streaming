@@ -60,18 +60,15 @@ example2 = execute2 (proc "asdfasdf.bat" []) show purge purge
 example3 :: IO (Either String (ExitCode,()))
 example3 = execute2cl (proc "script1.bat" []) 
                       show
-                      --(decodeLines T.decodeIso8859_1 id, firstFailingBytes (const "badbytes"))
-                      --(decodeLines T.decodeIso8859_1 id, firstFailingBytes (const "badbytes"))
-                      --deco
-                      --deco
-                      (deco id)
-                      (deco id)
-                      --(deco $ \x -> P.yield "errprefix: " *> x) 
+                      (decoding id)
+                      policy
+                      (decoding $ \x -> P.yield "errprefix: " *> x)
+                      policy
                       (surely . safely . useConsumer $ 
                           S.withFile "combined.txt" WriteMode T.toHandle)
     where
-    --deco f = (decodeLines T.decodeIso8859_1 f, firstFailingBytes (const "badbytes"))
-    deco = \f -> (decodeLines T.decodeIso8859_1 f, firstFailingBytes (const "badbytes"))
+    decoding = decodeLines T.decodeIso8859_1 
+    policy = firstFailingBytes (const "badbytes")
 
 -- Ignore stderr, run two attoparsec parsers concurrently on stdout.
 parseChars :: Char -> A.Parser [Char] 
@@ -97,7 +94,10 @@ example4 = execute2 (proc "script2.bat" [])
 -- Gets a list of lines for both stdout and stderr (breaks streaming)
 example5 ::IO (Either String (ExitCode, ([T.Text], [T.Text])))
 example5 = 
-    execute2 (proc "script1.bat" []) show $ activity activity
+    execute2 (proc "script1.bat" []) 
+             show 
+             activity 
+             activity
     where
     activity = T.decodeIso8859_1   
                `lmap`
