@@ -1,5 +1,6 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Main where
 
@@ -42,32 +43,35 @@ import Data.Attoparsec.Combinator
 import qualified Pipes.Attoparsec as P
 
 -- stdout and stderr to different files, using pipes-safe.
-example1 :: IO (Either String (ExitCode,()))
-example1 = execute2 "nohandle!" show create $ \(hout,herr) -> mapConc_ consume' $
-        [ (hout,"stdout.log"), (herr,"stderr.log") ]
+example1 :: IO (Either String (ExitCode,((),())))
+example1 = execute2 (proc "script1.bat" [])
+                    show  
+                    (consume "stdout.log")
+                    (consume "stderr.log")
     where
-    create = set stream3 pipe2 $ proc "script1.bat" []
-    consume' (h,file) = consume show h . surely . safely . useConsumer $ 
-            S.withFile file WriteMode toHandle
+    consume file = surely . safely . useConsumer $
+                       S.withFile file WriteMode toHandle
 
 -- Error becasue of missing executable.
-example2 :: IO (Either String (ExitCode,()))
-example2 = execute2 "nohandle!" show create $ \_ -> return $ Right ()
-    where
-    create = set stream3 pipe2 $ proc "asdfasdf.bat" []
+example2 :: IO (Either String (ExitCode,((),())))
+example2 = execute2 (proc "asdfasdf.bat" []) show purge purge 
 
 ---- Stream to a file the combined lines of stdout and stderr.
 example3 :: IO (Either String (ExitCode,()))
-example3 = do
-    execute2 "nohandle!" show create $ \(hout,herr) -> consumeCombinedLines show 
-        [ (hout, decodeLines T.decodeIso8859_1 id, policy)
-        , (herr, decodeLines T.decodeIso8859_1 $ \x -> P.yield "errprefix: " *> x , policy) 
-        ]
-        (surely . safely . useConsumer $ S.withFile "combined.txt" WriteMode T.toHandle)
+example3 = execute2cl (proc "script1.bat" []) 
+                      show
+                      --(decodeLines T.decodeIso8859_1 id, firstFailingBytes (const "badbytes"))
+                      --(decodeLines T.decodeIso8859_1 id, firstFailingBytes (const "badbytes"))
+                      --deco
+                      --deco
+                      (deco id)
+                      (deco id)
+                      --(deco $ \x -> P.yield "errprefix: " *> x) 
+                      (surely . safely . useConsumer $ 
+                          S.withFile "combined.txt" WriteMode T.toHandle)
     where
-    create = set stream3 pipe2 $ proc "script1.bat" []
-    policy = firstFailingBytes (const "badbytes")
-
+    --deco f = (decodeLines T.decodeIso8859_1 f, firstFailingBytes (const "badbytes"))
+    deco = \f -> (decodeLines T.decodeIso8859_1 f, firstFailingBytes (const "badbytes"))
 
 -- Ignore stderr, run two attoparsec parsers concurrently on stdout.
 parseChars :: Char -> A.Parser [Char] 
@@ -78,51 +82,39 @@ parser1 = parseChars 'o'
 parser2 = parseChars 'a'
 
 example4 ::IO (Either String (ExitCode, ((), ([Char], [Char]))))
-example4 = 
-    execute2 "nohandle!" show create $ \(hout,herr) ->
-       conc (consume show herr . surely . useConsumer $ P.drain)
-            (consume show hout $
-                T.decodeIso8859_1   
-                `lmap`
-                (leftover' (firstFailingBytes $ const "badbytes") $  
-                    forkProd (P.evalStateT $ adapt parser1)
-                             (P.evalStateT $ adapt parser2)
-                )
-            )
+example4 = execute2 (proc "script2.bat" []) 
+                    show
+                    purge 
+                    (T.decodeIso8859_1   
+                     `lmap`
+                     (leftovers_ (firstFailingBytes $ const "badbytes") $  
+                         forkProd (P.evalStateT $ adapt parser1)
+                                  (P.evalStateT $ adapt parser2))) 
     where
-    create = set stream3 pipe2 $ proc "script2.bat" []
     adapt p = bimap (const "parse error") id <$> P.parse p
 
  
 -- Gets a list of lines for both stdout and stderr (breaks streaming)
 example5 ::IO (Either String (ExitCode, ([T.Text], [T.Text])))
 example5 = 
-    execute2 "nohandle!" show create $ \(hout,herr) ->
-       conc (operation hout)
-            (operation herr)
+    execute2 (proc "script1.bat" []) show $ activity activity
     where
-    create = set stream3 pipe2 $ proc "script1.bat" []
-    operation handle = consume show handle $
-                T.decodeIso8859_1   
-                `lmap`
-                (P.folds (<>) "" id . view T.lines) 
-                `lmap`
-                (leftover' ignoreLeftovers $ surely $ P.toListM)
+    activity = T.decodeIso8859_1   
+               `lmap`
+               (P.folds (<>) "" id . view T.lines) 
+               `lmap`
+               (leftovers_ ignoreLeftovers $ surely $ P.toListM)
 
 -- Checking that trying to terminate an already dead process doesn't cause exceptions.
 example6 ::IO (Either String (ExitCode, ((),())))
-example6 = 
-    execute2 "nohandle!" show create $ \(hout,herr) ->
-       conc (consume show herr . surely . useConsumer $ P.drain)
-            (consume show hout $ \_ -> threadDelay (2*10^6) >> (return $ Left "slow return!"))
-    where
-    create = set stream3 pipe2 $ proc "ruby" ["script4.rb"]
+example6 = execute2 (proc "ruby" ["script4.rb"]) 
+                    show 
+                    purge
+                    (\_ -> threadDelay (2*10^6) >> (return $ Left "slow return!"))
 
 -- Checking that returning a Left exits the process early.
 example7 ::IO (Either String (ExitCode, ((),())))
-example7 = 
-    execute2 "nohandle!" show create $ \(hout,herr) ->
-       conc (consume show herr . surely . useConsumer $ P.drain)
-            (consume show hout $ \_ -> return $ Left "fast return!")
-    where
-    create = set stream3 pipe2 $ proc "ruby" ["script3.rb"]
+example7 = execute2 (proc "ruby" ["script3.rb"]) 
+                    show
+                    purge
+                    (\_ -> return $ Left "fast return!")
