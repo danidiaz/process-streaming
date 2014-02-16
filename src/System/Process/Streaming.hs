@@ -45,6 +45,7 @@ module System.Process.Streaming (
         execute2,
         execute3cl,
         execute2cl,
+        ec,
         -- * Concurrency helpers
         Conc (..),
         conc,
@@ -566,6 +567,15 @@ execute2cl spec ehandler ld1 lop1 ld2 lop2 combinedConsumer = do
     spec' = spec { std_out = CreatePipe
                  , std_err = CreatePipe
                  } 
+
+ec :: (Int -> e) -> IO (Either e (ExitCode,a)) -> IO (Either e a)
+ec f m = conversion <$> m 
+    where
+    conversion r = case r of
+        Left e -> Left e   
+        Right (code,a) -> case code of
+            ExitSuccess	-> Right a
+            ExitFailure i -> Left $ f i 
 
 data WrappedError e = WrappedError e
     deriving (Show, Typeable)
