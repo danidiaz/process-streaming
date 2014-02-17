@@ -471,16 +471,23 @@ leftovers :: (Show e, Typeable e)
          -> LeftoverPolicy l e' 
          -> (Producer b IO () -> IO (Either e x))
          -> Producer b IO l -> IO (Either e x)
-leftovers errWrapper policy activity producer = revealError $ do
+leftovers errWrapper policy activity producer = do
     (Output outbox,inbox,seal) <- spawn' Unbounded
-    feeding <- async $ runEffect $ 
-        producer >-> (P.mapM $ atomically . outbox) >-> P.drain
-    sealing <- async $ wait feeding <* atomically seal
-    result <- elideError $ activity $ fromInput inbox 
-    leftovers <- wait sealing >>= policy
-    case leftovers of
-        Left e' -> elideError . return . Left $ errWrapper e' result   
-        Right () -> return result
+    r <- conc (do feeding <- async $ runEffect $ 
+                      producer >-> (P.mapM $ atomically . outbox) >-> P.drain
+                  Right <$> (wait feeding <* atomically seal)
+              )
+              (activity $ fromInput inbox)
+    -- Possible problem: if the "activity" returns early with a value, the
+    -- decoding keeps going on even if the data is never used. And a decoding
+    -- error might be found.
+    case r of 
+        Left e -> return $ Left e
+        Right (lp,r') -> do  
+            leftovers <- policy lp
+            case leftovers of
+                Left e' -> return $ Left $ errWrapper e' r'
+                Right () -> return $ Right r'
 
 {-|
     > leftovers_ = leftovers const
