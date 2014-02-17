@@ -648,12 +648,8 @@ combineLines :: (Show e, Typeable e)
 combineLines actions producer = do
     (outbox, inbox, seal) <- spawn' Unbounded
     mVar <- newMVar outbox
-    r <- runConc $ (,) <$> Conc (finally (mapConc (consume' mVar) actions) 
-                                         (atomically seal)
-                                )
-                       <*> Conc (finally (consumeMailbox inbox producer)
-                                         (atomically seal)
-                                )
+    r <- conc (mapConc (consume' mVar) actions `finally` atomically seal)
+              (consumeMailbox inbox producer `finally` atomically seal)
     return $ snd <$> r
     where 
     consume' mVar (producer,lineDec,leftoverp) = 
