@@ -577,19 +577,23 @@ instance Functor (ForkProd b e) where
 instance (Show e, Typeable e) => Applicative (ForkProd b e) where
   pure = ForkProd . pure . pure . pure
   ForkProd fs <*> ForkProd as = 
-      ForkProd $ \producer -> revealError $ do
+      ForkProd $ \producer -> do
           (Output outbox1,inbox1,seal1) <- spawn' Unbounded
           (Output outbox2,inbox2,seal2) <- spawn' Unbounded
-          --let (Output combined) = outbox1 <> outbox2
-          feeding <- async $ runEffect $ 
-              producer >-> (P.mapM $ \v -> do atomically $ outbox1 v
-                                              atomically $ outbox2 v)
-                       >-> P.drain
-          sealing <- async $ wait feeding >> atomically seal1 >> atomically seal2
-          r <- uncurry ($) <$> concurrently (elideError $ fs $ fromInput inbox1) 
-                                            (elideError $ as $ fromInput inbox2)
-          wait sealing
-          return r
+          r <- conc (do
+                       feeding <- async $ runEffect $ 
+                           producer >-> (P.mapM $ \v -> do atomically $ outbox1 v
+                                                           atomically $ outbox2 v)
+                                    >-> P.drain
+                       sealing <- async $ do wait feeding 
+                                             atomically seal1
+                                             atomically seal2
+                       return $ Right ()
+                    )
+                    (fmap (uncurry ($)) <$> conc (fs $ fromInput inbox1) 
+                                                 (as $ fromInput inbox2)
+                    )
+          return $ fmap snd r
 
 forkProd :: (Show e, Typeable e) 
          => (Producer b IO () -> IO (Either e x))
