@@ -475,9 +475,9 @@ leftovers errWrapper policy activity producer = do
     (Output outbox,inbox,seal) <- spawn' Unbounded
     r <- conc (do feeding <- async $ runEffect $ 
                       producer >-> (P.mapM $ atomically . outbox) >-> P.drain
-                  Right <$> (wait feeding <* atomically seal)
+                  Right <$> wait feeding `finally` atomically seal
               )
-              (activity $ fromInput inbox)
+              (activity (fromInput inbox) `finally` atomically seal)
     -- Possible problem: if the "activity" returns early with a value, the
     -- decoding keeps going on even if the data is never used. And a decoding
     -- error might be found.
@@ -633,16 +633,13 @@ buffer :: (Show e, Typeable e)
        => (Producer ByteString IO () -> IO (Either e a))
        -> (Producer ByteString IO () -> IO (Either e a))
 buffer f producer = do 
-    (outbox, inbox, seal) <- spawn' Unbounded
-    r <- conc (do a <- async $ handle2Mailbox outbox
-                  wait a `finally` atomically seal)
-              (consumeMailbox inbox f `finally` atomically seal) 
+    -- come to think of it, this function is very similar to leftovers...
+    (Output outbox, inbox, seal) <- spawn' Unbounded
+    r <- conc (do feeding <- async $ runEffect $ 
+                      producer >-> (P.mapM $ atomically . outbox) >-> P.drain
+                  Right <$> wait feeding `finally` atomically seal)
+              (f (fromInput inbox) `finally` atomically seal) 
     return $ snd <$> r
-    where
-    handle2Mailbox :: Output ByteString -> IO (Either e ())
-    handle2Mailbox mailbox = do 
-         runEffect $ producer >-> toOutput mailbox
-         return $ Right ()
 
 {-| 
     This auxiliary function is used by 'execute2cl' and 'execute3cl' to merge the output
