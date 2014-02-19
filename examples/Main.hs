@@ -46,27 +46,28 @@ import qualified Pipes.Attoparsec as P
 -- stdout and stderr to different files, using pipes-safe.
 example1 :: IO (Either String ((),()))
 example1 = ec show $
-    execute2 (proc "script1.bat" [])
-             show  
-             (consume "stdout.log")
-             (consume "stderr.log")
+    execute (proc "script1.bat" []) show $ separate 
+        (consume "stdout.log")
+        (consume "stderr.log")
     where
     consume file = surely . safely . useConsumer $
                        S.withFile file WriteMode toHandle
 
 -- Error becasue of missing executable.
 example2 :: IO (Either String ((),()))
-example2 = ec show $ execute2 (proc "asdfasdf.bat" []) show purge purge 
+example2 = ec show $ 
+    execute (proc "asdfasdf.bat" []) show $ separate 
+        purge 
+        purge 
 
 ---- Stream to a file the combined lines of stdout and stderr.
 example3 :: IO (Either String ())
 example3 = ec show $ 
-   execute2cl (proc "script1.bat" []) 
-              show
-              (decodeLines T.decodeIso8859_1 id, policy)
-              (decodeLines T.decodeIso8859_1 annotate, policy)
-              (surely . safely . useConsumer $ 
-                  S.withFile "combined.txt" WriteMode T.toHandle)
+   execute (proc "script1.bat" []) show $ combineLines
+       (decodeLines T.decodeIso8859_1 id,       policy)
+       (decodeLines T.decodeIso8859_1 annotate, policy)
+       (surely . safely . useConsumer $ 
+           S.withFile "combined.txt" WriteMode T.toHandle)
     where
     policy = firstFailingBytes (const "badbytes")
     annotate x = P.yield "errprefix: " *> x
@@ -81,14 +82,12 @@ parser2 = parseChars 'a'
 
 example4 ::IO (Either String (([Char], [Char]),()))
 example4 = ec show $ 
-    execute2 (proc "script2.bat" []) 
-             show
-             (T.decodeIso8859_1   
-              `lmap`
-              (leftovers_ (firstFailingBytes $ const "badbytes") $  
-                   forkProd (P.evalStateT $ adapt parser1)
-                            (P.evalStateT $ adapt parser2)))
-             purge 
+    execute (proc "script2.bat" []) show $ separate
+        (T.decodeIso8859_1 `lmap`
+            (leftovers_ (firstFailingBytes $ const "badbytes") $  
+                 forkProd (P.evalStateT $ adapt parser1)
+                          (P.evalStateT $ adapt parser2)))
+        purge 
     where
     adapt p = bimap (const "parse error") id <$> P.parse p
 
@@ -96,10 +95,7 @@ example4 = ec show $
 -- Gets a list of lines for both stdout and stderr (breaks streaming)
 example5 ::IO (Either String ([T.Text], [T.Text]))
 example5 = ec show $  
-    execute2 (proc "script1.bat" []) 
-             show 
-             activity 
-             activity
+    execute (proc "script1.bat" []) show $ separate activity activity
     where
     activity = T.decodeIso8859_1   
                `lmap`
@@ -110,18 +106,16 @@ example5 = ec show $
 -- Checking that trying to terminate an already dead process doesn't cause exceptions.
 example6 ::IO (Either String ((),()))
 example6 = ec show $ 
-    execute2 (proc "ruby" ["script4.rb"]) 
-             show 
-             purge
-             (\_ -> threadDelay (2*10^6) >> (return $ Left "slow return!"))
+    execute (proc "ruby" ["script4.rb"]) show $ separate
+            purge
+            (\_ -> threadDelay (2*10^6) >> (return $ Left "slow return!"))
 
 -- Checking that returning a Left exits the process early.
 example7 ::IO (Either String ((),()))
 example7 = ec show $  
-    execute2 (proc "ruby" ["script3.rb"]) 
-             show
-             purge
-             (\_ -> return $ Left "fast return!")
+    execute (proc "ruby" ["script3.rb"]) show $ separate
+            purge
+            (\_ -> return $ Left "fast return!")
 
 
 

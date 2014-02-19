@@ -16,20 +16,20 @@
 
 module System.Process.Streaming ( 
         -- * Execution helpers
-        execute2,
-        execute3,
+        execute,
+        executei,
         executeX,
         ec,
         createProcess',
         terminateOnError,
+        separate,
+        combineLines,
         -- * Execution with combined stdout/stderr
         LineDecoder,
         decodeLines,
         LeftoverPolicy,
         ignoreLeftovers,
         firstFailingBytes,
-        execute2cl,
-        execute3cl,
         -- * Constructing feeding/consuming functions
         useConsumer,
         useProducer,
@@ -50,7 +50,7 @@ module System.Process.Streaming (
         ForkProd (..),
         forkProd,
         buffer,
-        combineLines,
+        combineManyLines,
         -- * Prisms and lenses
         _cmdspec,
         _ShellCommand,
@@ -126,21 +126,52 @@ terminated.
    This function sets the @std_out@ and @std_err@ fields in the 'CreateProcess'
 record to 'CreatePipe'.
  -}
-execute2 :: (Show e, Typeable e) 
-         => CreateProcess 
-         -> (IOException -> e)
-         -> (Producer ByteString IO () -> IO (Either e a))
-         -> (Producer ByteString IO () -> IO (Either e b))
-         -> IO (Either e (ExitCode,(a,b)))
-execute2 spec ehandler consumout consumerr = do
+execute :: (Show e, Typeable e) 
+        => CreateProcess 
+        -> (IOException -> e)
+        -> (Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e a))
+        -> IO (Either e (ExitCode,a))
+execute spec ehandler consumefunc = do
     executeX handle2 spec' ehandler $ \(hout,herr) ->
-        (,) (conc (buffer consumout $ fromHandle hout )
-                  (buffer consumerr $ fromHandle herr ))
+        (,) ((buffer $ fmap (($fromHandle herr) . buffer) consumefunc) (fromHandle hout))
             (hClose hout `finally` hClose herr)
     where 
     spec' = spec { std_out = CreatePipe
                  , std_err = CreatePipe
                  } 
+
+executei :: (Show e, Typeable e) 
+         => CreateProcess 
+         -> (IOException -> e)
+         -> (Consumer ByteString IO ()                              -> IO (Either e a))
+         -> (Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e b))
+         -> IO (Either e (ExitCode,(a,b)))
+executei spec ehandler feeder consumefunc = do
+    executeX handle3 spec' ehandler $ \(hin,hout,herr) ->
+        (,) (conc (feeder (toHandle hin) `finally` hClose hin) 
+                  ((buffer $ fmap (($fromHandle herr) . buffer) consumefunc) (fromHandle hout)))
+            (hClose hin `finally` hClose hout `finally` hClose herr)
+    where 
+    spec' = spec { std_in = CreatePipe
+                 , std_out = CreatePipe
+                 , std_err = CreatePipe
+                 } 
+
+separate :: (Show e, Typeable e)
+         => (Producer ByteString IO () -> IO (Either e a))
+         -> (Producer ByteString IO () -> IO (Either e b))
+         -> Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e (a,b))
+separate outfunc errfunc outprod errprod = 
+    conc (outfunc outprod)
+         (errfunc errprod)
+
+combineLines :: (Show e, Typeable e) 
+             => (LineDecoder, LeftoverPolicy (Producer ByteString IO ()) e)
+             -> (LineDecoder, LeftoverPolicy (Producer ByteString IO ()) e)
+        	 -> (Producer T.Text IO () -> IO (Either e a))
+             -> Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e a)
+combineLines (ld1,lop1) (ld2,lop2) combinedConsumer prod1 prod2 = 
+    combineManyLines [(prod1,ld1,lop1),(prod2,ld2,lop2)] combinedConsumer 
 
 {-|
     Like `execute2` but with an additional argument consisting in a /feeding/
@@ -151,24 +182,6 @@ function that takes the @stdin@ 'Consumer' and writes to it.
    This function sets the @std_in@, @std_out@ and @std_err@ fields in the
 'CreateProcess' record to 'CreatePipe'.
  -}
-execute3 :: (Show e, Typeable e)
-         => CreateProcess 
-         -> (IOException -> e)
-         -> (Consumer ByteString IO () -> IO (Either e a))
-         -> (Producer ByteString IO () -> IO (Either e b))
-         -> (Producer ByteString IO () -> IO (Either e c))
-         -> IO (Either e (ExitCode,(a,b,c)))
-execute3 spec ehandler feeder consumout consumerr = do
-    executeX handle3 spec' ehandler $ \(hin,hout,herr) ->
-        (,) (conc3 (feeder (toHandle hin) `finally` hClose hin)
-                   (buffer consumout $ fromHandle hout)
-                   (buffer consumerr $ fromHandle herr))
-            (hClose hin `finally` hClose hout `finally` hClose herr)
-    where 
-    spec' = spec { std_in = CreatePipe
-                 , std_out = CreatePipe
-                 , std_err = CreatePipe
-                 } 
 
 {-|
    Generic execution function out of which construct more specific execution
@@ -332,54 +345,10 @@ stream is locked while writing each individual line. But this means that if the
 external program stops writing to a handle /while in the middle of a line/,
 lines coming from the other handles won't get printed, either!
  -}
-execute2cl :: (Show e, Typeable e) 
-           => CreateProcess 
-           -> (IOException -> e)
-           -> (LineDecoder, LeftoverPolicy (Producer ByteString IO ()) e)
-           -> (LineDecoder, LeftoverPolicy (Producer ByteString IO ()) e)
-           -> (Producer T.Text IO () -> IO (Either e a))
-           -> IO (Either e (ExitCode,a))
-
-execute2cl spec ehandler (ld1,lop1) (ld2,lop2) combinedConsumer = do
-    executeX handle2 spec' ehandler $ \(hout,herr) -> 
-        (,) (combineLines [ (fromHandle hout,ld1,lop1)
-                           , (fromHandle herr,ld2,lop2)
-                           ]
-                          combinedConsumer
-            )
-            (hClose hout `finally` hClose herr)
-    where 
-    spec' = spec { std_out = CreatePipe
-                 , std_err = CreatePipe
-                 } 
 {-|
     Like `execute2cl` but with an additional argument consisting in a /feeding/
 function that takes the stdin 'Consumer' and writes to it. 
  -}
-execute3cl :: (Show e, Typeable e) 
-           => CreateProcess 
-           -> (IOException -> e)
-           -> (Consumer ByteString IO () -> IO (Either e a))
-           -> (LineDecoder, LeftoverPolicy (Producer ByteString IO ()) e)
-           -> (LineDecoder, LeftoverPolicy (Producer ByteString IO ()) e)
-           -> (Producer T.Text IO () -> IO (Either e b))
-           -> IO (Either e (ExitCode,(a,b)))
-execute3cl spec ehandler feeder (ld1,lop1) (ld2,lop2) combinedConsumer = 
-    executeX handle3 spec' ehandler $ \(hin,hout,herr) -> 
-        (,)  (conc (feeder (toHandle hin) `finally` hClose hin)
-                   (combineLines [ (fromHandle hout,ld1,lop1)
-                                  , (fromHandle herr,ld2,lop2) 
-                                  ]
-                                  combinedConsumer 
-                   )
-             )
-             (hClose hin `finally` hClose hout `finally` hClose herr)
-    where
-    spec' = spec { std_in = CreatePipe
-                 , std_out = CreatePipe
-                 , std_err = CreatePipe
-                 } 
-
 
 {-|
     Useful for constructing @stdout@ and @stderr@-consuming functions that are
@@ -643,11 +612,11 @@ buffer f producer = do
     This auxiliary function is used by 'execute2cl' and 'execute3cl' to merge the output
 streams.
  -}
-combineLines :: (Show e, Typeable e) 
-             => [(Producer ByteString IO (), LineDecoder, LeftoverPolicy (Producer ByteString IO ()) e)]
-        	 -> (Producer T.Text IO () -> IO (Either e a))
-        	 -> IO (Either e a) 
-combineLines actions producer = do
+combineManyLines :: (Show e, Typeable e) 
+                 => [(Producer ByteString IO (), LineDecoder, LeftoverPolicy (Producer ByteString IO ()) e)]
+        	     -> (Producer T.Text IO () -> IO (Either e a))
+        	     -> IO (Either e a) 
+combineManyLines actions producer = do
     (outbox, inbox, seal) <- spawn' Unbounded
     mVar <- newMVar outbox
     r <- conc (mapConc (consume' mVar) actions `finally` atomically seal)
@@ -655,7 +624,7 @@ combineLines actions producer = do
     return $ snd <$> r
     where 
     consume' mVar (producer,lineDec,leftoverp) = 
-        (buffer $ writeLines mVar leftoverp . lineDec) producer 
+        writeLines mVar leftoverp . lineDec $ producer 
     writeLines :: MVar (Output T.Text) 
                -> LeftoverPolicy (Producer ByteString IO ()) e
                -> FreeT (Producer T.Text IO) IO (Producer ByteString IO ())
