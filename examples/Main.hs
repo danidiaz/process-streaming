@@ -45,7 +45,7 @@ import qualified Pipes.Attoparsec as P
 
 -- stdout and stderr to different files, using pipes-safe.
 example1 :: IO (Either String ((),()))
-example1 = ec show $
+example1 = exitCode show $
     execute (proc "script1.bat" []) show $ separate 
         (consume "stdout.log")
         (consume "stderr.log")
@@ -55,14 +55,14 @@ example1 = ec show $
 
 -- Error becasue of missing executable.
 example2 :: IO (Either String ((),()))
-example2 = ec show $ 
+example2 = exitCode show $ 
     execute (proc "asdfasdf.bat" []) show $ separate 
         purge 
         purge 
 
 ---- Stream to a file the combined lines of stdout and stderr.
 example3 :: IO (Either String ())
-example3 = ec show $ 
+example3 = exitCode show $ 
    execute (proc "script1.bat" []) show $ combineLines
        (decodeLines T.decodeIso8859_1 id,       policy)
        (decodeLines T.decodeIso8859_1 annotate, policy)
@@ -81,7 +81,7 @@ parser1 = parseChars 'o'
 parser2 = parseChars 'a'
 
 example4 ::IO (Either String (([Char], [Char]),()))
-example4 = ec show $ 
+example4 = exitCode show $ 
     execute (proc "script2.bat" []) show $ separate
         (T.decodeIso8859_1 `lmap`
             (leftovers_ (firstFailingBytes $ const "badbytes") $  
@@ -94,7 +94,7 @@ example4 = ec show $
  
 -- Gets a list of lines for both stdout and stderr (breaks streaming)
 example5 ::IO (Either String ([T.Text], [T.Text]))
-example5 = ec show $  
+example5 = exitCode show $  
     execute (proc "script1.bat" []) show $ separate activity activity
     where
     activity = T.decodeIso8859_1   
@@ -105,17 +105,15 @@ example5 = ec show $
 
 -- Checking that trying to terminate an already dead process doesn't cause exceptions.
 example6 ::IO (Either String ((),()))
-example6 = ec show $ 
+example6 = exitCode show $ 
     execute (proc "ruby" ["script4.rb"]) show $ separate
             purge
             (\_ -> threadDelay (2*10^6) >> (return $ Left "slow return!"))
 
 -- Checking that returning a Left exits the process early.
 example7 ::IO (Either String ((),()))
-example7 = ec show $  
+example7 = exitCode show $  
     execute (proc "ruby" ["script3.rb"]) show $ separate
             purge
             (\_ -> return $ Left "fast return!")
-
-
 

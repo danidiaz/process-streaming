@@ -17,9 +17,9 @@
 module System.Process.Streaming ( 
         -- * Execution helpers
         execute,
-        executei,
+        execute3,
         executeX,
-        ec,
+        exitCode,
         createProcess',
         terminateOnError,
         separate,
@@ -140,13 +140,13 @@ execute spec ehandler consumefunc = do
                  , std_err = CreatePipe
                  } 
 
-executei :: (Show e, Typeable e) 
+execute3 :: (Show e, Typeable e) 
          => CreateProcess 
          -> (IOException -> e)
          -> (Consumer ByteString IO ()                              -> IO (Either e a))
          -> (Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e b))
          -> IO (Either e (ExitCode,(a,b)))
-executei spec ehandler feeder consumefunc = do
+execute3 spec ehandler feeder consumefunc = do
     executeX handle3 spec' ehandler $ \(hin,hout,herr) ->
         (,) (conc (feeder (toHandle hin) `finally` hClose hin) 
                   ((buffer $ fmap (($fromHandle herr) . buffer) consumefunc) (fromHandle hout)))
@@ -227,8 +227,8 @@ executeX somePrism procSpec exHandler action = mask $ \restore -> runEitherT $ d
 
     Usually composed with the @execute@ functions. 
   -}
-ec :: (Int -> e) -> IO (Either e (ExitCode,a)) -> IO (Either e a)
-ec f m = conversion <$> m 
+exitCode :: Functor c => (Int -> e) -> c (Either e (ExitCode,a)) -> c (Either e a)
+exitCode f m = conversion <$> m 
     where
     conversion r = case r of
         Left e -> Left e   
