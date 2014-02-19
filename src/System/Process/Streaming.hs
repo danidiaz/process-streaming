@@ -467,14 +467,14 @@ exist, indicating a decoding failure. The first argument of 'leftover' lets you
 store the results in the message error.
  -}
 leftovers :: (Show e, Typeable e)
-         => (e' -> x -> e) 
-         -> LeftoverPolicy l e' 
-         -> (Producer b IO () -> IO (Either e x))
-         -> Producer b IO l -> IO (Either e x)
+          => (e' -> x -> e) 
+          -> LeftoverPolicy l e' 
+          -> (Producer b IO () -> IO (Either e x))
+          -> Producer b IO l -> IO (Either e x)
 leftovers errWrapper policy activity producer = do
-    (Output outbox,inbox,seal) <- spawn' Unbounded
+    (outbox,inbox,seal) <- spawn' Unbounded
     r <- conc (do feeding <- async $ runEffect $ 
-                      producer >-> (P.mapM $ atomically . outbox) >-> P.drain
+                      producer >-> (toOutput outbox >> P.drain)
                   Right <$> wait feeding `finally` atomically seal
               )
               (activity (fromInput inbox) `finally` atomically seal)
@@ -585,16 +585,14 @@ instance (Show e, Typeable e) => Applicative (ForkProd b e) where
   pure = ForkProd . pure . pure . pure
   ForkProd fs <*> ForkProd as = 
       ForkProd $ \producer -> do
-          (Output outbox1,inbox1,seal1) <- spawn' Unbounded
-          (Output outbox2,inbox2,seal2) <- spawn' Unbounded
+          (outbox1,inbox1,seal1) <- spawn' Unbounded
+          (outbox2,inbox2,seal2) <- spawn' Unbounded
           r <- conc (do
                        feeding <- async $ runEffect $ 
-                           producer >-> (P.mapM $ \v -> do atomically $ outbox1 v
-                                                           atomically $ outbox2 v)
-                                    >-> P.drain
-                       sealing <- async $ do wait feeding 
-                                             atomically seal1
-                                             atomically seal2
+                           producer >-> P.tee (toOutput outbox1 >> P.drain) 
+                                    >->       (toOutput outbox2 >> P.drain)   
+                       sealing <- async $ wait feeding `finally` atomically seal1 
+                                                       `finally` atomically seal2
                        return $ Right ()
                     )
                     (fmap (uncurry ($)) <$> conc (fs $ fromInput inbox1) 
@@ -634,9 +632,9 @@ buffer :: (Show e, Typeable e)
        -> (Producer ByteString IO () -> IO (Either e a))
 buffer f producer = do 
     -- come to think of it, this function is very similar to leftovers...
-    (Output outbox, inbox, seal) <- spawn' Unbounded
+    (outbox, inbox, seal) <- spawn' Unbounded
     r <- conc (do feeding <- async $ runEffect $ 
-                      producer >-> (P.mapM $ atomically . outbox) >-> P.drain
+                      producer >-> (toOutput outbox >> P.drain)
                   Right <$> wait feeding `finally` atomically seal)
               (f (fromInput inbox) `finally` atomically seal) 
     return $ snd <$> r
@@ -646,9 +644,9 @@ buffer f producer = do
 streams.
  -}
 combineLines :: (Show e, Typeable e) 
-              => [(Producer ByteString IO (), LineDecoder, LeftoverPolicy (Producer ByteString IO ()) e)]
-        	  -> (Producer T.Text IO () -> IO (Either e a))
-        	  -> IO (Either e a) 
+             => [(Producer ByteString IO (), LineDecoder, LeftoverPolicy (Producer ByteString IO ()) e)]
+        	 -> (Producer T.Text IO () -> IO (Either e a))
+        	 -> IO (Either e a) 
 combineLines actions producer = do
     (outbox, inbox, seal) <- spawn' Unbounded
     mVar <- newMVar outbox
