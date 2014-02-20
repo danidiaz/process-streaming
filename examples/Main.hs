@@ -69,7 +69,7 @@ example3 = exitCode show $
        (surely . safely . useConsumer $ 
            S.withFile "combined.txt" WriteMode T.toHandle)
     where
-    policy = firstFailingBytes (const "badbytes")
+    policy = anyBytes_ "badbytes"
     annotate x = P.yield "errprefix: " *> x
 
 -- Ignore stderr, run two attoparsec parsers concurrently on stdout.
@@ -84,7 +84,7 @@ example4 ::IO (Either String (([Char], [Char]),()))
 example4 = exitCode show $ 
     execute (proc "script2.bat" []) show $ separate
         (T.decodeIso8859_1 `lmap`
-            (leftovers_ (firstFailingBytes $ const "badbytes") $  
+            (leftovers_ (anyBytes_ $ "badbytes") $  
                  forkProd (P.evalStateT $ adapt parser1)
                           (P.evalStateT $ adapt parser2)))
         purge 

@@ -20,8 +20,6 @@ module System.Process.Streaming (
         execute3,
         executeX,
         exitCode,
-        createProcess',
-        terminateOnError,
         separate,
         combineLines,
         -- * Execution with combined stdout/stderr
@@ -29,7 +27,8 @@ module System.Process.Streaming (
         decodeLines,
         LeftoverPolicy,
         ignoreLeftovers,
-        firstFailingBytes,
+        anyBytes,
+        anyBytes_,
         -- * Constructing feeding/consuming functions
         useConsumer,
         useProducer,
@@ -44,12 +43,9 @@ module System.Process.Streaming (
         -- * Concurrency helpers
         Conc (..),
         conc,
-        conc3,
         mapConc,
-        mapConc_,
         ForkProd (..),
         forkProd,
-        buffer,
         combineManyLines,
         -- * Prisms and lenses
         _cmdspec,
@@ -327,9 +323,12 @@ ignoreLeftovers =  const (liftIO . return $ Right ())
     For 'ByteString' leftovers, fails if it encounters any leftover and
 constructs the error out of the first undedcoded bytes. 
  -}
-firstFailingBytes :: (ByteString -> e) -> LeftoverPolicy (Producer ByteString IO ()) e 
-firstFailingBytes errh remainingBytes = do
+anyBytes :: (ByteString -> e) -> LeftoverPolicy (Producer ByteString IO ()) e 
+anyBytes errh remainingBytes = do
     runEitherT . runEffect $ hoist lift remainingBytes >-> (await >>= lift . left . errh)
+
+anyBytes_ :: e -> LeftoverPolicy (Producer ByteString IO ()) e 
+anyBytes_ e = anyBytes $ const e
 
 {-|
     Like 'execute2', but @stdout@ and @stderr@ are decoded into 'Text', splitted
@@ -515,15 +514,6 @@ conc :: (Show e, Typeable e)
 conc c1 c2 = runConc $ (,) <$> Conc c1
                            <*> Conc c2
 
-conc3 :: (Show e, Typeable e) 
-      => IO (Either e a)
-      -> IO (Either e b)
-      -> IO (Either e c)
-      -> IO (Either e (a,b,c))
-conc3 c1 c2 c3 = runConc $ (,,) <$> Conc c1
-                                <*> Conc c2
-                                <*> Conc c3
-
 {-| 
       Works similarly to 'Control.Concurrent.Async.mapConcurrently' from the
 @async@ package, but if any of the computations fails with @e@, the others are
@@ -531,9 +521,6 @@ immediately cancelled and the whole computation fails with @e@.
  -}
 mapConc :: (Show e, Typeable e, Traversable t) => (a -> IO (Either e b)) -> t a -> IO (Either e (t b))
 mapConc f = revealError .  mapConcurrently (elideError . f)
-
-mapConc_ :: (Show e, Typeable e, Traversable t) => (a -> IO (Either e b)) -> t a -> IO (Either e ())
-mapConc_ f l = fmap (const ()) <$> mapConc f l
 
 {-| 
     'ForkProd' is a newtype around a function that does something with a
@@ -596,17 +583,22 @@ and stored in an intermediate buffer until it is consumed.
 the 'Producer' until it is finished, and /only then/ returns the @a@. If the
 argument function fails with @e@, 'buffer' returns immediately.
  -}
+--buffer :: (Show e, Typeable e) 
+--       => (Producer ByteString IO () -> IO (Either e a))
+--       -> (Producer ByteString IO () -> IO (Either e a))
+--buffer f producer = do 
+--    -- come to think of it, this function is very similar to leftovers...
+--    (outbox, inbox, seal) <- spawn' Unbounded
+--    r <- conc (do feeding <- async $ runEffect $ 
+--                      producer >-> (toOutput outbox >> P.drain)
+--                  Right <$> wait feeding `finally` atomically seal)
+--              (f (fromInput inbox) `finally` atomically seal) 
+--    return $ snd <$> r
+
 buffer :: (Show e, Typeable e) 
        => (Producer ByteString IO () -> IO (Either e a))
        -> (Producer ByteString IO () -> IO (Either e a))
-buffer f producer = do 
-    -- come to think of it, this function is very similar to leftovers...
-    (outbox, inbox, seal) <- spawn' Unbounded
-    r <- conc (do feeding <- async $ runEffect $ 
-                      producer >-> (toOutput outbox >> P.drain)
-                  Right <$> wait feeding `finally` atomically seal)
-              (f (fromInput inbox) `finally` atomically seal) 
-    return $ snd <$> r
+buffer = leftovers_ ignoreLeftovers
 
 {-| 
     This auxiliary function is used by 'execute2cl' and 'execute3cl' to merge the output
