@@ -356,26 +356,20 @@ combineManyLines :: (Show e, Typeable e)
                  => [(Producer ByteString IO (), LineDecoder, LeftoverPolicy (Producer ByteString IO ()) e)]
         	     -> (Producer T.Text IO () -> IO (Either e a))
         	     -> IO (Either e a) 
-combineManyLines actions producer = do
+combineManyLines actions consumer = do
     (outbox, inbox, seal) <- spawn' Unbounded
     mVar <- newMVar outbox
-    r <- conc (mapConc (consume' mVar) actions `finally` atomically seal)
-              (consumeMailbox inbox producer `finally` atomically seal)
+    r <- conc (mapConc (produce mVar) actions `finally` atomically seal)
+              (consumer (fromInput inbox) `finally` atomically seal)
     return $ snd <$> r
     where 
-    consume' mVar (producer,lineDec,leftoverp) = 
-        writeLines mVar leftoverp . lineDec $ producer 
-    writeLines :: MVar (Output T.Text) 
-               -> LeftoverPolicy (Producer ByteString IO ()) e
-               -> FreeT (Producer T.Text IO) IO (Producer ByteString IO ())
-               -> IO (Either e ())
-    writeLines mvar errh freeTLines = iterTLines freeTLines >>= errh
-        where
-        iterTLines :: forall x. FreeT (Producer T.Text IO) IO x -> IO x
-        iterTLines = iterT $ \textProducer -> do
-            -- the P.drain bit was difficult to figure out!!!
-            join $ withMVar mvar $ \output -> do
-                runEffect $ (textProducer <* P.yield (singleton '\n')) >-> (toOutput output >> P.drain)
+    produce mVar (producer,lineDec,leftoverp) = 
+        (iterTLines mVar . lineDec $ producer) >>= leftoverp
+    iterTLines :: MVar (Output T.Text) -> forall x. FreeT (Producer T.Text IO) IO x -> IO x
+    iterTLines mvar = iterT $ \textProducer -> do
+        -- the P.drain bit was difficult to figure out!!!
+        join $ withMVar mvar $ \output -> do
+            runEffect $ (textProducer <* P.yield (singleton '\n')) >-> (toOutput output >> P.drain)
 
 useConsumer :: Monad m => Consumer b m () -> Producer b m () -> m ()
 useConsumer consumer producer = runEffect $ producer >-> consumer 
@@ -405,12 +399,12 @@ its work in the 'SafeT' transformer.
  -}
 safely :: (MFunctor t, C.MonadCatch m, MonadIO m) 
        => (t (SafeT m) l -> (SafeT m) x) 
-       -> (t m l -> m x) 
+       -> t m l -> m x 
 safely activity = runSafeT . activity . hoist lift 
 
 fallibly :: (MFunctor t, Monad m, Error e) 
          => (t (ErrorT e m) l -> (ErrorT e m) x) 
-         -> (t m l -> m (Either e x)) 
+         -> t m l -> m (Either e x) 
 fallibly activity = runErrorT . activity . hoist lift 
 
 {-|
@@ -425,7 +419,7 @@ results, use 'const' as the first argument.
 monoidally :: (MFunctor t,Monad m,Monoid w, Error e') 
            => (e' -> w -> e) 
            -> (t (ErrorT e' (WriterT w m)) l -> ErrorT e' (WriterT w m) ())
-           -> (t m l -> m (Either e w))
+           -> t m l -> m (Either e w)
 monoidally errh activity proxy = do
     (r,w) <- runWriterT . runErrorT . activity . hoist (lift.lift) $ proxy
     return $ case r of
@@ -501,7 +495,7 @@ argument function fails with @e@, 'buffer' returns immediately.
 
 buffer :: (Show e, Typeable e) 
        => (Producer ByteString IO () -> IO (Either e a))
-       -> (Producer ByteString IO () -> IO (Either e a))
+       -> Producer ByteString IO () -> IO (Either e a)
 buffer = leftovers_ ignoreLeftovers
 
 
@@ -590,8 +584,10 @@ instance (Show e, Typeable e) => Applicative (ForkProd b e) where
                                                        `finally` atomically seal2
                        return $ Right ()
                     )
-                    (fmap (uncurry ($)) <$> conc (fs $ fromInput inbox1) 
-                                                 (as $ fromInput inbox2)
+                    (fmap (uncurry ($)) <$> conc ((fs $ fromInput inbox1) 
+                                                    `finally` atomically seal1) 
+                                                 ((as $ fromInput inbox2) 
+                                                    `finally` atomically seal2) 
                     )
           return $ fmap snd r
 
@@ -601,13 +597,4 @@ forkProd :: (Show e, Typeable e)
          -> (Producer b IO () -> IO (Either e (x,y)))
 forkProd c1 c2 = runForkProd $ (,) <$> ForkProd c1
                                    <*> ForkProd c2
-
-consumeMailbox :: Input b -> (Producer b IO () -> IO (Either e a)) -> IO (Either e a)
-consumeMailbox inMailbox consumer = do
-    result <- consumer $ fromInput inMailbox
-    case result of 
-        Left e -> return $ Left e
-        Right r -> do
-            runEffect $ fromInput inMailbox >-> P.drain 
-            return $ result
 
