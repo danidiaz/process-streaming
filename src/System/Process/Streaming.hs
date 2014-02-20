@@ -21,7 +21,6 @@ module System.Process.Streaming (
         executeX,
         exitCode,
         separate,
-        combineLines,
         -- * Execution with combined stdout/stderr
         LineDecoder,
         decodeLines,
@@ -29,6 +28,8 @@ module System.Process.Streaming (
         ignoreLeftovers,
         anyBytes,
         anyBytes_,
+        combineLines,
+        combineManyLines,
         -- * Constructing feeding/consuming functions
         useConsumer,
         useProducer,
@@ -45,8 +46,7 @@ module System.Process.Streaming (
         conc,
         mapConc,
         ForkProd (..),
-        forkProd,
-        combineManyLines
+        forkProd
     ) where
 
 import Data.Maybe
@@ -82,8 +82,6 @@ import System.Process
 import System.Process.Lens
 import System.Exit
 
-try' :: (IOException -> e) -> IO (Either e a) -> IO (Either e a)
-try' handler action = try action >>= either (return . Left . handler) return
 
 {-|
     This function takes a 'CreateProcess' record, an exception handler, one
@@ -142,31 +140,41 @@ execute3 spec ehandler feeder consumefunc = do
                  , std_err = CreatePipe
                  } 
 
-separate :: (Show e, Typeable e)
-         => (Producer ByteString IO () -> IO (Either e a))
-         -> (Producer ByteString IO () -> IO (Either e b))
-         -> Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e (a,b))
-separate outfunc errfunc outprod errprod = 
-    conc (outfunc outprod)
-         (errfunc errprod)
-
-combineLines :: (Show e, Typeable e) 
-             => (LineDecoder, LeftoverPolicy (Producer ByteString IO ()) e)
-             -> (LineDecoder, LeftoverPolicy (Producer ByteString IO ()) e)
-        	 -> (Producer T.Text IO () -> IO (Either e a))
-             -> Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e a)
-combineLines (ld1,lop1) (ld2,lop2) combinedConsumer prod1 prod2 = 
-    combineManyLines [(prod1,ld1,lop1),(prod2,ld2,lop2)] combinedConsumer 
+try' :: (IOException -> e) -> IO (Either e a) -> IO (Either e a)
+try' handler action = try action >>= either (return . Left . handler) return
 
 {-|
-    Like `execute2` but with an additional argument consisting in a /feeding/
-function that takes the @stdin@ 'Consumer' and writes to it. 
+    Exactly like 'createProcess' but uses 'Either' instead of throwing 'IOExceptions'.
 
-    The feeding function can return a value.
-
-   This function sets the @std_in@, @std_out@ and @std_err@ fields in the
-'CreateProcess' record to 'CreatePipe'.
+    > createProcessE = try . createProcess
  -}
+createProcess' :: CreateProcess 
+               -> IO (Either IOException (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle))
+createProcess' = try . createProcess
+
+terminateCarefully :: ProcessHandle -> IO ()
+terminateCarefully pHandle = do
+    mExitCode <- getProcessExitCode pHandle   
+    case mExitCode of 
+        Nothing -> terminateProcess pHandle  
+        Just _ -> return ()
+
+{-|
+    Terminate the external process is the computation fails, otherwise return
+the 'ExitCode' alongside the result. 
+ -}
+terminateOnError :: ProcessHandle 
+                 -> IO (Either e a)
+                 -> IO (Either e (ExitCode,a))
+terminateOnError pHandle action = do
+    result <- action
+    case result of
+        Left e -> do    
+            terminateCarefully pHandle
+            return $ Left e
+        Right r -> do 
+            exitCode <- waitForProcess pHandle 
+            return $ Right (exitCode,r)  
 
 {-|
    Generic execution function out of which construct more specific execution
@@ -221,39 +229,25 @@ exitCode f m = conversion <$> m
             ExitSuccess	-> Right a
             ExitFailure i -> Left $ f i 
 
-{-|
-    Exactly like 'createProcess' but uses 'Either' instead of throwing 'IOExceptions'.
-
-    > createProcessE = try . createProcess
- -}
-createProcess' :: CreateProcess 
-               -> IO (Either IOException (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle))
-createProcess' = try . createProcess
-
-
-terminateCarefully :: ProcessHandle -> IO ()
-terminateCarefully pHandle = do
-    mExitCode <- getProcessExitCode pHandle   
-    case mExitCode of 
-        Nothing -> terminateProcess pHandle  
-        Just _ -> return ()
+separate :: (Show e, Typeable e)
+         => (Producer ByteString IO () -> IO (Either e a))
+         -> (Producer ByteString IO () -> IO (Either e b))
+         -> Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e (a,b))
+separate outfunc errfunc outprod errprod = 
+    conc (outfunc outprod)
+         (errfunc errprod)
 
 {-|
-    Terminate the external process is the computation fails, otherwise return
-the 'ExitCode' alongside the result. 
+    Like `execute2` but with an additional argument consisting in a /feeding/
+function that takes the @stdin@ 'Consumer' and writes to it. 
+
+    The feeding function can return a value.
+
+   This function sets the @std_in@, @std_out@ and @std_err@ fields in the
+'CreateProcess' record to 'CreatePipe'.
  -}
-terminateOnError :: ProcessHandle 
-                 -> IO (Either e a)
-                 -> IO (Either e (ExitCode,a))
-terminateOnError pHandle action = do
-    result <- action
-    case result of
-        Left e -> do    
-            terminateCarefully pHandle
-            return $ Left e
-        Right r -> do 
-            exitCode <- waitForProcess pHandle 
-            return $ Right (exitCode,r)  
+
+
 
 {-|
   Type synonym for a function that takes a 'ByteString' producer, decodes it
@@ -344,6 +338,44 @@ plugged into the @execute@ function.
 
     You may need to use 'surely' for the types to fit.
  -}
+
+
+combineLines :: (Show e, Typeable e) 
+             => (LineDecoder, LeftoverPolicy (Producer ByteString IO ()) e)
+             -> (LineDecoder, LeftoverPolicy (Producer ByteString IO ()) e)
+        	 -> (Producer T.Text IO () -> IO (Either e a))
+             -> Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e a)
+combineLines (ld1,lop1) (ld2,lop2) combinedConsumer prod1 prod2 = 
+    combineManyLines [(prod1,ld1,lop1),(prod2,ld2,lop2)] combinedConsumer 
+
+{-| 
+    This auxiliary function is used by 'execute2cl' and 'execute3cl' to merge the output
+streams.
+ -}
+combineManyLines :: (Show e, Typeable e) 
+                 => [(Producer ByteString IO (), LineDecoder, LeftoverPolicy (Producer ByteString IO ()) e)]
+        	     -> (Producer T.Text IO () -> IO (Either e a))
+        	     -> IO (Either e a) 
+combineManyLines actions producer = do
+    (outbox, inbox, seal) <- spawn' Unbounded
+    mVar <- newMVar outbox
+    r <- conc (mapConc (consume' mVar) actions `finally` atomically seal)
+              (consumeMailbox inbox producer `finally` atomically seal)
+    return $ snd <$> r
+    where 
+    consume' mVar (producer,lineDec,leftoverp) = 
+        writeLines mVar leftoverp . lineDec $ producer 
+    writeLines :: MVar (Output T.Text) 
+               -> LeftoverPolicy (Producer ByteString IO ()) e
+               -> FreeT (Producer T.Text IO) IO (Producer ByteString IO ())
+               -> IO (Either e ())
+    writeLines mvar errh freeTLines = iterTLines freeTLines >>= errh
+        where
+        iterTLines :: forall x. FreeT (Producer T.Text IO) IO x -> IO x
+        iterTLines = iterT $ \textProducer -> do
+            -- the P.drain bit was difficult to figure out!!!
+            join $ withMVar mvar $ \output -> do
+                runEffect $ (textProducer <* P.yield (singleton '\n')) >-> (toOutput output >> P.drain)
 
 useConsumer :: Monad m => Consumer b m () -> Producer b m () -> m ()
 useConsumer consumer producer = runEffect $ producer >-> consumer 
@@ -455,6 +487,24 @@ leftovers_ :: (Show e, Typeable e)
            -> Producer b IO l -> IO (Either e x)
 leftovers_ = leftovers const
 
+{-|
+    Transforms a 'Producer' handler function, adding a layer of buffering.
+
+    The handler function can incur in delays without risking deadlocks in the
+external process caused by full output buffers, because data is constantly read
+and stored in an intermediate buffer until it is consumed. 
+
+    If the handler function returns with vale @a@, 'buffer' /keeps draining/
+the 'Producer' until it is finished, and /only then/ returns the @a@. If the
+argument function fails with @e@, 'buffer' returns immediately.
+ -}
+
+buffer :: (Show e, Typeable e) 
+       => (Producer ByteString IO () -> IO (Either e a))
+       -> (Producer ByteString IO () -> IO (Either e a))
+buffer = leftovers_ ignoreLeftovers
+
+
 data WrappedError e = WrappedError e
     deriving (Show, Typeable)
 
@@ -560,50 +610,4 @@ consumeMailbox inMailbox consumer = do
         Right r -> do
             runEffect $ fromInput inMailbox >-> P.drain 
             return $ result
-
-{-|
-    Transforms a 'Producer' handler function, adding a layer of buffering.
-
-    The handler function can incur in delays without risking deadlocks in the
-external process caused by full output buffers, because data is constantly read
-and stored in an intermediate buffer until it is consumed. 
-
-    If the handler function returns with vale @a@, 'buffer' /keeps draining/
-the 'Producer' until it is finished, and /only then/ returns the @a@. If the
-argument function fails with @e@, 'buffer' returns immediately.
- -}
-
-buffer :: (Show e, Typeable e) 
-       => (Producer ByteString IO () -> IO (Either e a))
-       -> (Producer ByteString IO () -> IO (Either e a))
-buffer = leftovers_ ignoreLeftovers
-
-{-| 
-    This auxiliary function is used by 'execute2cl' and 'execute3cl' to merge the output
-streams.
- -}
-combineManyLines :: (Show e, Typeable e) 
-                 => [(Producer ByteString IO (), LineDecoder, LeftoverPolicy (Producer ByteString IO ()) e)]
-        	     -> (Producer T.Text IO () -> IO (Either e a))
-        	     -> IO (Either e a) 
-combineManyLines actions producer = do
-    (outbox, inbox, seal) <- spawn' Unbounded
-    mVar <- newMVar outbox
-    r <- conc (mapConc (consume' mVar) actions `finally` atomically seal)
-              (consumeMailbox inbox producer `finally` atomically seal)
-    return $ snd <$> r
-    where 
-    consume' mVar (producer,lineDec,leftoverp) = 
-        writeLines mVar leftoverp . lineDec $ producer 
-    writeLines :: MVar (Output T.Text) 
-               -> LeftoverPolicy (Producer ByteString IO ()) e
-               -> FreeT (Producer T.Text IO) IO (Producer ByteString IO ())
-               -> IO (Either e ())
-    writeLines mvar errh freeTLines = iterTLines freeTLines >>= errh
-        where
-        iterTLines :: forall x. FreeT (Producer T.Text IO) IO x -> IO x
-        iterTLines = iterT $ \textProducer -> do
-            -- the P.drain bit was difficult to figure out!!!
-            join $ withMVar mvar $ \output -> do
-                runEffect $ (textProducer <* P.yield (singleton '\n')) >-> (toOutput output >> P.drain)
 
