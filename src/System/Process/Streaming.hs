@@ -41,8 +41,10 @@ module System.Process.Streaming (
         monoidally,
         exceptionally,
         purge,
-        leftovers,
-        leftovers_,
+--        leftovers,
+--        leftovers_,
+        encoding,
+        encoding_,
         -- * Concurrency helpers
         Conc (..),
         conc,
@@ -468,6 +470,21 @@ leftovers_ :: (Show e, Typeable e)
            -> (Producer b IO () -> IO (Either e x))
            -> Producer b IO l -> IO (Either e x)
 leftovers_ = leftovers const
+
+encoding :: (Show e, Typeable e) 
+         => (Producer b IO r -> Producer t IO (Producer b IO r))
+         -> (e' -> x -> e) 
+         -> LeftoverPolicy (Producer b IO r) e' 
+         -> (Producer t IO () -> IO (Either e x))
+         -> Producer b IO r -> IO (Either e x)
+encoding decoder errWrapper policy activity producer = leftovers errWrapper policy activity $ decoder producer 
+
+encoding_ :: (Show e, Typeable e) 
+          => (Producer b IO r -> Producer t IO (Producer b IO r))
+          -> LeftoverPolicy (Producer b IO r) e 
+          -> (Producer t IO () -> IO (Either e x))
+          -> Producer b IO r -> IO (Either e x)
+encoding_ decoder = encoding decoder const 
 
 buffer :: (Show e, Typeable e) 
        => (Producer ByteString IO () -> IO (Either e a))

@@ -83,10 +83,9 @@ parser2 = parseChars 'a'
 example4 ::IO (Either String (([Char], [Char]),()))
 example4 = exitCode show $ 
     execute (proc "script2.bat" []) show $ separate
-        (T.decodeIso8859_1 `lmap`
-            (leftovers_ (anyBytes_ $ "badbytes") $  
-                 forkProd (P.evalStateT $ adapt parser1)
-                          (P.evalStateT $ adapt parser2)))
+        (encoding_ T.decodeIso8859_1 (anyBytes_ $ "badbytes") $  
+            forkProd (P.evalStateT $ adapt parser1)
+                     (P.evalStateT $ adapt parser2))
         purge 
     where
     adapt p = bimap (const "parse error") id <$> P.parse p
@@ -97,11 +96,8 @@ example5 ::IO (Either String ([T.Text], [T.Text]))
 example5 = exitCode show $  
     execute (proc "script1.bat" []) show $ separate activity activity
     where
-    activity = T.decodeIso8859_1   
-               `lmap`
-               (P.folds (<>) "" id . view T.lines) 
-               `lmap`
-               (leftovers_ ignoreLeftovers $ surely $ P.toListM)
+    activity = encoding_ T.decodeIso8859_1 ignoreLeftovers . surely $ 
+        P.toListM . P.folds (<>) "" id . view T.lines
 
 -- Checking that trying to terminate an already dead process doesn't cause exceptions.
 example6 ::IO (Either String ((),()))
