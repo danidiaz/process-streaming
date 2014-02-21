@@ -69,7 +69,7 @@ example3 = exitCode show $
        (surely . safely . useConsumer $ 
            S.withFile "combined.txt" WriteMode T.toHandle)
     where
-    policy = anyBytes_ "badbytes"
+    policy = failOnLeftovers $ \_ _->"badbytes"
     annotate x = P.yield "errprefix: " *> x
 
 -- Ignore stderr, run two attoparsec parsers concurrently on stdout.
@@ -83,7 +83,7 @@ parser2 = parseChars 'a'
 example4 ::IO (Either String (([Char], [Char]),()))
 example4 = exitCode show $ 
     execute (proc "script2.bat" []) show $ separate
-        (encoding_ T.decodeIso8859_1 (anyBytes_ $ "badbytes") $  
+        (encoding T.decodeIso8859_1 (failOnLeftovers $ \_ _->"badbytes") $  
             forkProd (P.evalStateT $ adapt parser1)
                      (P.evalStateT $ adapt parser2))
         purge 
@@ -96,7 +96,7 @@ example5 ::IO (Either String ([T.Text], [T.Text]))
 example5 = exitCode show $  
     execute (proc "script1.bat" []) show $ separate activity activity
     where
-    activity = encoding_ T.decodeIso8859_1 ignoreLeftovers . surely $ 
+    activity = encoding T.decodeIso8859_1 ignoreLeftovers . surely $ 
         P.toListM . P.folds (<>) "" id . view T.lines
 
 -- Checking that trying to terminate an already dead process doesn't cause exceptions.
