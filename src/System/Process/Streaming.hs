@@ -283,19 +283,19 @@ in the result value of 'Producer's (often as 'Producer's themselves). This is a
 type synonym for a function that examines these results values, and may fail
 depending on what it encounters.
  -}
-type LeftoverPolicy a l e = a -> l -> IO (Either e a)
+type LeftoverPolicy l e a = a -> l -> IO (Either e a)
 
 {-|
     Never fails for any leftover.
  -}
-ignoreLeftovers :: LeftoverPolicy a l e 
+ignoreLeftovers :: LeftoverPolicy l e a
 ignoreLeftovers a _ =  return $ Right a
 
 {-|
     For 'ByteString' leftovers, fails if it encounters any leftover and
 constructs the error out of the first undedcoded bytes. 
  -}
-failOnLeftovers :: (a -> b -> e) -> LeftoverPolicy a (Producer b IO ()) e 
+failOnLeftovers :: (a -> b -> e) -> LeftoverPolicy (Producer b IO ()) e a
 failOnLeftovers errh a remainingBytes = do
     r <- next remainingBytes
     return $ case r of 
@@ -321,8 +321,8 @@ external program stops writing to a handle /while in the middle of a line/,
 lines coming from the other handles won't get printed, either!
  -}
 combineLines :: (Show e, Typeable e) 
-             => (LineDecoder, LeftoverPolicy () (Producer ByteString IO ()) e)
-             -> (LineDecoder, LeftoverPolicy () (Producer ByteString IO ()) e)
+             => (LineDecoder, LeftoverPolicy (Producer ByteString IO ()) e ())
+             -> (LineDecoder, LeftoverPolicy (Producer ByteString IO ()) e ())
         	 -> (Producer T.Text IO () -> IO (Either e a))
              -> Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e a)
 combineLines (ld1,lop1) (ld2,lop2) combinedConsumer prod1 prod2 = 
@@ -333,7 +333,7 @@ combineLines (ld1,lop1) (ld2,lop2) combinedConsumer prod1 prod2 =
   A more general version of 'combineLines'.   
   -}
 combineManyLines :: (Show e, Typeable e) 
-                 => [(Producer ByteString IO (), LineDecoder, LeftoverPolicy () (Producer ByteString IO ()) e)]
+                 => [(Producer ByteString IO (), LineDecoder, LeftoverPolicy (Producer ByteString IO ()) e ())]
         	     -> (Producer T.Text IO () -> IO (Either e a))
         	     -> IO (Either e a) 
 combineManyLines actions consumer = do
@@ -434,9 +434,9 @@ exist, indicating a decoding failure. The first argument of 'leftover' lets you
 store the results in the message error.
  -}
 leftovers :: (Show e, Typeable e)
-          => LeftoverPolicy x l e 
-          -> (Producer b IO () -> IO (Either e x))
-          -> Producer b IO l -> IO (Either e x)
+          => LeftoverPolicy l e a
+          -> (Producer b IO () -> IO (Either e a))
+          -> Producer b IO l -> IO (Either e a)
 leftovers policy activity producer = do
     (outbox,inbox,seal) <- spawn' Unbounded
     r <- conc (do feeding <- async $ runEffect $ 
@@ -451,18 +451,9 @@ leftovers policy activity producer = do
         Left e -> return $ Left e
         Right (lp,r') -> policy r' lp
 
-{-|
-    > leftovers_ = leftovers const
-  -}
---leftovers_ :: (Show e, Typeable e)
---           => LeftoverPolicy l e 
---           -> (Producer b IO () -> IO (Either e x))
---           -> Producer b IO l -> IO (Either e x)
---leftovers_ = leftovers const
-
 encoding :: (Show e, Typeable e) 
          => (Producer b IO r -> Producer t IO (Producer b IO r))
-         -> LeftoverPolicy x (Producer b IO r) e 
+         -> LeftoverPolicy (Producer b IO r) e x
          -> (Producer t IO () -> IO (Either e x))
          -> Producer b IO r -> IO (Either e x)
 encoding decoder policy activity producer = leftovers policy activity $ decoder producer 
