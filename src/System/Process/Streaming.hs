@@ -113,7 +113,7 @@ execute :: (Show e, Typeable e)
         -> IO (Either e (ExitCode,a))
 execute spec ehandler consumefunc = do
     executeX handle2 spec' ehandler $ \(hout,herr) ->
-        (,) ((buffer $ fmap (($fromHandle herr) . buffer) consumefunc) (fromHandle hout))
+        (,) (consumefunc (fromHandle hout) (fromHandle err))
             (hClose hout `finally` hClose herr)
     where 
     spec' = spec { std_out = CreatePipe
@@ -138,7 +138,7 @@ execute3 :: (Show e, Typeable e)
 execute3 spec ehandler feeder consumefunc = do
     executeX handle3 spec' ehandler $ \(hin,hout,herr) ->
         (,) (conc (feeder (toHandle hin) `finally` hClose hin) 
-                  ((buffer $ fmap (($fromHandle herr) . buffer) consumefunc) (fromHandle hout)))
+                  (consumefunc (fromHandle hout) (fromHandle err)))
             (hClose hin `finally` hClose hout `finally` hClose herr)
     where 
     spec' = spec { std_in = CreatePipe
@@ -235,8 +235,8 @@ separate :: (Show e, Typeable e)
          -> (Producer ByteString IO () -> IO (Either e b))
          -> Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e (a,b))
 separate outfunc errfunc outprod errprod = 
-    conc (outfunc outprod)
-         (errfunc errprod)
+    conc (buffer outfunc outprod)
+         (buffer errfunc errprod)
 
 {-|
   Type synonym for a function that takes a 'ByteString' producer, decodes it
@@ -249,7 +249,7 @@ to have a whole line in memory at any given time.
 following the first decoding error. If there are no decoding errors, it will be
 an empty producer.
  -} 
-type LinePolicy e = Producer ByteString IO () -> (FreeT (Producer T.Text IO) IO (Producer ByteString IO ()) -> IO (Producer ByteString IO ())) -> IO (Either e ())
+type LinePolicy e = (FreeT (Producer T.Text IO) IO (Producer ByteString IO ()) -> IO (Producer ByteString IO ())) -> Producer ByteString IO () -> IO (Either e ())
 
 {-|
     Constructs a 'LinePolicy'.
@@ -278,7 +278,7 @@ linePolicy :: (forall r. Producer ByteString IO r -> Producer T.Text IO (Produce
            -> (forall r. Producer T.Text IO r -> Producer T.Text IO r)
            -> (LeftoverPolicy (Producer ByteString IO ()) e ())
            -> LinePolicy e 
-linePolicy decoder transform lopo producer teardown = do
+linePolicy decoder transform lopo teardown producer = do
     teardown freeLines >>= lopo ()
     where
     freeLines =  transFreeT transform 
@@ -336,7 +336,7 @@ combineLines :: (Show e, Typeable e)
         	 -> (Producer T.Text IO () -> IO (Either e a))
              -> Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e a)
 combineLines fun1 fun2 combinedConsumer prod1 prod2 = 
-    combineManyLines [fun1 prod1, fun2 prod2] combinedConsumer 
+    combineManyLines [fmap (($prod1).buffer) fun1, fmap (($prod2).buffer) fun2] combinedConsumer 
     
     --combineManyLines [(prod1,ld1,lop1),(prod2,ld2,lop2)] combinedConsumer 
 
