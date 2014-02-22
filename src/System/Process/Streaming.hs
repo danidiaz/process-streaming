@@ -39,7 +39,7 @@ module System.Process.Streaming (
         fallibly,
         monoidally,
         exceptionally,
-        purge,
+        nop,
         encoding,
         -- * Concurrency helpers
         Conc (..),
@@ -113,7 +113,7 @@ execute :: (Show e, Typeable e)
         -> IO (Either e (ExitCode,a))
 execute spec ehandler consumefunc = do
     executeX handle2 spec' ehandler $ \(hout,herr) ->
-        (,) (consumefunc (fromHandle hout) (fromHandle err))
+        (,) (consumefunc (fromHandle hout) (fromHandle herr))
             (hClose hout `finally` hClose herr)
     where 
     spec' = spec { std_out = CreatePipe
@@ -138,7 +138,7 @@ execute3 :: (Show e, Typeable e)
 execute3 spec ehandler feeder consumefunc = do
     executeX handle3 spec' ehandler $ \(hin,hout,herr) ->
         (,) (conc (feeder (toHandle hin) `finally` hClose hin) 
-                  (consumefunc (fromHandle hout) (fromHandle err)))
+                  (consumefunc (fromHandle hout) (fromHandle herr)))
             (hClose hin `finally` hClose hout `finally` hClose herr)
     where 
     spec' = spec { std_in = CreatePipe
@@ -430,8 +430,8 @@ exceptionally handler operation x = try' handler (operation x)
     Value to plug into a 'separate' or 'combineLines' function when we are not
 interested in doing anything with the handle.
   -}
-purge :: Producer b IO () -> IO (Either e ())
-purge = surely . useConsumer $ P.drain
+nop :: (MFunctor t, Monad m) => t m l -> m (Either e ()) 
+nop = \_ -> return $ Right () 
 
 {-|
     'Producers' that represent the results of decoding operations store

@@ -57,8 +57,8 @@ example1 = exitCode show $
 example2 :: IO (Either String ((),()))
 example2 = exitCode show $ 
     execute (proc "asdfasdf.bat" []) show $ separate 
-        purge 
-        purge 
+        nop
+        nop 
 
 ---- Stream to a file the combined lines of stdout and stderr.
 example3 :: IO (Either String ())
@@ -86,7 +86,7 @@ example4 = exitCode show $
         (encoding T.decodeIso8859_1 (failOnLeftovers $ \_ _->"badbytes") $  
             forkProd (P.evalStateT $ adapt parser1)
                      (P.evalStateT $ adapt parser2))
-        purge 
+        nop 
     where
     adapt p = bimap (const "parse error") id <$> P.parse p
 
@@ -103,13 +103,13 @@ example5 = exitCode show $
 example6 ::IO (Either String ((),()))
 example6 = exitCode show $ 
     execute (proc "ruby" ["script4.rb"]) show $ separate
-            purge
+            nop
             (\_ -> threadDelay (2*10^6) >> (return $ Left "slow return!"))
 
 -- Checking that returning a Left exits the process early.
 example7 ::IO (Either String ((),()))
 example7 = exitCode show $  
     execute (proc "ruby" ["script3.rb"]) show $ separate
-            purge
+            nop
             (\_ -> return $ Left "fast return!")
 
