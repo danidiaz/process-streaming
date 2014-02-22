@@ -40,8 +40,6 @@ module System.Process.Streaming (
         monoidally,
         exceptionally,
         purge,
---        leftovers,
---        leftovers_,
         encoding,
         -- * Concurrency helpers
         Conc (..),
@@ -267,15 +265,27 @@ easy to add using applicative notation:
 
   > decodeLines utf8 (\x -> yield "prefix: " *> x)
  -}
-decodeLines :: (forall r. Producer ByteString IO r -> Producer T.Text IO (Producer ByteString IO r)) 
-            -> (forall r. Producer T.Text IO r -> Producer T.Text IO r) 
-            -> LineDecoder
-decodeLines decoder transform =  transFreeT transform 
-                               . viewLines 
-                               . decoder
-    where 
-    viewLines = getConst . T.lines Const
+--decodeLines :: (forall r. Producer ByteString IO r -> Producer T.Text IO (Producer ByteString IO r)) 
+--            -> (forall r. Producer T.Text IO r -> Producer T.Text IO r) 
+--            -> LineDecoder
+--decodeLines decoder transform =  transFreeT transform 
+--                               . viewLines 
+--                               . decoder
+--    where 
+--    viewLines = getConst . T.lines Const
 
+decodeLines :: (forall r. Producer ByteString IO r -> Producer T.Text IO (Producer ByteString IO r)) 
+            -> (forall r. Producer T.Text IO r -> Producer T.Text IO r)
+            -> (LeftoverPolicy (Producer ByteString IO ()) e ())
+            -> Producer ByteString IO () -> (FreeT (Producer T.Text IO) IO (Producer ByteString IO ()) -> IO (Producer ByteString IO ())) -> IO (Either e ())
+decodeLines decoder transform lopo producer teardown = do
+    teardown freeLines >>= lopo ()
+    where
+    freeLines =  transFreeT transform 
+               . viewLines 
+               . decoder
+               $ producer
+    viewLines = getConst . T.lines Const
 
 {-|
     In the Pipes ecosystem, leftovers from decoding operations are often stored
@@ -321,31 +331,32 @@ external program stops writing to a handle /while in the middle of a line/,
 lines coming from the other handles won't get printed, either!
  -}
 combineLines :: (Show e, Typeable e) 
-             => (LineDecoder, LeftoverPolicy (Producer ByteString IO ()) e ())
-             -> (LineDecoder, LeftoverPolicy (Producer ByteString IO ()) e ())
+             => (Producer ByteString IO () -> (FreeT (Producer T.Text IO) IO (Producer ByteString IO ()) -> IO (Producer ByteString IO ())) -> IO (Either e ()))
+             -> (Producer ByteString IO () -> (FreeT (Producer T.Text IO) IO (Producer ByteString IO ()) -> IO (Producer ByteString IO ())) -> IO (Either e ()))
         	 -> (Producer T.Text IO () -> IO (Either e a))
              -> Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e a)
-combineLines (ld1,lop1) (ld2,lop2) combinedConsumer prod1 prod2 = 
-    combineManyLines [(prod1,ld1,lop1),(prod2,ld2,lop2)] combinedConsumer 
+combineLines fun1 fun2 combinedConsumer prod1 prod2 = 
+    combineManyLines [fun1 prod1, fun2 prod2] combinedConsumer 
+    
+    --combineManyLines [(prod1,ld1,lop1),(prod2,ld2,lop2)] combinedConsumer 
 
 
 {-|
   A more general version of 'combineLines'.   
   -}
 combineManyLines :: (Show e, Typeable e) 
-                 => [(Producer ByteString IO (), LineDecoder, LeftoverPolicy (Producer ByteString IO ()) e ())]
+                 => [((FreeT (Producer T.Text IO) IO (Producer ByteString IO ())) -> IO (Producer ByteString IO ())) -> IO (Either e ())]
         	     -> (Producer T.Text IO () -> IO (Either e a))
         	     -> IO (Either e a) 
 combineManyLines actions consumer = do
     (outbox, inbox, seal) <- spawn' Unbounded
     mVar <- newMVar outbox
-    r <- conc (mapConc (produce mVar) actions `finally` atomically seal)
+    r <- conc (mapConc ($ iterTLines mVar) actions `finally` atomically seal)
               (consumer (fromInput inbox) `finally` atomically seal)
     return $ snd <$> r
     where 
-    produce mVar (producer,lineDec,leftoverp) = 
-        (iterTLines mVar . lineDec $ producer) >>= leftoverp ()
-    iterTLines :: MVar (Output T.Text) -> forall x. FreeT (Producer T.Text IO) IO x -> IO x
+--    produce mVar (producer,lineDec,leftoverp) = 
+ --       (iterTLines mVar . lineDec $ producer) >>= leftoverp ()
     iterTLines mvar = iterT $ \textProducer -> do
         -- the P.drain bit was difficult to figure out!!!
         join $ withMVar mvar $ \output -> do
