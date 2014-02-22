@@ -64,8 +64,8 @@ example2 = exitCode show $
 example3 :: IO (Either String ())
 example3 = exitCode show $ 
    execute (proc "script1.bat" []) show $ combineLines
-       (decodeLines T.decodeIso8859_1 id policy)
-       (decodeLines T.decodeIso8859_1 annotate policy)
+       (linePolicy T.decodeIso8859_1 id policy)
+       (linePolicy T.decodeIso8859_1 annotate policy)
        (surely . safely . useConsumer $ 
            S.withFile "combined.txt" WriteMode T.toHandle)
     where

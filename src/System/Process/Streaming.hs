@@ -24,8 +24,8 @@ module System.Process.Streaming (
         exitCode,
         separate,
         -- * Execution with combined stdout/stderr
-        LineDecoder,
-        decodeLines,
+        LinePolicy,
+        linePolicy,
         LeftoverPolicy,
         ignoreLeftovers,
         failOnLeftovers,
@@ -249,10 +249,10 @@ to have a whole line in memory at any given time.
 following the first decoding error. If there are no decoding errors, it will be
 an empty producer.
  -} 
-type LineDecoder = Producer ByteString IO () -> FreeT (Producer T.Text IO) IO (Producer ByteString IO ())
+type LinePolicy e = Producer ByteString IO () -> (FreeT (Producer T.Text IO) IO (Producer ByteString IO ()) -> IO (Producer ByteString IO ())) -> IO (Either e ())
 
 {-|
-    Constructs a 'LineDecoder'.
+    Constructs a 'LinePolicy'.
 
     The first argument is a function function that decodes 'ByteString' into
 'T.Text'. See the section /Decoding Functions/ in the documentation for the
@@ -263,22 +263,22 @@ line is represented as a 'Producer' to avoid having to keep it wholly in
 memory. If you want the lines unmodified, just pass @id@. Line prefixes are
 easy to add using applicative notation:
 
-  > decodeLines utf8 (\x -> yield "prefix: " *> x)
+  > linePolicy utf8 (\x -> yield "prefix: " *> x)
  -}
---decodeLines :: (forall r. Producer ByteString IO r -> Producer T.Text IO (Producer ByteString IO r)) 
+--linePolicy :: (forall r. Producer ByteString IO r -> Producer T.Text IO (Producer ByteString IO r)) 
 --            -> (forall r. Producer T.Text IO r -> Producer T.Text IO r) 
---            -> LineDecoder
---decodeLines decoder transform =  transFreeT transform 
+--            -> LinePolicy
+--linePolicy decoder transform =  transFreeT transform 
 --                               . viewLines 
 --                               . decoder
 --    where 
 --    viewLines = getConst . T.lines Const
 
-decodeLines :: (forall r. Producer ByteString IO r -> Producer T.Text IO (Producer ByteString IO r)) 
-            -> (forall r. Producer T.Text IO r -> Producer T.Text IO r)
-            -> (LeftoverPolicy (Producer ByteString IO ()) e ())
-            -> Producer ByteString IO () -> (FreeT (Producer T.Text IO) IO (Producer ByteString IO ()) -> IO (Producer ByteString IO ())) -> IO (Either e ())
-decodeLines decoder transform lopo producer teardown = do
+linePolicy :: (forall r. Producer ByteString IO r -> Producer T.Text IO (Producer ByteString IO r)) 
+           -> (forall r. Producer T.Text IO r -> Producer T.Text IO r)
+           -> (LeftoverPolicy (Producer ByteString IO ()) e ())
+           -> LinePolicy e 
+linePolicy decoder transform lopo producer teardown = do
     teardown freeLines >>= lopo ()
     where
     freeLines =  transFreeT transform 
@@ -317,7 +317,7 @@ failOnLeftovers errh a remainingBytes = do
 applying some transformation to each line) and then combined and consumed by
 the function passed as argument.
 
-    For both @stdout@ and @stderr@, a 'LineDecoder' must be supplied, along
+    For both @stdout@ and @stderr@, a 'LinePolicy' must be supplied, along
 with a 'LeftoverPolicy'.
 
     'combineLines' returns a function that can be plugged into 'execute' or
@@ -331,8 +331,8 @@ external program stops writing to a handle /while in the middle of a line/,
 lines coming from the other handles won't get printed, either!
  -}
 combineLines :: (Show e, Typeable e) 
-             => (Producer ByteString IO () -> (FreeT (Producer T.Text IO) IO (Producer ByteString IO ()) -> IO (Producer ByteString IO ())) -> IO (Either e ()))
-             -> (Producer ByteString IO () -> (FreeT (Producer T.Text IO) IO (Producer ByteString IO ()) -> IO (Producer ByteString IO ())) -> IO (Either e ()))
+             => LinePolicy e 
+             -> LinePolicy e 
         	 -> (Producer T.Text IO () -> IO (Either e a))
              -> Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e a)
 combineLines fun1 fun2 combinedConsumer prod1 prod2 = 
