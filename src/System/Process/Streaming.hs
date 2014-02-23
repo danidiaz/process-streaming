@@ -124,7 +124,10 @@ function that takes the @stdin@ 'Consumer' and writes to it.
     Like the consuming function, the feeding function can return a value and
 can also fail, terminating the process.
 
-   This function sets the @std_in@, @std_out@ and @std_err@ fields in the
+    The feeding function is executed /concurrently/ with the consuming
+functions, not /before/ them.
+
+   'execute3' sets the @std_in@, @std_out@ and @std_err@ fields in the
 'CreateProcess' record to 'CreatePipe'.
  -}
 execute3 :: (Show e, Typeable e) 

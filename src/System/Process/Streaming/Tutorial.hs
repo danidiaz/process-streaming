@@ -22,10 +22,12 @@ module System.Process.Streaming.Tutorial (
     
     -- * Aborting an execution
     -- $fastExit
-    --
-    --
+
     -- * Feeding stdin, collecting stdout
     -- $cat
+
+    -- * Ghci
+    -- $ghci
     ) where
 
 {- $introduction 
@@ -184,10 +186,10 @@ seconds.
 {- $cat
 
 In this example we invoke the @cat@ command, feeding its input stream with a
-string.
+'ByteString'.
 
 We decode stdout to Text and collect the whole output using a fold from
-'Pipes.Prelude'.
+'Pipes.Prelude'. 
 
 Plugging folds from "Pipes.Prelude" into 'separate' or 'combineLines' is easy
 because the folds return functions that consumes 'Producer's. The folds form
@@ -196,14 +198,35 @@ the @foldl@ package could also be useful.
 Notice that @stdin@ is written concurrently with the reading of @stdout@. It is
 not the case that @sdtin@ is written first and then @stdout@ is read. 
 
-example6 = exitCode show $  
-    execute3 (shell "cat") show  
-        (surely . useProducer $ yield "aaaaaa\naaaaa")
-        (separate 
-            (encoding T.decodeIso8859_1 ignoreLeftovers . surely $ foldy)  
-            nop
-        )
-    where foldy :: Producer T.Text IO () -> IO L.Text 
-          foldy = P.fold (<>) mempty L.toLazyText . (>->P.map L.fromText)
+> example6 = exitCode show $  
+>     execute3 (shell "cat") show  
+>         (surely . useProducer $ yield "aaaaaa\naaaaa")
+>         (separate 
+>             (encoding T.decodeIso8859_1 ignoreLeftovers . surely $ foldy)  
+>             nop
+>         )
+>     where foldy :: Producer T.Text IO () -> IO L.Text 
+>           foldy = P.fold (<>) mempty L.toLazyText . (>->P.map L.fromText)
+
+Returns:
+
+>>> Right ((),("aaaaaa\naaaaa",()))
+
+-}
+
+{- $gchi
+
+Sometimes it's useful to launch external programs during a ghci session, like
+this:
+
+>>> a <- async $ execute (proc "xeyes" []) show $ separate nop nop
+
+Cancelling the async causes the termination of the external program:
+
+>>> cancel a
+
+Waiting for the async returns the result:
+
+>>> wait a
 
 -}
