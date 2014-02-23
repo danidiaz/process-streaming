@@ -7,6 +7,8 @@
 module System.Process.Streaming.Tutorial ( 
     -- * Introduction
     -- $introduction
+    -- * stdin and stderr to different files
+    -- $stdinstderr
     ) where
 
 {- $introduction 
@@ -39,3 +41,14 @@ Some preliminary imports:
  -}
 
 
+{- $stdinstderr
+> example1 :: IO (Either String ((),()))
+> example1 = exitCode show $
+>     execute program show $ separate 
+>         (consume "stdout.log")
+>         (consume "stderr.log")
+>     where
+>     consume file = surely . safely . useConsumer $
+>         S.withFile file WriteMode toHandle
+>     program = shell "{ echo ooo ; echo eee 1>&2 ; }"
+-}
