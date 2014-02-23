@@ -16,6 +16,9 @@ module System.Process.Streaming.Tutorial (
 
     -- * Combining stdout and stderr
     -- $combinelines
+
+    -- * Running parsers in parallel 
+    -- $forkProd
     ) where
 
 {- $introduction 
@@ -106,3 +109,43 @@ We also add a prefix to the lines coming from @stderr@.
 >     program = shell "{ echo ooo ; echo eee 1>&2 ; echo ppp ;  echo ffff 1>&2 ;}"
 
 -}
+
+
+{- $forkProd
+
+Plugging parsers from @pipes-parse@ into 'separate' or 'combineLines' is easy
+because running 'evalStateT' on a parser returns a function that consumes a
+'Producer'.
+
+In this example we define two Attoparsec Text parsers and we convert them to
+Pipes parsers using function 'parse' from package @pipes-attparsec@. 
+
+Stdout is decoded to Text and parsed by the two parsers in parallel using the
+auxiliary 'forkProd' function. The results are aggregated in a tuple.
+
+Stderr is ignored using the 'nop' function.
+
+> parseChars :: Char -> A.Parser [Char] 
+> parseChars c = fmap mconcat $ 
+>     many (A.notChar c) *> A.many1 (some (A.char c) <* many (A.notChar c))
+> 
+> parser1 = parseChars 'o'
+> parser2 = parseChars 'a'
+> 
+> example4 ::IO (Either String (([Char], [Char]),()))
+> example4 = exitCode show $ 
+>     execute program show $ separate
+>         (encoding T.decodeIso8859_1 (failOnLeftovers $ \_ _->"badbytes") $  
+>             forkProd (P.evalStateT $ adapt parser1)
+>                      (P.evalStateT $ adapt parser2))
+>         nop 
+>     where
+>     adapt p = bimap (const "parse error") id <$> P.parse p
+>     program = shell "{ echo ooaaoo ; echo aaooaoa; }"
+
+Returns:
+
+>>> Right (("ooooooo","aaaaaa"),())
+
+-}
+
