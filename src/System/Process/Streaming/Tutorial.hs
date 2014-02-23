@@ -7,8 +7,12 @@
 module System.Process.Streaming.Tutorial ( 
     -- * Introduction
     -- $introduction
+  
     -- * stdin and stderr to different files
     -- $stdinstderr
+    
+    -- * Missing executable
+    -- $missingexec
     ) where
 
 {- $introduction 
@@ -38,10 +42,15 @@ Some preliminary imports:
 > import System.IO
 > import System.Process
 > import System.Process.Streaming
- -}
+
+-}
 
 
 {- $stdinstderr
+ 
+Using 'separate' to consume @stdout@ and @stderr@ concurrently, and functions
+from @pipes-safe@ to write the files.
+
 > example1 :: IO (Either String ((),()))
 > example1 = exitCode show $
 >     execute program show $ separate 
@@ -52,3 +61,22 @@ Some preliminary imports:
 >         S.withFile file WriteMode toHandle
 >     program = shell "{ echo ooo ; echo eee 1>&2 ; }"
 -}
+
+
+{- $missingexec
+ 
+Missing executables and other 'IOException's are converted to an error type @e@
+and returned in the 'Left' of an 'Either':
+
+> example2 :: IO (Either String ((),()))
+> example2 = exitCode show $ 
+>     execute (proc "fsdfsdf" []) show $ separate 
+>         nop
+>         nop 
+
+Returns:
+
+>>> Left "fsdfsdf: createProcess: runInteractiveProcess: exec: does not exist (No such file or directory)"
+
+-}
+
