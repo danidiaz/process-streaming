@@ -17,6 +17,7 @@ Library
     hs-source-dirs: src
     exposed-modules: 
         System.Process.Streaming
+        System.Process.Streaming.Tutorial
         System.Process.Lens
     other-modules: 
     build-depends:         

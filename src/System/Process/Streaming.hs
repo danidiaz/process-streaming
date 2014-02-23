@@ -234,7 +234,7 @@ See the @pipes-group@ package for utilities on how to manipulate these
 FreeT-based lists. They allow you to handle individual lines without forcing
 you to have a whole line in memory at any given time.
 
-  See also 'linePolicy' and 'combinedLines'.
+  See also 'linePolicy' and 'combineLines'.
 -} 
 type LinePolicy e = (FreeT (Producer T.Text IO) IO (Producer ByteString IO ()) -> IO (Producer ByteString IO ())) -> Producer ByteString IO () -> IO (Either e ())
 
