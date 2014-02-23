@@ -13,6 +13,9 @@ module System.Process.Streaming.Tutorial (
     
     -- * Missing executable
     -- $missingexec
+
+    -- * Combining stdout and stderr
+    -- $combinelines
     ) where
 
 {- $introduction 
@@ -80,3 +83,26 @@ Returns:
 
 -}
 
+
+{- $combinelines
+ 
+Here we use 'combineLines' to process 'stdout' and 'stderr' together.
+
+Notice that they are consumed together as 'Text'. We have to specify a decoding
+function for each stream, and a 'LeftoverPolicy' as well.
+
+We also add a prefix to the lines coming from @stderr@.
+
+> example3 :: IO (Either String ())
+> example3 = exitCode show $ 
+>    execute program show $ combineLines
+>        (linePolicy T.decodeIso8859_1 id policy)
+>        (linePolicy T.decodeIso8859_1 annotate policy)
+>        (surely . safely . useConsumer $ 
+>            S.withFile "combined.txt" WriteMode T.toHandle)
+>     where
+>     policy = failOnLeftovers $ \_ _->"badbytes"
+>     annotate x = P.yield "errprefix: " *> x
+>     program = shell "{ echo ooo ; echo eee 1>&2 ; echo ppp ;  echo ffff 1>&2 ;}"
+
+-}
