@@ -225,10 +225,10 @@ separate outfunc errfunc outprod errprod =
          (buffer_ errfunc errprod)
 
 {-|
-  Type synonym for a function that takes as first parameter a way to tear down
-a FreeT-based list of lines, a 'ByteString' source as second parameter, and
-returns a (possibly failing) computation. Presumably, the bytes are decoded
-into text, the text split into lines, and the tear down function applied. 
+  Type synonym for a function that takes a method to "tear down" a FreeT-based
+list of lines as first parameter, a 'ByteString' source as second parameter,
+and returns a (possibly failing) computation. Presumably, the bytes are decoded
+into text, the text split into lines, and the "tear down" function applied. 
 
 See the @pipes-group@ package for utilities on how to manipulate these
 FreeT-based lists. They allow you to handle individual lines without forcing
@@ -272,9 +272,8 @@ linePolicy decoder transform lopo teardown producer = do
 {-|
     In the Pipes ecosystem, leftovers from decoding operations are often stored
 in the result value of 'Producer's (often as 'Producer's themselves). This is a
-type synonym for a function that receives as parameters some arbitray value and
-the leftovers of a decoding process, and may modify the value or fail
-outright, depending of what the leftovers are.
+type synonym for a function that receives a value @a@ and some leftovers @l@,
+and may modify the value or fail outright, depending of what the leftovers are.
  -}
 type LeftoverPolicy l e a = a -> l -> IO (Either e a)
 
@@ -285,15 +284,16 @@ ignoreLeftovers :: LeftoverPolicy l e a
 ignoreLeftovers a _ =  return $ Right a
 
 {-|
-    Fails if it encounters any leftover and constructs the error out of the
+    Fails if it encounters any leftover, and constructs the error out of the
 first undedcoded data. 
 
     For simple error handling, just ignore the @a@ and the undecoded data:
 
     > (failOnLeftvoers (\_ _->"badbytes")) :: LeftoverPolicy (Producer b IO ()) String a
 
-    For more complex error handling, you may want to include the result @a@
-until the error and/or the first undecoded values @b@ in your error datatype.
+    For more detailed error handling, you may want to include the result until
+the error @a@ and/or the first undecoded values @b@ in your custom error
+datatype.
  -}
 failOnLeftovers :: (a -> b -> e) -> LeftoverPolicy (Producer b IO ()) e a
 failOnLeftovers errh a remainingBytes = do
