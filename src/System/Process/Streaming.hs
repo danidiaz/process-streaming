@@ -1,7 +1,13 @@
 
 -- |
 -- This module contains helper functions and types built on top of
--- @System.Process@.
+-- "System.Process" and "Pipes".
+--
+-- They provide concurrent, buffered (to avoid deadlocks) streaming access to
+-- the inputs and outputs of system processes.
+--
+-- There's also an emphasis in having error conditions explicit in the types,
+-- instead of throwing exceptions.
 --
 -- See the functions 'execute' and 'execute3' for an entry point. Then the
 -- functions 'separate' and 'combineLines' that handle the consumption of
@@ -20,7 +26,6 @@ module System.Process.Streaming (
         -- * Execution helpers
         execute,
         execute3,
-        executeX,
         exitCode,
         separate,
         -- * Execution with combined stdout/stderr
@@ -30,7 +35,6 @@ module System.Process.Streaming (
         ignoreLeftovers,
         failOnLeftovers,
         combineLines,
-        combineManyLines,
         -- * Constructing feeding/consuming functions
         useConsumer,
         useProducer,
@@ -83,22 +87,15 @@ import System.Process.Lens
 import System.Exit
 
 {-|
-    This function takes a 'CreateProcess' record, an exception handler, and a
-function to consume two 'Producers' associated to @stdout@ and @stderr@.  
-
-    Data from the external process' output handles is continuosuly read and
-buffered in memory, so the consuming function can have delays without risking
-causing deadlocks in the external process due to full output buffers. 
-
-    When the consuming function returns successfully with @a@, the `Handle`s
-from the external process keeps being drained until the process closes them,
-and /only then/ the result is returned. 
-
-    If the consuming function fails with @e@, the whole computation is
-immediately aborted and @e@ is returned.  
+    This function takes as arguments a 'CreateProcess' record, an exception
+handler, and a consuming function for two 'Producers' associated to @stdout@
+and @stderr@, respectively.  
 
     'execute' tries to avoid launching exceptions, and represents all errors as
 @e@ values.
+
+    If the consuming function fails with @e@, the whole computation is
+immediately aborted and @e@ is returned.  
 
    If an error or asynchronous exception happens, the external process is
 terminated.
@@ -124,7 +121,8 @@ execute spec ehandler consumefunc = do
     Like `execute3` but with an additional argument consisting in a /feeding/
 function that takes the @stdin@ 'Consumer' and writes to it. 
 
-    The feeding function can return a value.
+    Like the consuming function, the feeding function can return a value and
+can also fail, terminating the process.
 
    This function sets the @std_in@, @std_out@ and @std_err@ fields in the
 'CreateProcess' record to 'CreatePipe'.
@@ -173,25 +171,6 @@ terminateOnError pHandle action = do
             exitCode <- waitForProcess pHandle 
             return $ Right (exitCode,r)  
 
-{-|
-   Generic execution function out of which construct more specific execution
-functions are constructed.
-
-   The first argument is 'Prism' that matches against the tuple returned by
-'createProcess' and removes the 'Maybe's that wrap the 'Handle's. 
-
-   The second argument is a CreateProcess record.
-
-   The third argument is an error callback for exceptions thrown when launching
-the process, or while waiting for it to complete.  
-
-   The fourth argument is a computation that depends of what the prism matches
-(some subset of the handles) and may fail with error @e@. The result of the
-computation must come with a cleanup action. 
-
-   If an exception is thrown while this function executes, the external process
-is terminated. 
- -}
 executeX :: ((forall m. Applicative m => ((t, ProcessHandle) -> m (t, ProcessHandle)) -> (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) -> m (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle))) -> CreateProcess -> (IOException -> e) -> (t -> (IO (Either e a), IO())) -> IO (Either e (ExitCode,a))
 executeX somePrism procSpec exHandler action = mask $ \restore -> runEitherT $ do
     maybeHtuple <- bimapEitherT exHandler id $ EitherT $ createProcess' procSpec  
@@ -226,9 +205,16 @@ exitCode f m = conversion <$> m
             ExitFailure i -> Left $ f i 
 
 {-|
-   When we want to process @stdout@ and @stderr@ concurrently and
-independently. The resulting function can be plugged into 'execute' or
-'execute3'. 
+    'separate' should be used when we want to consume @stdout@ and @stderr@
+concurrently and independently. It constructs a function that can be plugged
+into 'execute' or 'execute3'. 
+
+    If the consuming functions return with @a@ and @b@, the corresponding
+streams keep being drained until the end. The combined value is not returned
+until both @stdout@ and @stderr@ are closed by the external process.
+
+   However, if any of the consuming functions fails with @e@, the whole
+computation fails immediately with @e@.
   -}
 separate :: (Show e, Typeable e)
          => (Producer ByteString IO () -> IO (Either e a))
@@ -239,16 +225,17 @@ separate outfunc errfunc outprod errprod =
          (buffer_ errfunc errprod)
 
 {-|
-  Type synonym for a function that takes a 'ByteString' producer, decodes it
-into 'T.Text', and returns a streamed effectful list of line producers. See the
-@pipes-group@ package for utilities on how to manipulate these streamed
-effectful lists. They allow you to handle individual lines without forcing you
-to have a whole line in memory at any given time.
+  Type synonym for a function that takes as first parameter a way to tear down
+a FreeT-based list of lines, a 'ByteString' source as second parameter, and
+returns a (possibly failing) computation. Presumably, the bytes are decoded
+into text, the text split into lines, and the tear down function applied. 
 
-    The final @Producer ByteString IO ()@ return value holds the bytes
-following the first decoding error. If there are no decoding errors, it will be
-an empty producer.
- -} 
+See the @pipes-group@ package for utilities on how to manipulate these
+FreeT-based lists. They allow you to handle individual lines without forcing
+you to have a whole line in memory at any given time.
+
+  See also 'linePolicy' and 'combinedLines'.
+-} 
 type LinePolicy e = (FreeT (Producer T.Text IO) IO (Producer ByteString IO ()) -> IO (Producer ByteString IO ())) -> Producer ByteString IO () -> IO (Either e ())
 
 {-|
@@ -263,16 +250,11 @@ line is represented as a 'Producer' to avoid having to keep it wholly in
 memory. If you want the lines unmodified, just pass @id@. Line prefixes are
 easy to add using applicative notation:
 
-  > linePolicy utf8 (\x -> yield "prefix: " *> x)
+  > (\x -> yield "prefix: " *> x)
+
+    The third argument is a 'LeftoverPolicy' value that specifies how to handle
+decoding failures. 
  -}
---linePolicy :: (forall r. Producer ByteString IO r -> Producer T.Text IO (Producer ByteString IO r)) 
---            -> (forall r. Producer T.Text IO r -> Producer T.Text IO r) 
---            -> LinePolicy
---linePolicy decoder transform =  transFreeT transform 
---                               . viewLines 
---                               . decoder
---    where 
---    viewLines = getConst . T.lines Const
 
 linePolicy :: (forall r. Producer ByteString IO r -> Producer T.Text IO (Producer ByteString IO r)) 
            -> (forall r. Producer T.Text IO r -> Producer T.Text IO r)
@@ -290,8 +272,9 @@ linePolicy decoder transform lopo teardown producer = do
 {-|
     In the Pipes ecosystem, leftovers from decoding operations are often stored
 in the result value of 'Producer's (often as 'Producer's themselves). This is a
-type synonym for a function that examines these results values, and may fail
-depending on what it encounters.
+type synonym for a function that receives as parameters some arbitray value and
+the leftovers of a decoding process, and may modify the value or fail
+outright, depending of what the leftovers are.
  -}
 type LeftoverPolicy l e a = a -> l -> IO (Either e a)
 
@@ -302,8 +285,15 @@ ignoreLeftovers :: LeftoverPolicy l e a
 ignoreLeftovers a _ =  return $ Right a
 
 {-|
-    For 'ByteString' leftovers, fails if it encounters any leftover and
-constructs the error out of the first undedcoded bytes. 
+    Fails if it encounters any leftover and constructs the error out of the
+first undedcoded data. 
+
+    For simple error handling, just ignore the @a@ and the undecoded data:
+
+    > (failOnLeftvoers (\_ _->"badbytes")) :: LeftoverPolicy (Producer b IO ()) String a
+
+    For more complex error handling, you may want to include the result @a@
+until the error and/or the first undecoded values @b@ in your error datatype.
  -}
 failOnLeftovers :: (a -> b -> e) -> LeftoverPolicy (Producer b IO ()) e a
 failOnLeftovers errh a remainingBytes = do
@@ -313,12 +303,15 @@ failOnLeftovers errh a remainingBytes = do
         Right (somebytes,_) -> Left $ errh a somebytes 
 
 {-|
-    @stdout@ and @stderr@ are decoded into 'Text', splitted into lines (maybe
-applying some transformation to each line) and then combined and consumed by
-the function passed as argument.
+    The bytes from @stdout@ and @stderr@ are decoded into 'Text', splitted into
+lines (maybe applying some transformation to each line) and then combined and
+consumed by the function passed as argument.
 
-    For both @stdout@ and @stderr@, a 'LinePolicy' must be supplied, along
-with a 'LeftoverPolicy'.
+    For both @stdout@ and @stderr@, a 'LinePolicy' must be supplied.
+
+    Like with 'separate', the streams are drained to completion if no errors
+happen, but the computation is aborted immediately if any error @e@ is
+returned. 
 
     'combineLines' returns a function that can be plugged into 'execute' or
 'execute3'. 
@@ -338,12 +331,6 @@ combineLines :: (Show e, Typeable e)
 combineLines fun1 fun2 combinedConsumer prod1 prod2 = 
     combineManyLines [fmap (($prod1).buffer_) fun1, fmap (($prod2).buffer_) fun2] combinedConsumer 
     
-    --combineManyLines [(prod1,ld1,lop1),(prod2,ld2,lop2)] combinedConsumer 
-
-
-{-|
-  A more general version of 'combineLines'.   
-  -}
 combineManyLines :: (Show e, Typeable e) 
                  => [((FreeT (Producer T.Text IO) IO (Producer ByteString IO ())) -> IO (Producer ByteString IO ())) -> IO (Either e ())]
         	     -> (Producer T.Text IO () -> IO (Either e a))
@@ -355,15 +342,14 @@ combineManyLines actions consumer = do
               (consumer (fromInput inbox) `finally` atomically seal)
     return $ snd <$> r
     where 
---    produce mVar (producer,lineDec,leftoverp) = 
- --       (iterTLines mVar . lineDec $ producer) >>= leftoverp ()
     iterTLines mvar = iterT $ \textProducer -> do
         -- the P.drain bit was difficult to figure out!!!
         join $ withMVar mvar $ \output -> do
             runEffect $ (textProducer <* P.yield (singleton '\n')) >-> (toOutput output >> P.drain)
 
 {-|
-    Useful for constructing @stdout@ or @stderr@ consuming functions.
+    Useful for constructing @stdout@ or @stderr@ consuming functions from a
+'Consumer', to be plugged into 'separated' or 'combineLines'.
 
     You may need to use 'surely' for the types to fit.
  -}
@@ -371,7 +357,8 @@ useConsumer :: Monad m => Consumer b m () -> Producer b m () -> m ()
 useConsumer consumer producer = runEffect $ producer >-> consumer 
 
 {-|
-    Useful for constructing @stdin@ feeding functions.
+    Useful for constructing @stdin@ feeding functions from a 'Producer', to be
+plugged into 'execute3'.
 
     You may need to use 'surely' for the types to fit.
  -}
@@ -421,6 +408,11 @@ monoidally errh activity proxy = do
         Left e' -> Left $ errh e' w    
         Right () -> Right $ w
 
+{-|
+    Useful when we want to construct different error values @e@ depending on
+what feeding/consuming function throws an exeption, instead of relying in the
+catch-all error callback supplied in 'execute' or 'execute3'.
+ -}
 exceptionally :: (IOException -> e) 
               -> (x -> IO (Either e a))
               -> (x -> IO (Either e a)) 
@@ -428,22 +420,14 @@ exceptionally handler operation x = try' handler (operation x)
 
 {-|
     Value to plug into a 'separate' or 'combineLines' function when we are not
-interested in doing anything with the handle.
+interested in doing anything with the handle. It returns immediately with @()@. 
+
+    Notice that even if 'nop' returns immediately,  'separate' and
+'combineLines' drain the streams to completion before returning.
   -}
 nop :: (MFunctor t, Monad m) => t m l -> m (Either e ()) 
 nop = \_ -> return $ Right () 
 
-{-|
-    'Producers' that represent the results of decoding operations store
-leftovers in their result values. But many functions in this module
-('useConsumer', 'forkProd', and others) work only with 'Producer's that return
-@()@. The 'leftover' function augments these functions with a 'LeftoverPolicy'
-and lets them work with the result of a decoding. 
-
-    It may happen that the argument function returns successfully but leftovers
-exist, indicating a decoding failure. The first argument of 'leftover' lets you
-store the results in the message error.
- -}
 buffer :: (Show e, Typeable e)
        => LeftoverPolicy l e a
        -> (Producer b IO () -> IO (Either e a))
@@ -455,13 +439,13 @@ buffer policy activity producer = do
                   Right <$> wait feeding `finally` atomically seal
               )
               (activity (fromInput inbox) `finally` atomically seal)
-    -- Possible problem: if the "activity" returns early with a value, the
-    -- decoding keeps going on even if the data is never used. And a decoding
-    -- error might be found.
     case r of 
         Left e -> return $ Left e
         Right (lp,r') -> policy r' lp
 
+{-|
+   Adapts a function that works with 'Producer's of decoded values so that it works with 'Producer's of still undecoded values, by supplying a decoding function and a 'LeftoverPolicy'.
+ -}
 encoding :: (Show e, Typeable e) 
          => (Producer b IO r -> Producer t IO (Producer b IO r))
          -> LeftoverPolicy (Producer b IO r) e x
@@ -491,10 +475,14 @@ revealError action = catch (action >>= return . Right)
     'Conc' is very similar to 'Control.Concurrent.Async.Concurrently' from the
 @async@ package, but it has an explicit error type @e@.
 
-    The 'Applicative' instance is used to run actions concurrently and combine their results. 
+   The 'Applicative' instance is used to run actions concurrently, wait until
+they finish, and combine their results. 
 
-   If any of the actions fails with @e@ the other actions are immediately
-cancelled and the whole computation fails with @e@. 
+   However, if any of the actions fails with @e@ the other actions are
+immediately cancelled and the whole computation fails with @e@. 
+
+    To put it another way: 'Conc' behaves like 'Concurrently' for successes and
+like 'race' for errors.  
 -}
 newtype Conc e a = Conc { runConc :: IO (Either e a) }
 

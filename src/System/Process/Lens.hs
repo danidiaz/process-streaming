@@ -1,13 +1,6 @@
 
 -- |
--- This module contains helper functions and types built on top of
--- @System.Process@.
---
--- See the functions 'execute2' and 'execute3' for an entry point.
---
--- Regular 'Consumer's, 'Parser's from @pipes-parse@ and folds from
--- "Pipes.Prelude" can be used to consume the output streams of the external
--- processes.
+-- Lenses and traversals for 'CreateProcess' and related types.
 --
 -----------------------------------------------------------------------------
 
@@ -15,7 +8,6 @@
 {-# LANGUAGE RankNTypes #-}
 
 module System.Process.Lens ( 
-        -- * Prisms and lenses
         _cmdspec,
         _ShellCommand,
         _RawCommand,
