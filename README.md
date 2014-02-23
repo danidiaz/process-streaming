@@ -16,9 +16,6 @@ The basic goals:
 
 - Avoid deadlock scenarios caused by full output buffers.
 
-- Modularity: don't enforce a "pipeified" approach for all the handles, let the
-  user "pipeify" only the particular handles in which he is interested. 
-
 Relevant thread in the Haskell Pipes Google Group:
 
 https://groups.google.com/forum/#!searchin/haskell-pipes/pipes$20process/haskell-pipes/JFfyquj5HAg/Lxz7p50JOh4J
