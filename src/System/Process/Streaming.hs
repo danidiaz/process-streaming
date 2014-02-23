@@ -235,8 +235,8 @@ separate :: (Show e, Typeable e)
          -> (Producer ByteString IO () -> IO (Either e b))
          -> Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e (a,b))
 separate outfunc errfunc outprod errprod = 
-    conc (buffer outfunc outprod)
-         (buffer errfunc errprod)
+    conc (buffer_ outfunc outprod)
+         (buffer_ errfunc errprod)
 
 {-|
   Type synonym for a function that takes a 'ByteString' producer, decodes it
@@ -336,7 +336,7 @@ combineLines :: (Show e, Typeable e)
         	 -> (Producer T.Text IO () -> IO (Either e a))
              -> Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e a)
 combineLines fun1 fun2 combinedConsumer prod1 prod2 = 
-    combineManyLines [fmap (($prod1).buffer) fun1, fmap (($prod2).buffer) fun2] combinedConsumer 
+    combineManyLines [fmap (($prod1).buffer_) fun1, fmap (($prod2).buffer_) fun2] combinedConsumer 
     
     --combineManyLines [(prod1,ld1,lop1),(prod2,ld2,lop2)] combinedConsumer 
 
@@ -444,11 +444,11 @@ and lets them work with the result of a decoding.
 exist, indicating a decoding failure. The first argument of 'leftover' lets you
 store the results in the message error.
  -}
-leftovers :: (Show e, Typeable e)
-          => LeftoverPolicy l e a
-          -> (Producer b IO () -> IO (Either e a))
-          -> Producer b IO l -> IO (Either e a)
-leftovers policy activity producer = do
+buffer :: (Show e, Typeable e)
+       => LeftoverPolicy l e a
+       -> (Producer b IO () -> IO (Either e a))
+       -> Producer b IO l -> IO (Either e a)
+buffer policy activity producer = do
     (outbox,inbox,seal) <- spawn' Unbounded
     r <- conc (do feeding <- async $ runEffect $ 
                       producer >-> (toOutput outbox >> P.drain)
@@ -467,19 +467,12 @@ encoding :: (Show e, Typeable e)
          -> LeftoverPolicy (Producer b IO r) e x
          -> (Producer t IO () -> IO (Either e x))
          -> Producer b IO r -> IO (Either e x)
-encoding decoder policy activity producer = leftovers policy activity $ decoder producer 
+encoding decoder policy activity producer = buffer policy activity $ decoder producer 
 
---encoding_ :: (Show e, Typeable e) 
---          => (Producer b IO r -> Producer t IO (Producer b IO r))
---          -> LeftoverPolicy (Producer b IO r) e 
---          -> (Producer t IO () -> IO (Either e x))
---          -> Producer b IO r -> IO (Either e x)
---encoding_ decoder = encoding decoder const 
-
-buffer :: (Show e, Typeable e) 
-       => (Producer ByteString IO () -> IO (Either e a))
-       -> Producer ByteString IO () -> IO (Either e a)
-buffer = leftovers ignoreLeftovers
+buffer_ :: (Show e, Typeable e) 
+        => (Producer ByteString IO () -> IO (Either e a))
+        -> Producer ByteString IO () -> IO (Either e a)
+buffer_ = buffer ignoreLeftovers
 
 
 data WrappedError e = WrappedError e
