@@ -17,7 +17,7 @@ module System.Process.Streaming.Tutorial (
     -- * Combining stdout and stderr
     -- $combinelines
 
-    -- * Running parsers in parallel 
+    -- * Running two parsers in parallel 
     -- $forkProd
     
     -- * Aborting an execution
@@ -214,7 +214,7 @@ Returns:
 
 -}
 
-{- $gchi
+{- $ghci
 
 Sometimes it's useful to launch external programs during a ghci session, like
 this:
