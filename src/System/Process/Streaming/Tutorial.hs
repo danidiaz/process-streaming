@@ -19,6 +19,13 @@ module System.Process.Streaming.Tutorial (
 
     -- * Running parsers in parallel 
     -- $forkProd
+    
+    -- * Aborting an execution
+    -- $fastExit
+    --
+    --
+    -- * Feeding stdin, collecting stdout
+    -- $cat
     ) where
 
 {- $introduction 
@@ -30,6 +37,9 @@ Some preliminary imports:
 > 
 > import Data.Bifunctor
 > import Data.Either
+> import Data.Monoid
+> import Data.Text.Lazy as L
+> import Data.Text.Lazy.Builder as L
 > import qualified Data.Attoparsec.Text as A
 > import Control.Applicative
 > import Control.Monad
@@ -118,7 +128,7 @@ because running 'evalStateT' on a parser returns a function that consumes a
 'Producer'.
 
 In this example we define two Attoparsec Text parsers and we convert them to
-Pipes parsers using function 'parse' from package @pipes-attparsec@. 
+Pipes parsers using function 'parse' from package @pipes-attoparsec@. 
 
 Stdout is decoded to Text and parsed by the two parsers in parallel using the
 auxiliary 'forkProd' function. The results are aggregated in a tuple.
@@ -149,3 +159,51 @@ Returns:
 
 -}
 
+
+{- $fastExit
+
+If any function consuming a standard stream returns with an error value @e@,
+the external program is terminated and the computation returns immediately with
+@e@.
+
+> example5 ::IO (Either String ((),()))
+> example5 = exitCode show $  
+>     execute (shell "sleep 10s") show $ separate
+>             (\_ -> return $ Left "fast return!")
+>             nop
+
+Returns:
+
+>>> Left "fast return!"
+
+If we change the stdout consuming function to 'nop', 'example5' waits 10
+seconds. 
+-}
+
+
+{- $cat
+
+In this example we invoke the @cat@ command, feeding its input stream with a
+string.
+
+We decode stdout to Text and collect the whole output using a fold from
+'Pipes.Prelude'.
+
+Plugging folds from "Pipes.Prelude" into 'separate' or 'combineLines' is easy
+because the folds return functions that consumes 'Producer's. The folds form
+the @foldl@ package could also be useful. 
+
+Notice that @stdin@ is written concurrently with the reading of @stdout@. It is
+not the case that @sdtin@ is written first and then @stdout@ is read. 
+
+example6 = exitCode show $  
+    execute3 (shell "cat") show  
+        (surely . useProducer $ yield "aaaaaa\naaaaa")
+        (separate 
+            (encoding T.decodeIso8859_1 ignoreLeftovers . surely $ foldy)  
+            nop
+        )
+    where foldy :: Producer T.Text IO () -> IO L.Text 
+          foldy = P.fold (<>) mempty L.toLazyText . (>->P.map L.fromText)
+
+-}
