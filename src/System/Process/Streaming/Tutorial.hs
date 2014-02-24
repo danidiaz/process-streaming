@@ -44,7 +44,6 @@ Some preliminary imports:
 > module Main where
 > 
 > import Data.Bifunctor
-> import Data.Either
 > import Data.Monoid
 > import qualified Data.Attoparsec.Text as A
 > import Control.Applicative
