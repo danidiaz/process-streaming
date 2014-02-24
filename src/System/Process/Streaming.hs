@@ -24,33 +24,40 @@
 
 module System.Process.Streaming ( 
         -- * Execution helpers
-        execute,
-        execute3,
-        exitCode,
-        separate,
+          execute
+        , execute3
+        , exitCode
+        , separate
+
         -- * Execution with combined stdout/stderr
-        LinePolicy,
-        linePolicy,
-        LeftoverPolicy,
-        ignoreLeftovers,
-        failOnLeftovers,
-        combineLines,
+        , LinePolicy
+        , linePolicy
+        , LeftoverPolicy
+        , ignoreLeftovers
+        , failOnLeftovers
+        , combineLines
+
         -- * Constructing feeding/consuming functions
-        useConsumer,
-        useProducer,
-        surely,
-        safely,
-        fallibly,
-        monoidally,
-        exceptionally,
-        nop,
-        encoding,
+        , useConsumer
+        , useProducer
+        , surely
+        , safely
+        , fallibly
+        , monoidally
+        , exceptionally
+        , nop
+        , encoding
+
         -- * Concurrency helpers
-        Conc (..),
-        conc,
-        mapConc,
-        ForkProd (..),
-        forkProd
+        , Conc (..)
+        , conc
+        , mapConc
+        , ForkProd (..)
+        , forkProd
+
+        -- * Re-exports
+        -- $reexports
+        , module System.Process
     ) where
 
 import Data.Maybe
@@ -560,4 +567,10 @@ forkProd :: (Show e, Typeable e)
          -> (Producer b IO () -> IO (Either e (x,y)))
 forkProd c1 c2 = runForkProd $ (,) <$> ForkProd c1
                                    <*> ForkProd c2
+
+{- $reexports
+ 
+"System.Process" is re-exported for convenience.
+
+-} 
 

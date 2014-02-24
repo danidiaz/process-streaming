@@ -60,7 +60,6 @@ Some preliminary imports:
 > import qualified Pipes.Safe as S
 > import qualified Pipes.Safe.Prelude as S
 > import System.IO
-> import System.Process
 > import System.Process.Streaming
 
 -}
