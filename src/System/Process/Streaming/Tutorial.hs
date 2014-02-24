@@ -23,10 +23,16 @@ module System.Process.Streaming.Tutorial (
     -- * Aborting an execution
     -- $fastExit
 
-    -- * Feeding stdin, collecting stdout
+    -- * Feeding stdin, collecting stdout as text
     -- $cat
 
-    -- * Ghci
+    -- * Collecting stdout and stderr as bytestring
+    -- $bscollect
+
+    -- * Counting words
+    -- $wordcount
+
+    -- * ghci
     -- $ghci
     ) where
 
@@ -40,21 +46,18 @@ Some preliminary imports:
 > import Data.Bifunctor
 > import Data.Either
 > import Data.Monoid
-> import Data.Text.Lazy as L
-> import Data.Text.Lazy.Builder as L
 > import qualified Data.Attoparsec.Text as A
 > import Control.Applicative
-> import Control.Monad
-> import Control.Monad.Writer.Strict
-> import Control.Concurrent (threadDelay)
+> import Control.Lens (view)
 > import Pipes
-> import Pipes.ByteString
+> import qualified Pipes.ByteString as B
 > import qualified Pipes.Prelude as P
 > import qualified Pipes.Parse as P
 > import qualified Pipes.Attoparsec as P
 > import qualified Pipes.Text as T
 > import qualified Pipes.Text.Encoding as T
 > import qualified Pipes.Text.IO as T
+> import qualified Pipes.Group as G
 > import qualified Pipes.Safe as S
 > import qualified Pipes.Safe.Prelude as S
 > import System.IO
@@ -76,7 +79,7 @@ from @pipes-safe@ to write the files.
 >         (consume "stderr.log")
 >     where
 >     consume file = surely . safely . useConsumer $
->         S.withFile file WriteMode toHandle
+>         S.withFile file WriteMode B.toHandle
 >     program = shell "{ echo ooo ; echo eee 1>&2 ; }"
 -}
 
@@ -118,7 +121,7 @@ We also add a prefix to the lines coming from @stderr@.
 >     where
 >     policy = failOnLeftovers $ \_ _->"badbytes"
 >     annotate x = P.yield "errprefix: " *> x
->     program = shell "{ echo ooo ; echo eee 1>&2 ; echo ppp ;  echo ffff 1>&2 ;}"
+>     program = shell "{ echo ooo ; echo eee 1>&2 ; echo ppp ;  echo ffff 1>&2 ; }"
 
 -}
 
@@ -189,11 +192,12 @@ In this example we invoke the @cat@ command, feeding its input stream with a
 'ByteString'.
 
 We decode stdout to Text and collect the whole output using a fold from
-'Pipes.Prelude'. 
+@pipes-text@. 
 
-Plugging folds from "Pipes.Prelude" into 'separate' or 'combineLines' is easy
-because the folds return functions that consumes 'Producer's. The folds form
-the @foldl@ package could also be useful. 
+Plugging folds defined in "Pipes.Prelude" (or @pipes-bytestring@ or
+@pipes-text@) into 'separate' or 'combineLines' is easy because the folds
+return functions that consumes 'Producer's. Folds form the @foldl@ package
+could also be useful here. 
 
 Notice that @stdin@ is written concurrently with the reading of @stdout@. It is
 not the case that @sdtin@ is written first and then @stdout@ is read. 
@@ -202,15 +206,49 @@ not the case that @sdtin@ is written first and then @stdout@ is read.
 >     execute3 (shell "cat") show  
 >         (surely . useProducer $ yield "aaaaaa\naaaaa")
 >         (separate 
->             (encoding T.decodeIso8859_1 ignoreLeftovers . surely $ foldy)  
+>             (encoding T.decodeIso8859_1 ignoreLeftovers $ surely $ T.toLazyM)  
 >             nop
 >         )
->     where foldy :: Producer T.Text IO () -> IO L.Text 
->           foldy = P.fold (<>) mempty L.toLazyText . (>->P.map L.fromText)
 
 Returns:
 
 >>> Right ((),("aaaaaa\naaaaa",()))
+
+-}
+
+{- $bscollect
+ 
+In this example we collect stdout and stderr as lazy bytestrings, using a fold
+defined in @pipes-bytestring@.
+
+> example7 = exitCode show $
+>     execute program show $ separate (surely B.toLazyM) (surely B.toLazyM)
+>     where
+>     program = shell "{ echo ooo ; echo eee 1>&2 ; echo ppp ;  echo ffff 1>&2 ; }"
+
+Returns:
+
+>>> Right ("ooo\nppp\n","eee\nffff\n")
+-}
+
+
+{- $wordcount
+ 
+  In this example we count words emitted to @stdout@ in a streaming fashing,
+without having to keep whole words in memory.
+
+  We use a lens from @pipes-text@ to split the text into words, and a trivial
+fold from @pipes-group@ to create a 'Producer' of 'Int' values. Then we sum the
+ints using a fold from "Pipes.Prelude".
+ 
+> example8 = exitCode show $
+>     execute program show $ separate
+>         (encoding T.decodeIso8859_1 ignoreLeftovers $ surely $
+>              P.sum . G.folds const () (const 1) . view T.words
+>         )
+>         nop
+>     where
+>     program = shell "{ echo aaa ; echo bbb ; echo ccc ; }"
 
 -}
 
