@@ -14,8 +14,8 @@
 -- stdout and stderr.
 --
 -- Regular 'Consumer's, 'Parser's from @pipes-parse@ and folds from
--- "Pipes.Prelude" can be used to consume the output streams of the external
--- processes.
+-- "Pipes.Prelude" (also folds @pipes-bytestring@ and @pipes-text@) can be used
+-- to consume the output streams of the external processes.
 --
 -----------------------------------------------------------------------------
 

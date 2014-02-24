@@ -196,7 +196,7 @@ We decode stdout to Text and collect the whole output using a fold from
 
 Plugging folds defined in "Pipes.Prelude" (or @pipes-bytestring@ or
 @pipes-text@) into 'separate' or 'combineLines' is easy because the folds
-return functions that consumes 'Producer's. Folds form the @foldl@ package
+return functions that consume 'Producer's. Folds form the @foldl@ package
 could also be useful here. 
 
 Notice that @stdin@ is written concurrently with the reading of @stdout@. It is
@@ -218,8 +218,8 @@ Returns:
 
 {- $bscollect
  
-In this example we collect stdout and stderr as lazy bytestrings, using a fold
-defined in @pipes-bytestring@.
+In this example we collect @stdout@ and @stderr@ as lazy bytestrings, using a
+fold defined in @pipes-bytestring@.
 
 > example7 = exitCode show $
 >     execute program show $ separate (surely B.toLazyM) (surely B.toLazyM)
