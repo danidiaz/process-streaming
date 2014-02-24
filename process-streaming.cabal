@@ -13,6 +13,7 @@ Description:   Concurrent, buffered, streaming access to the input and outputs o
 
 Extra-Source-Files:
     README.md
+    CHANGELOG
 
 Library
     hs-source-dirs: src
