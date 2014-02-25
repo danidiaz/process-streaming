@@ -49,10 +49,10 @@ Some preliminary imports:
 > import Control.Applicative
 > import Control.Lens (view)
 > import Pipes
-> import qualified Pipes.ByteString as B
 > import qualified Pipes.Prelude as P
 > import qualified Pipes.Parse as P
 > import qualified Pipes.Attoparsec as P
+> import qualified Pipes.ByteString as B
 > import qualified Pipes.Text as T
 > import qualified Pipes.Text.Encoding as T
 > import qualified Pipes.Text.IO as T
