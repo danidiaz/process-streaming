@@ -8,17 +8,17 @@
 {-# LANGUAGE RankNTypes #-}
 
 module System.Process.Lens ( 
-        _cmdspec,
-        _ShellCommand,
-        _RawCommand,
-        _cwd,
-        _env,
-        stream3,
-        pipe3,
-        pipe2,
-        pipe2h,
-        handle3,
-        handle2,
+         _cmdspec
+       , _ShellCommand
+       , _RawCommand
+       , _cwd
+       , _env
+       , stream3
+       , pipe3
+       , pipe2
+       , pipe2h
+       , handle3
+       , handle2
     ) where
 
 import Data.Maybe

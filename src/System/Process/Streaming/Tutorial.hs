@@ -143,6 +143,7 @@ Stderr is ignored using the 'nop' function.
 >     many (A.notChar c) *> A.many1 (some (A.char c) <* many (A.notChar c))
 > 
 > parser1 = parseChars 'o'
+>
 > parser2 = parseChars 'a'
 > 
 > example4 ::IO (Either String (([Char], [Char]),()))
