@@ -48,6 +48,10 @@ module System.Process.Streaming (
         , nop
         , encoding
 
+        -- * Pipelines
+        , Stage (..)        
+        , pipeline3
+        
         -- * Concurrency helpers
         , Conc (..)
         , conc
@@ -468,6 +472,35 @@ buffer_ :: (Show e, Typeable e)
         -> Producer ByteString IO () -> IO (Either e a)
 buffer_ = buffer ignoreLeftovers
 
+
+{- $Pipelines
+ 
+-}
+
+data Stage e = Stage 
+    { stageStdin  :: Producer ByteString (ErrorT e IO) () 
+                  -> Producer ByteString (ErrorT e IO) () 
+    , stageStdout :: Producer ByteString (ErrorT e IO) () 
+                  -> Producer ByteString (ErrorT e IO) () 
+    , stageStderr :: LinePolicy e
+    , stageProcess:: CreateProcess
+    }    
+
+pipeline3 :: (Show e, Typeable e) 
+          => [Stage e] 
+          -> (IOException -> e)
+          -> (Consumer ByteString IO ()                              -> IO (Either e a))
+          -> (Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e b))
+          -> IO (Either e (ExitCode,(a,b)))
+pipeline3 stages = undefined
+    where
+    stages' = flip fmap stages $ \s -> s 
+        { stageProcess = (stageProcess s)
+                { std_in = CreatePipe
+                , std_out = CreatePipe
+                , std_err = CreatePipe
+                } 
+        }
 
 data WrappedError e = WrappedError e
     deriving (Show, Typeable)
