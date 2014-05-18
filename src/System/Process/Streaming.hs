@@ -389,7 +389,7 @@ surely = fmap (fmap Right)
   Useful when we want to plug in a handler that does its work in the 'SafeT'
 transformer.
  -}
-safely :: (MFunctor t, C.MonadCatch m, MonadIO m) 
+safely :: (MFunctor t, C.MonadMask m, MonadIO m) 
        => (t (SafeT m) l -> (SafeT m) x) 
        -> t m l -> m x 
 safely activity = runSafeT . activity . hoist lift 
