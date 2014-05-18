@@ -3,13 +3,13 @@
 -- This module contains helper functions and types built on top of
 -- "System.Process" and "Pipes".
 --
--- They provide concurrent, buffered (to avoid deadlocks) streaming access to
+-- They provide conceiturrent, buffered (to avoid deadlocks) streaming access to
 -- the inputs and outputs of system processes.
 --
 -- There's also an emphasis in having error conditions explicit in the types,
 -- instead of throwing exceptions.
 --
--- See the functions 'execute' and 'execute3' for an entry point. Then the
+-- See the functions 'execute' and 'executei' for an entry point. Then the
 -- functions 'separate' and 'combineLines' that handle the consumption of
 -- stdout and stderr.
 --
@@ -25,7 +25,7 @@
 module System.Process.Streaming ( 
         -- * Execution helpers
           execute
-        , execute3
+        , executei
         , exitCode
         , separate
 
@@ -44,14 +44,13 @@ module System.Process.Streaming (
         , safely
         , fallibly
         , monoidally
-        , exceptionally
         , nop
         , encoding
 
-        -- * Concurrency helpers
-        , Conc (..)
-        , conc
-        , mapConc
+        -- * Conceiturrency helpers
+        , Conceit (..)
+        , conceit
+        , mapConceit
         , ForkProd (..)
         , forkProd
 
@@ -71,7 +70,6 @@ import Data.Text
 import Control.Applicative
 import Control.Monad
 import Control.Monad.Trans.Free
-import Control.Monad.Trans.Either
 import Control.Monad.Error
 import Control.Monad.State
 import Control.Monad.Morph
@@ -112,11 +110,10 @@ record to 'CreatePipe'.
  -}
 execute :: (Show e, Typeable e) 
         => CreateProcess 
-        -> (IOException -> e)
         -> (Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e a))
         -> IO (Either e (ExitCode,a))
-execute spec ehandler consumefunc = do
-    executeX handle2 spec' ehandler $ \(hout,herr) ->
+execute spec consumefunc = do
+    executeX handle2 spec' $ \(hout,herr) ->
         (,) (consumefunc (fromHandle hout) (fromHandle herr))
             (hClose hout `finally` hClose herr)
     where 
@@ -125,27 +122,26 @@ execute spec ehandler consumefunc = do
                  } 
 
 {-|
-    Like `execute3` but with an additional argument consisting in a /feeding/
+    Like `executei` but with an additional argument consisting in a /feeding/
 function that takes the @stdin@ 'Consumer' and writes to it. 
 
     Like the consuming function, the feeding function can return a value and
 can also fail, terminating the process.
 
-    The feeding function is executed /concurrently/ with the consuming
+    The feeding function is executed /conceiturrently/ with the consuming
 functions, not /before/ them.
 
-   'execute3' sets the @std_in@, @std_out@ and @std_err@ fields in the
+   'executei' sets the @std_in@, @std_out@ and @std_err@ fields in the
 'CreateProcess' record to 'CreatePipe'.
  -}
-execute3 :: (Show e, Typeable e) 
+executei :: (Show e, Typeable e) 
          => CreateProcess 
-         -> (IOException -> e)
          -> (Consumer ByteString IO ()                              -> IO (Either e a))
          -> (Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e b))
          -> IO (Either e (ExitCode,(a,b)))
-execute3 spec ehandler feeder consumefunc = do
-    executeX handle3 spec' ehandler $ \(hin,hout,herr) ->
-        (,) (conc (feeder (toHandle hin) `finally` hClose hin) 
+executei spec feeder consumefunc = do
+    executeX handle3 spec' $ \(hin,hout,herr) ->
+        (,) (conceit (feeder (toHandle hin) `finally` hClose hin) 
                   (consumefunc (fromHandle hout) (fromHandle herr)))
             (hClose hin `finally` hClose hout `finally` hClose herr)
     where 
@@ -153,13 +149,6 @@ execute3 spec ehandler feeder consumefunc = do
                  , std_out = CreatePipe
                  , std_err = CreatePipe
                  } 
-
-try' :: (IOException -> e) -> IO (Either e a) -> IO (Either e a)
-try' handler action = try action >>= either (return . Left . handler) return
-
-createProcess' :: CreateProcess 
-               -> IO (Either IOException (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle))
-createProcess' = try . createProcess
 
 terminateCarefully :: ProcessHandle -> IO ()
 terminateCarefully pHandle = do
@@ -181,22 +170,22 @@ terminateOnError pHandle action = do
             exitCode <- waitForProcess pHandle 
             return $ Right (exitCode,r)  
 
-executeX :: ((forall m. Applicative m => ((t, ProcessHandle) -> m (t, ProcessHandle)) -> (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) -> m (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle))) -> CreateProcess -> (IOException -> e) -> (t -> (IO (Either e a), IO())) -> IO (Either e (ExitCode,a))
-executeX somePrism procSpec exHandler action = mask $ \restore -> runEitherT $ do
-    maybeHtuple <- bimapEitherT exHandler id $ EitherT $ createProcess' procSpec  
-    EitherT $ try' exHandler $ 
-        case getFirst . getConst . somePrism (Const . First . Just) $ maybeHtuple of
-            Nothing -> 
-                throwIO (userError "stdin/stdout/stderr handle unexpectedly null")
-                `finally`
-                let (_,_,_,phandle) = maybeHtuple 
-                in terminateCarefully phandle 
-            Just (htuple,phandle) -> let (a, cleanup) = action htuple in 
-                -- Handles must be closed *after* terminating the process, because a close
-                -- operation may block if the external process has unflushed bytes in the stream.
-                (terminateOnError phandle $ restore a `onException` terminateCarefully phandle) 
-                `finally` 
-                cleanup 
+executeX :: ((forall m. Applicative m => ((t, ProcessHandle) -> m (t, ProcessHandle)) -> (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) -> m (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle))) -> CreateProcess -> (t -> (IO (Either e a), IO())) -> IO (Either e (ExitCode,a))
+executeX somePrism procSpec action = mask $ \restore -> do
+    handles <- createProcess procSpec  
+    case getFirst . getConst . somePrism (Const . First . Just) $ handles of
+        Nothing -> 
+            throwIO (userError "stdin/stdout/stderr handle unexpectedly null")
+            `finally`
+            let (_,_,_,phandle) = handles 
+            in terminateCarefully phandle 
+        Just (htuple,phandle) -> 
+            let (a, cleanup) = action htuple in 
+            -- Handles must be closed *after* terminating the process, because a close
+            -- operation may block if the external process has unflushed bytes in the stream.
+            (terminateOnError phandle $ restore a `onException` terminateCarefully phandle) 
+            `finally` 
+            cleanup 
 
 {-|
     Convenience function that merges 'ExitFailure' values into the @e@ value.
@@ -216,8 +205,8 @@ exitCode f m = conversion <$> m
 
 {-|
     'separate' should be used when we want to consume @stdout@ and @stderr@
-concurrently and independently. It constructs a function that can be plugged
-into 'execute' or 'execute3'. 
+conceiturrently and independently. It constructs a function that can be plugged
+into 'execute' or 'executei'. 
 
     If the consuming functions return with @a@ and @b@, the corresponding
 streams keep being drained until the end. The combined value is not returned
@@ -231,7 +220,7 @@ separate :: (Show e, Typeable e)
          -> (Producer ByteString IO () -> IO (Either e b))
          -> Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e (a,b))
 separate outfunc errfunc outprod errprod = 
-    conc (buffer_ outfunc outprod)
+    conceit (buffer_ outfunc outprod)
          (buffer_ errfunc errprod)
 
 {-|
@@ -324,7 +313,7 @@ happen, but the computation is aborted immediately if any error @e@ is
 returned. 
 
     'combineLines' returns a function that can be plugged into 'execute' or
-'execute3'. 
+'executei'. 
 
     /Beware!/ 'combineLines' avoids situations in which a line emitted
 in @stderr@ cuts a long line emitted in @stdout@, see
@@ -348,7 +337,7 @@ combineManyLines :: (Show e, Typeable e)
 combineManyLines actions consumer = do
     (outbox, inbox, seal) <- spawn' Unbounded
     mVar <- newMVar outbox
-    r <- conc (mapConc ($ iterTLines mVar) actions `finally` atomically seal)
+    r <- conceit (mapConceit ($ iterTLines mVar) actions `finally` atomically seal)
               (consumer (fromInput inbox) `finally` atomically seal)
     return $ snd <$> r
     where 
@@ -368,7 +357,7 @@ useConsumer consumer producer = runEffect $ producer >-> consumer
 
 {-|
     Useful for constructing @stdin@ feeding functions from a 'Producer', to be
-plugged into 'execute3'.
+plugged into 'executei'.
 
     You may need to use 'surely' for the types to fit.
  -}
@@ -419,16 +408,6 @@ monoidally errh activity proxy = do
         Right () -> Right $ w
 
 {-|
-    Useful when we want to construct different error values @e@ depending on
-what feeding/consuming function throws an exeption, instead of relying in the
-catch-all error callback supplied in 'execute' or 'execute3'.
- -}
-exceptionally :: (IOException -> e) 
-              -> (x -> IO (Either e a))
-              -> (x -> IO (Either e a)) 
-exceptionally handler operation x = try' handler (operation x) 
-
-{-|
     Value to plug into a 'separate' or 'combineLines' function when we are not
 interested in doing anything with the handle. It returns immediately with @()@. 
 
@@ -444,8 +423,9 @@ buffer :: (Show e, Typeable e)
        -> Producer b IO l -> IO (Either e a)
 buffer policy activity producer = do
     (outbox,inbox,seal) <- spawn' Unbounded
-    r <- conc (do feeding <- async $ runEffect $ 
-                      producer >-> (toOutput outbox >> P.drain)
+    r <- conceit 
+              (do feeding <- async $ runEffect $ 
+                        producer >-> (toOutput outbox >> P.drain)
                   Right <$> wait feeding `finally` atomically seal
               )
               (activity (fromInput inbox) `finally` atomically seal)
@@ -482,54 +462,53 @@ revealError action = catch (action >>= return . Right)
                            (\(WrappedError e) -> return . Left $ e)   
 
 {-| 
-    'Conc' is very similar to 'Control.Concurrent.Async.Concurrently' from the
+    'Conceit' is very similar to 'Control.Conceiturrent.Async.Conceiturrently' from the
 @async@ package, but it has an explicit error type @e@.
 
-   The 'Applicative' instance is used to run actions concurrently, wait until
+   The 'Applicative' instance is used to run actions conceiturrently, wait until
 they finish, and combine their results. 
 
    However, if any of the actions fails with @e@ the other actions are
 immediately cancelled and the whole computation fails with @e@. 
 
-    To put it another way: 'Conc' behaves like 'Concurrently' for successes and
+    To put it another way: 'Conceit' behaves like 'Conceiturrently' for successes and
 like 'race' for errors.  
 -}
-newtype Conc e a = Conc { runConc :: IO (Either e a) }
+newtype Conceit e a = Conceit { runConceit :: IO (Either e a) }
 
-instance Functor (Conc e) where
-  fmap f (Conc x) = Conc $ fmap (fmap f) x
+instance Functor (Conceit e) where
+  fmap f (Conceit x) = Conceit $ fmap (fmap f) x
 
-instance (Show e, Typeable e) => Applicative (Conc e) where
-  pure = Conc . pure . pure
-  Conc fs <*> Conc as =
-    Conc . revealError $ 
+instance (Show e, Typeable e) => Applicative (Conceit e) where
+  pure = Conceit . pure . pure
+  Conceit fs <*> Conceit as =
+    Conceit . revealError $ 
         uncurry ($) <$> concurrently (elideError fs) (elideError as)
 
-instance (Show e, Typeable e) => Alternative (Conc e) where
-  empty = Conc $ forever (threadDelay maxBound)
-  Conc as <|> Conc bs =
-    Conc $ either id id <$> race as bs
+instance (Show e, Typeable e) => Alternative (Conceit e) where
+  empty = Conceit $ forever (threadDelay maxBound)
+  Conceit as <|> Conceit bs =
+    Conceit $ either id id <$> race as bs
 
-conc :: (Show e, Typeable e) 
-     => IO (Either e a)
-     -> IO (Either e b)
-     -> IO (Either e (a,b))
-conc c1 c2 = runConc $ (,) <$> Conc c1
-                           <*> Conc c2
+conceit :: (Show e, Typeable e) 
+        => IO (Either e a)
+        -> IO (Either e b)
+        -> IO (Either e (a,b))
+conceit c1 c2 = runConceit $ (,) <$> Conceit c1 <*> Conceit c2
 
 {-| 
-      Works similarly to 'Control.Concurrent.Async.mapConcurrently' from the
+      Works similarly to 'Control.Conceiturrent.Async.mapConceiturrently' from the
 @async@ package, but if any of the computations fails with @e@, the others are
 immediately cancelled and the whole computation fails with @e@. 
  -}
-mapConc :: (Show e, Typeable e, Traversable t) => (a -> IO (Either e b)) -> t a -> IO (Either e (t b))
-mapConc f = revealError .  mapConcurrently (elideError . f)
+mapConceit :: (Show e, Typeable e, Traversable t) => (a -> IO (Either e b)) -> t a -> IO (Either e (t b))
+mapConceit f = revealError .  mapConcurrently (elideError . f)
 
 {-| 
     'ForkProd' is a newtype around a function that does something with a
 'Producer'. The applicative instance fuses the functions, so that each one
-receives its own copy of the 'Producer' and runs concurrently with the others.
-Like with 'Conc', if any of the functions fails with @e@ the others are
+receives its own copy of the 'Producer' and runs conceiturrently with the others.
+Like with 'Conceit', if any of the functions fails with @e@ the others are
 immediately cancelled and the whole computation fails with @e@.   
 
     'ForkProd' and its accompanying functions are useful to run multiple
@@ -546,19 +525,19 @@ instance (Show e, Typeable e) => Applicative (ForkProd b e) where
       ForkProd $ \producer -> do
           (outbox1,inbox1,seal1) <- spawn' Unbounded
           (outbox2,inbox2,seal2) <- spawn' Unbounded
-          r <- conc (do
-                       feeding <- async $ runEffect $ 
-                           producer >-> P.tee (toOutput outbox1 >> P.drain) 
-                                    >->       (toOutput outbox2 >> P.drain)   
-                       sealing <- async $ wait feeding `finally` atomically seal1 
-                                                       `finally` atomically seal2
-                       return $ Right ()
-                    )
-                    (fmap (uncurry ($)) <$> conc ((fs $ fromInput inbox1) 
-                                                    `finally` atomically seal1) 
-                                                 ((as $ fromInput inbox2) 
-                                                    `finally` atomically seal2) 
-                    )
+          r <- conceit (do
+                          feeding <- async $ runEffect $ 
+                              producer >-> P.tee (toOutput outbox1 >> P.drain) 
+                                       >->       (toOutput outbox2 >> P.drain)   
+                          sealing <- async $ wait feeding `finally` atomically seal1 
+                                                          `finally` atomically seal2
+                          return $ Right ()
+                       )
+                       (fmap (uncurry ($)) <$> conceit ((fs $ fromInput inbox1) 
+                                                       `finally` atomically seal1) 
+                                                       ((as $ fromInput inbox2) 
+                                                       `finally` atomically seal2) 
+                       )
           return $ fmap snd r
 
 forkProd :: (Show e, Typeable e) 
