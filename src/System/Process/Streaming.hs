@@ -10,7 +10,7 @@
 -- instead of throwing exceptions.
 --
 -- See the functions 'execute' and 'executei' for an entry point. Then the
--- functions 'separate' and 'combineLines' that handle the consumption of
+-- functions 'separate' and 'combined' that handle the consumption of
 -- stdout and stderr.
 --
 -- Regular 'Consumer's, 'Parser's from @pipes-parse@ and folds from
@@ -27,7 +27,7 @@ module System.Process.Streaming (
           execute
         , executei
         , exitCode
-        , separate
+        , separated
 
         -- * Execution with combined stdout/stderr
         , LinePolicy
@@ -35,7 +35,7 @@ module System.Process.Streaming (
         , LeftoverPolicy
         , ignoreLeftovers
         , failOnLeftovers
-        , combineLines
+        , combined
 
         -- * Constructing feeding/consuming functions
         , useConsumer
@@ -219,13 +219,12 @@ until both @stdout@ and @stderr@ are closed by the external process.
    However, if any of the consuming functions fails with @e@, the whole
 computation fails immediately with @e@.
   -}
-separate :: (Show e, Typeable e)
-         => (Producer ByteString IO () -> IO (Either e a))
-         -> (Producer ByteString IO () -> IO (Either e b))
-         -> Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e (a,b))
-separate outfunc errfunc outprod errprod = 
-    conceit (buffer_ outfunc outprod)
-         (buffer_ errfunc errprod)
+separated :: (Show e, Typeable e)
+          => (Producer ByteString IO () -> IO (Either e a))
+          -> (Producer ByteString IO () -> IO (Either e b))
+          -> Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e (a,b))
+separated outfunc errfunc outprod errprod = 
+    conceit (buffer_ outfunc outprod) (buffer_ errfunc errprod)
 
 {-|
   Type synonym for a function that takes a method to "tear down" a FreeT-based
@@ -237,7 +236,7 @@ See the @pipes-group@ package for utilities on how to manipulate these
 FreeT-based lists. They allow you to handle individual lines without forcing
 you to have a whole line in memory at any given time.
 
-  See also 'linePolicy' and 'combineLines'.
+  See also 'linePolicy' and 'combined'.
 -} 
 type LinePolicy e = (FreeT (Producer T.Text IO) IO (Producer ByteString IO ()) -> IO (Producer ByteString IO ())) -> Producer ByteString IO () -> IO (Either e ())
 
@@ -316,29 +315,29 @@ consumed by the function passed as argument.
 happen, but the computation is aborted immediately if any error @e@ is
 returned. 
 
-    'combineLines' returns a function that can be plugged into 'execute' or
+    'combined' returns a function that can be plugged into 'execute' or
 'executei'. 
 
-    /Beware!/ 'combineLines' avoids situations in which a line emitted
+    /Beware!/ 'combined' avoids situations in which a line emitted
 in @stderr@ cuts a long line emitted in @stdout@, see
 <http://unix.stackexchange.com/questions/114182/can-redirecting-stdout-and-stderr-to-the-same-file-mangle-lines here> for a description of the problem.  To avoid this, the combined text
 stream is locked while writing each individual line. But this means that if the
 external program stops writing to a handle /while in the middle of a line/,
 lines coming from the other handles won't get printed, either!
  -}
-combineLines :: (Show e, Typeable e) 
-             => LinePolicy e 
-             -> LinePolicy e 
-        	 -> (Producer T.Text IO () -> IO (Either e a))
-             -> Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e a)
-combineLines fun1 fun2 combinedConsumer prod1 prod2 = 
-    combineManyLines [fmap (($prod1).buffer_) fun1, fmap (($prod2).buffer_) fun2] combinedConsumer 
+combined :: (Show e, Typeable e) 
+         => LinePolicy e 
+         -> LinePolicy e 
+         -> (Producer T.Text IO () -> IO (Either e a))
+         -> Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e a)
+combined fun1 fun2 combinedConsumer prod1 prod2 = 
+    manyCombined [fmap (($prod1).buffer_) fun1, fmap (($prod2).buffer_) fun2] combinedConsumer 
     
-combineManyLines :: (Show e, Typeable e) 
-                 => [((FreeT (Producer T.Text IO) IO (Producer ByteString IO ())) -> IO (Producer ByteString IO ())) -> IO (Either e ())]
-        	     -> (Producer T.Text IO () -> IO (Either e a))
-        	     -> IO (Either e a) 
-combineManyLines actions consumer = do
+manyCombined :: (Show e, Typeable e) 
+             => [((FreeT (Producer T.Text IO) IO (Producer ByteString IO ())) -> IO (Producer ByteString IO ())) -> IO (Either e ())]
+        	 -> (Producer T.Text IO () -> IO (Either e a))
+        	 -> IO (Either e a) 
+manyCombined actions consumer = do
     (outbox, inbox, seal) <- spawn' Unbounded
     mVar <- newMVar outbox
     r <- conceit (mapConceit ($ iterTLines mVar) actions `finally` atomically seal)
@@ -352,7 +351,7 @@ combineManyLines actions consumer = do
 
 {-|
     Useful for constructing @stdout@ or @stderr@ consuming functions from a
-'Consumer', to be plugged into 'separated' or 'combineLines'.
+'Consumer', to be plugged into 'separated' or 'combined'.
 
     You may need to use 'surely' for the types to fit.
  -}
@@ -410,11 +409,11 @@ monoidally errh activity proxy = do
         Right () -> Right $ w
 
 {-|
-    Value to plug into a 'separate' or 'combineLines' function when we are not
+    Value to plug into a 'separate' or 'combined' function when we are not
 interested in doing anything with the handle. It returns immediately with @()@. 
 
     Notice that even if 'nop' returns immediately,  'separate' and
-'combineLines' drain the streams to completion before returning.
+'combined' drain the streams to completion before returning.
   -}
 nop :: (MFunctor t, Monad m) => t m l -> m (Either e ()) 
 nop = \_ -> return $ Right () 
