@@ -262,10 +262,10 @@ linePolicy :: (forall r. Producer ByteString IO r -> Producer T.Text IO (Produce
 linePolicy decoder transform lopo teardown producer = do
     teardown freeLines >>= lopo ()
     where
-    freeLines =  transFreeT transform 
-               . viewLines 
-               . decoder
-               $ producer
+    freeLines = transFreeT transform 
+              . viewLines 
+              . decoder
+              $ producer
     viewLines = getConst . T.lines Const
 
 {-|
@@ -371,7 +371,7 @@ example folds from "Pipes.Prelude", or functions created from simple
 
   > surely = fmap (fmap Right)
  -}
-surely :: (Functor f, Functor f') => f (f' a) -> f (f' (Either e a))
+surely :: (Functor f0, Functor f1) => f0 (f1 a) -> f0 (f1 (Either e a))
 surely = fmap (fmap Right)
 
 {-| 
@@ -505,24 +505,24 @@ mapConceit :: (Show e, Typeable e, Traversable t) => (a -> IO (Either e b)) -> t
 mapConceit f = revealError .  mapConcurrently (elideError . f)
 
 {-| 
-    'ForkProd' is a newtype around a function that does something with a
+    'Siphon' is a newtype around a function that does something with a
 'Producer'. The applicative instance fuses the functions, so that each one
 receives its own copy of the 'Producer' and runs conceiturrently with the others.
 Like with 'Conceit', if any of the functions fails with @e@ the others are
 immediately cancelled and the whole computation fails with @e@.   
 
-    'ForkProd' and its accompanying functions are useful to run multiple
+    'Siphon' and its accompanying functions are useful to run multiple
 parsers from "Pipes.Parse" in parallel over the same 'Producer'.
  -}
-newtype ForkProd b e a = ForkProd { runForkProd :: Producer b IO () -> IO (Either e a) }
+newtype Siphon b e a = Siphon { runSiphon :: Producer b IO () -> IO (Either e a) }
 
-instance Functor (ForkProd b e) where
-  fmap f (ForkProd x) = ForkProd $ fmap (fmap (fmap f)) x
+instance Functor (Siphon b e) where
+  fmap f (Siphon x) = Siphon $ fmap (fmap (fmap f)) x
 
-instance (Show e, Typeable e) => Applicative (ForkProd b e) where
-  pure = ForkProd . pure . pure . pure
-  ForkProd fs <*> ForkProd as = 
-      ForkProd $ \producer -> do
+instance (Show e, Typeable e) => Applicative (Siphon b e) where
+  pure = Siphon . pure . pure . pure
+  Siphon fs <*> Siphon as = 
+      Siphon $ \producer -> do
           (outbox1,inbox1,seal1) <- spawn' Unbounded
           (outbox2,inbox2,seal2) <- spawn' Unbounded
           r <- conceit (do
@@ -540,12 +540,11 @@ instance (Show e, Typeable e) => Applicative (ForkProd b e) where
                        )
           return $ fmap snd r
 
-forkProd :: (Show e, Typeable e) 
-         => (Producer b IO () -> IO (Either e x))
-         -> (Producer b IO () -> IO (Either e y))
-         -> (Producer b IO () -> IO (Either e (x,y)))
-forkProd c1 c2 = runForkProd $ (,) <$> ForkProd c1
-                                   <*> ForkProd c2
+forkSiphon :: (Show e, Typeable e) 
+           => (Producer b IO () -> IO (Either e x))
+           -> (Producer b IO () -> IO (Either e y))
+           -> (Producer b IO () -> IO (Either e (x,y)))
+forkSiphon c1 c2 = runSiphon $ (,) <$> Siphon c1 <*> Siphon c2
 
 {- $reexports
  
