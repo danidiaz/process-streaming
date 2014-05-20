@@ -51,8 +51,10 @@ module System.Process.Streaming (
         , Conceit (..)
         , conceit
         , mapConceit
-        , ForkProd (..)
-        , forkProd
+        , Siphon (..)
+        , forkSiphon
+        , SiphonL (..)
+        , SiphonR (..)
 
         -- * Re-exports
         -- $reexports
@@ -60,6 +62,8 @@ module System.Process.Streaming (
     ) where
 
 import Data.Maybe
+import Data.Bifunctor
+import Data.Profunctor
 import Data.Functor.Identity
 import Data.Either
 import Data.Either.Combinators
@@ -379,13 +383,11 @@ surely = fmap (fmap Right)
 transformer.
  -}
 safely :: (MFunctor t, C.MonadMask m, MonadIO m) 
-       => (t (SafeT m) l -> (SafeT m) x) 
-       -> t m l -> m x 
+       => (t (SafeT m) l -> (SafeT m) x) -> t m l -> m x 
 safely activity = runSafeT . activity . hoist lift 
 
 fallibly :: (MFunctor t, Monad m, Error e) 
-         => (t (ErrorT e m) l -> (ErrorT e m) x) 
-         -> t m l -> m (Either e x) 
+         => (t (ErrorT e m) l -> (ErrorT e m) x) -> t m l -> m (Either e x) 
 fallibly activity = runErrorT . activity . hoist lift 
 
 {-|
@@ -479,6 +481,9 @@ newtype Conceit e a = Conceit { runConceit :: IO (Either e a) }
 instance Functor (Conceit e) where
   fmap f (Conceit x) = Conceit $ fmap (fmap f) x
 
+instance Bifunctor Conceit where
+  bimap f g (Conceit x) = Conceit $ liftM (bimap f g) x
+
 instance (Show e, Typeable e) => Applicative (Conceit e) where
   pure = Conceit . pure . pure
   Conceit fs <*> Conceit as =
@@ -489,6 +494,10 @@ instance (Show e, Typeable e) => Alternative (Conceit e) where
   empty = Conceit $ forever (threadDelay maxBound)
   Conceit as <|> Conceit bs =
     Conceit $ either id id <$> race as bs
+
+instance (Show e, Typeable e, Monoid a) => Monoid (Conceit e a) where
+   mempty = Conceit . pure . pure $ mempty
+   mappend c1 c2 = (<>) <$> c1 <*> c2
 
 conceit :: (Show e, Typeable e) 
         => IO (Either e a)
@@ -519,6 +528,9 @@ newtype Siphon b e a = Siphon { runSiphon :: Producer b IO () -> IO (Either e a)
 instance Functor (Siphon b e) where
   fmap f (Siphon x) = Siphon $ fmap (fmap (fmap f)) x
 
+instance Bifunctor (Siphon b) where
+  bimap f g (Siphon x) = Siphon $ fmap (liftM  (bimap f g)) x
+
 instance (Show e, Typeable e) => Applicative (Siphon b e) where
   pure = Siphon . pure . pure . pure
   Siphon fs <*> Siphon as = 
@@ -540,11 +552,26 @@ instance (Show e, Typeable e) => Applicative (Siphon b e) where
                        )
           return $ fmap snd r
 
+instance (Show e, Typeable e, Monoid a) => Monoid (Siphon b e a) where
+   mempty = Siphon . pure . pure . pure $ mempty
+   mappend s1 s2 = (<>) <$> s1 <*> s2
+
 forkSiphon :: (Show e, Typeable e) 
            => (Producer b IO () -> IO (Either e x))
            -> (Producer b IO () -> IO (Either e y))
            -> (Producer b IO () -> IO (Either e (x,y)))
 forkSiphon c1 c2 = runSiphon $ (,) <$> Siphon c1 <*> Siphon c2
+
+newtype SiphonR e b a = SiphonR { runSiphonR :: Producer b IO () -> IO (Either e a) }
+
+instance Profunctor (SiphonR e) where
+     dimap ab cd (SiphonR pf) = SiphonR $ \p -> liftM (fmap cd) $ pf $ p >-> P.map ab
+
+newtype SiphonL a b e = SiphonL { runSiphonL :: Producer b IO () -> IO (Either e a) }
+
+instance Profunctor (SiphonL e) where
+     dimap ab cd (SiphonL pf) = SiphonL $ \p -> liftM (bimap cd id) $ pf $ p >-> P.map ab
+
 
 {- $reexports
  
