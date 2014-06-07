@@ -32,7 +32,7 @@ module System.Process.Streaming (
         -- * Execution with combined stdout/stderr
         , LinePolicy
         , linePolicy
-        , LeftoverPolicy
+        , LeftoverPolicy(..)
         , ignoreLeftovers
         , failOnLeftovers
         , combined
@@ -47,7 +47,7 @@ module System.Process.Streaming (
         , nop
         , encoding
 
-        -- * Conceiturrency helpers
+        -- * Concurrency helpers
         , Conceit (..)
         , conceit
         , mapConceit
@@ -222,7 +222,7 @@ computation fails immediately with @e@.
 separated :: (Show e, Typeable e)
           => (Producer ByteString IO () -> IO (Either e a))
           -> (Producer ByteString IO () -> IO (Either e b))
-          -> Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e (a,b))
+          ->  Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e (a,b))
 separated outfunc errfunc outprod errprod = 
     conceit (buffer_ outfunc outprod) (buffer_ errfunc errprod)
 
@@ -278,6 +278,12 @@ type synonym for a function that receives a value @a@ and some leftovers @l@,
 and may modify the value or fail outright, depending of what the leftovers are.
  -}
 data LeftoverPolicy a l e = LeftoverPolicy { runLeftoverPolicy :: a -> Producer l IO () -> IO (Either e a) }
+
+instance Functor (LeftoverPolicy a l) where
+  fmap f (LeftoverPolicy x) = LeftoverPolicy $ fmap (fmap (fmap (bimap f id))) x
+
+instance Profunctor (LeftoverPolicy a) where
+     dimap ab cd (LeftoverPolicy pf) = LeftoverPolicy $ \a p -> liftM (bimap cd id) $ pf a $ p >-> P.map ab
 
 {-|
     Never fails for any leftover.
@@ -382,11 +388,13 @@ surely = fmap (fmap Right)
 transformer.
  -}
 safely :: (MFunctor t, C.MonadMask m, MonadIO m) 
-       => (t (SafeT m) l -> (SafeT m) x) -> t m l -> m x 
+       => (t (SafeT m) l -> (SafeT m) x) 
+       ->  t m         l -> m         x 
 safely activity = runSafeT . activity . hoist lift 
 
 fallibly :: (MFunctor t, Monad m, Error e) 
-         => (t (ErrorT e m) l -> (ErrorT e m) x) -> t m l -> m (Either e x) 
+         => (t (ErrorT e m) l -> (ErrorT e m) x) 
+         ->  t m            l -> m (Either e x) 
 fallibly activity = runErrorT . activity . hoist lift 
 
 {-|
@@ -401,7 +409,7 @@ results, use 'const' as the first argument.
 monoidally :: (MFunctor t,Monad m,Monoid w, Error e') 
            => (e' -> w -> e) 
            -> (t (ErrorT e' (WriterT w m)) l -> ErrorT e' (WriterT w m) ())
-           -> t m l -> m (Either e w)
+           ->  t m                         l -> m                       (Either e w)
 monoidally errh activity proxy = do
     (r,w) <- runWriterT . runErrorT . activity . hoist (lift.lift) $ proxy
     return $ case r of
@@ -415,16 +423,15 @@ interested in doing anything with the handle. It returns immediately with @()@.
     Notice that even if 'nop' returns immediately,  'separate' and
 'combined' drain the streams to completion before returning.
   -}
-nop :: (MFunctor t, Monad m) => t m l -> m (Either e ()) 
-nop = \_ -> return $ Right () 
+nop :: Applicative m => i -> m (Either e ()) 
+nop = pure . pure . pure $ ()
 
 buffer :: (Show e, Typeable e)
        => LeftoverPolicy a l e
-       -> (Producer b IO () -> IO (Either e a))
-       -> Producer b IO (Producer l IO r) -> IO (Either e a)
+       -> (Producer b IO ()                 -> IO (Either e a))
+       ->  Producer b IO (Producer l IO ()) -> IO (Either e a)
 buffer policy activity producer = do
     (outbox,inbox,seal) <- spawn' Unbounded
-    let producer = fmap (fmap $ const ()) producer
     r <- conceit 
               (do feeding <- async $ runEffect $ 
                         producer >-> (toOutput outbox >> P.drain)
@@ -437,7 +444,7 @@ buffer policy activity producer = do
 
 buffer_ :: (Show e, Typeable e) 
         => (Producer ByteString IO () -> IO (Either e a))
-        -> Producer ByteString IO () -> IO (Either e a)
+        ->  Producer ByteString IO () -> IO (Either e a)
 buffer_ activity producer = do
     (outbox,inbox,seal) <- spawn' Unbounded
     r <- conceit 
@@ -452,10 +459,10 @@ buffer_ activity producer = do
    Adapts a function that works with 'Producer's of decoded values so that it works with 'Producer's of still undecoded values, by supplying a decoding function and a 'LeftoverPolicy'.
  -}
 encoding :: (Show e, Typeable e) 
-         => (Producer b IO r -> Producer t IO (Producer b IO r))
-         -> LeftoverPolicy x b e
-         -> (Producer t IO () -> IO (Either e x))
-         -> Producer b IO r -> IO (Either e x)
+         => (Producer b IO () -> Producer t IO (Producer b IO ()))
+         -> LeftoverPolicy a b e
+         -> (Producer t IO () -> IO (Either e a))
+         ->  Producer b IO () -> IO (Either e a)
 encoding decoder policy activity producer = buffer policy activity $ decoder producer 
 
 
@@ -567,19 +574,18 @@ instance (Show e, Typeable e, Monoid a) => Monoid (Siphon b e a) where
 forkSiphon :: (Show e, Typeable e) 
            => (Producer b IO () -> IO (Either e x))
            -> (Producer b IO () -> IO (Either e y))
-           -> (Producer b IO () -> IO (Either e (x,y)))
+           ->  Producer b IO () -> IO (Either e (x,y))
 forkSiphon c1 c2 = runSiphon $ (,) <$> Siphon c1 <*> Siphon c2
-
-newtype SiphonR e b a = SiphonR { runSiphonR :: Producer b IO () -> IO (Either e a) }
-
-instance Profunctor (SiphonR e) where
-     dimap ab cd (SiphonR pf) = SiphonR $ \p -> liftM (fmap cd) $ pf $ p >-> P.map ab
 
 newtype SiphonL a b e = SiphonL { runSiphonL :: Producer b IO () -> IO (Either e a) }
 
 instance Profunctor (SiphonL e) where
      dimap ab cd (SiphonL pf) = SiphonL $ \p -> liftM (bimap cd id) $ pf $ p >-> P.map ab
 
+newtype SiphonR e b a = SiphonR { runSiphonR :: Producer b IO () -> IO (Either e a) }
+
+instance Profunctor (SiphonR e) where
+     dimap ab cd (SiphonR pf) = SiphonR $ \p -> liftM (fmap cd) $ pf $ p >-> P.map ab
 
 {- $reexports
  
