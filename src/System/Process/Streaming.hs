@@ -26,8 +26,6 @@
 module System.Process.Streaming ( 
         -- * Execution helpers
           execute
-        , execute'
-        , executei
         , exitCode
         , separated
         , PipingPolicy
@@ -70,7 +68,7 @@ import Data.Bifunctor
 import Data.Profunctor
 import Data.Functor.Identity
 import Data.Either
-import Data.Either.Combinators
+--import Data.Either.Combinators
 import Data.Monoid
 import Data.Traversable
 import Data.Typeable
@@ -80,7 +78,7 @@ import Control.Monad
 import Control.Monad.Trans.Free
 import Control.Monad.Error
 import Control.Monad.State
-import Control.Monad.Morph
+--import Control.Monad.Morph
 import Control.Monad.Writer.Strict
 import qualified Control.Monad.Catch as C
 import Control.Exception
@@ -116,18 +114,6 @@ terminated.
    This function sets the @std_out@ and @std_err@ fields in the 'CreateProcess'
 record to 'CreatePipe'.
  -}
-execute :: (Show e, Typeable e) 
-        => CreateProcess 
-        -> (Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e a))
-        -> IO (Either e (ExitCode,a))
-execute spec consumefunc = do
-    executeX handle2 spec' $ \(hout,herr) ->
-        (,) (consumefunc (fromHandle hout) (fromHandle herr))
-            (hClose hout `finally` hClose herr)
-    where 
-    spec' = spec { std_out = CreatePipe
-                 , std_err = CreatePipe
-                 } 
 
 {-|
     Like `executei` but with an additional argument consisting in a /feeding/
@@ -142,22 +128,6 @@ functions, not /before/ them.
    'executei' sets the @std_in@, @std_out@ and @std_err@ fields in the
 'CreateProcess' record to 'CreatePipe'.
  -}
-executei :: (Show e, Typeable e) 
-         => CreateProcess 
-         -> (Consumer ByteString IO ()                              -> IO (Either e a))
-         -> (Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e b))
-         -> IO (Either e (ExitCode,(a,b)))
-executei spec feeder consumefunc = do
-    executeX handle3 spec' $ \(hin,hout,herr) ->
-        (,) (conceit (feeder (toHandle hin) `finally` hClose hin) 
-                  (consumefunc (fromHandle hout) (fromHandle herr)))
-            (hClose hin `finally` hClose hout `finally` hClose herr)
-    where 
-    spec' = spec { std_in = CreatePipe
-                 , std_out = CreatePipe
-                 , std_err = CreatePipe
-                 } 
-
 terminateCarefully :: ProcessHandle -> IO ()
 terminateCarefully pHandle = do
     mExitCode <- getProcessExitCode pHandle   
@@ -182,7 +152,7 @@ data PipingPolicy e a = forall t. PipingPolicy (CreateProcess -> CreateProcess) 
 
 pipeoe :: (Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e a))
        -> PipingPolicy e a
-pipeoe consumefunc = PipingPolicy changecp handle2' handler  
+pipeoe consumefunc = PipingPolicy changecp handle2 handler  
     where handler (hout,herr) =
             (,) (consumefunc (fromHandle hout) (fromHandle herr))
                 (hClose hout `finally` hClose herr)
@@ -194,7 +164,7 @@ pipeioe :: (Show e, Typeable e)
         => (Consumer ByteString IO ()                              -> IO (Either e a))
         -> (Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e b))
         -> PipingPolicy e (a,b)
-pipeioe feeder consumefunc = PipingPolicy changecp handle3' handler  
+pipeioe feeder consumefunc = PipingPolicy changecp handle3 handler  
     where handler (hin,hout,herr) =
             (,) (conceit (feeder (toHandle hin) `finally` hClose hin) 
                          (consumefunc (fromHandle hout) (fromHandle herr)))
@@ -204,25 +174,8 @@ pipeioe feeder consumefunc = PipingPolicy changecp handle3' handler
                            , std_err = CreatePipe 
                            }
 
-executeX :: ((forall m. Applicative m => ((t, ProcessHandle) -> m (t, ProcessHandle)) -> (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) -> m (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle))) -> CreateProcess -> (t -> (IO (Either e a), IO())) -> IO (Either e (ExitCode,a))
-executeX somePrism procSpec action = mask $ \restore -> do
-    handles <- createProcess procSpec  
-    case getFirst . getConst . somePrism (Const . First . Just) $ handles of
-        Nothing -> 
-            throwIO (userError "stdin/stdout/stderr handle unexpectedly null")
-            `finally`
-            let (_,_,_,phandle) = handles 
-            in terminateCarefully phandle 
-        Just (htuple,phandle) -> 
-            let (a, cleanup) = action htuple in 
-            -- Handles must be closed *after* terminating the process, because a close
-            -- operation may block if the external process has unflushed bytes in the stream.
-            (terminateOnError phandle $ restore a `onException` terminateCarefully phandle) 
-            `finally` 
-            cleanup 
-
-execute' :: PipingPolicy e a -> CreateProcess -> IO (Either e (ExitCode,a))
-execute' (PipingPolicy tr somePrism action) procSpec = mask $ \restore -> do
+execute :: PipingPolicy e a -> CreateProcess -> IO (Either e (ExitCode,a))
+execute (PipingPolicy tr somePrism action) procSpec = mask $ \restore -> do
     (min,mout,merr,phandle) <- createProcess (tr procSpec)
     case getFirst . getConst . somePrism (Const . First . Just) $ (min,mout,merr) of
         Nothing -> 
@@ -244,14 +197,10 @@ execute' (PipingPolicy tr somePrism action) procSpec = mask $ \restore -> do
 
     Usually composed with the @execute@ functions. 
   -}
-exitCode :: Functor c => (Int -> e) -> c (Either e (ExitCode,a)) -> c (Either e a)
-exitCode f m = conversion <$> m 
-    where
-    conversion r = case r of
-        Left e -> Left e   
-        Right (code,a) -> case code of
-            ExitSuccess	-> Right a
-            ExitFailure i -> Left $ f i 
+exitCode :: (ExitCode,a) -> Either Int a
+exitCode (ec,a) = case ec of
+    ExitSuccess -> Right a 
+    ExitFailure i -> Left i
 
 {-|
     'separate' should be used when we want to consume @stdout@ and @stderr@
