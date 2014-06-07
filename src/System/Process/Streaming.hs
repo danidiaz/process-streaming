@@ -260,10 +260,10 @@ decoding failures.
 
 linePolicy :: (forall r. Producer ByteString IO r -> Producer T.Text IO (Producer ByteString IO r)) 
            -> (forall r. Producer T.Text IO r -> Producer T.Text IO r)
-           -> (LeftoverPolicy (Producer ByteString IO ()) e ())
+           -> (LeftoverPolicy () ByteString e)
            -> LinePolicy e 
 linePolicy decoder transform lopo teardown producer = do
-    teardown freeLines >>= lopo ()
+    teardown freeLines >>= runLeftoverPolicy lopo ()
     where
     freeLines = transFreeT transform 
               . viewLines 
@@ -277,13 +277,13 @@ in the result value of 'Producer's (often as 'Producer's themselves). This is a
 type synonym for a function that receives a value @a@ and some leftovers @l@,
 and may modify the value or fail outright, depending of what the leftovers are.
  -}
-type LeftoverPolicy l e a = a -> l -> IO (Either e a)
+data LeftoverPolicy a l e = LeftoverPolicy { runLeftoverPolicy :: a -> Producer l IO () -> IO (Either e a) }
 
 {-|
     Never fails for any leftover.
  -}
-ignoreLeftovers :: LeftoverPolicy l e a
-ignoreLeftovers a _ =  return $ Right a
+ignoreLeftovers :: LeftoverPolicy a l e
+ignoreLeftovers =  LeftoverPolicy $ pure . pure . pure
 
 {-|
     Fails if it encounters any leftover, and constructs the error out of the
@@ -297,8 +297,8 @@ first undedcoded data.
 the error @a@ and/or the first undecoded values @b@ in your custom error
 datatype.
  -}
-failOnLeftovers :: (a -> b -> e) -> LeftoverPolicy (Producer b IO ()) e a
-failOnLeftovers errh a remainingBytes = do
+failOnLeftovers :: (a -> b -> e) -> LeftoverPolicy a b e 
+failOnLeftovers errh = LeftoverPolicy $ \a remainingBytes -> do
     r <- next remainingBytes
     return $ case r of 
         Left () -> Right a
@@ -419,11 +419,12 @@ nop :: (MFunctor t, Monad m) => t m l -> m (Either e ())
 nop = \_ -> return $ Right () 
 
 buffer :: (Show e, Typeable e)
-       => LeftoverPolicy l e a
+       => LeftoverPolicy a l e
        -> (Producer b IO () -> IO (Either e a))
-       -> Producer b IO l -> IO (Either e a)
+       -> Producer b IO (Producer l IO r) -> IO (Either e a)
 buffer policy activity producer = do
     (outbox,inbox,seal) <- spawn' Unbounded
+    let producer = fmap (fmap $ const ()) producer
     r <- conceit 
               (do feeding <- async $ runEffect $ 
                         producer >-> (toOutput outbox >> P.drain)
@@ -432,22 +433,30 @@ buffer policy activity producer = do
               (activity (fromInput inbox) `finally` atomically seal)
     case r of 
         Left e -> return $ Left e
-        Right (lp,r') -> policy r' lp
+        Right (lp,r') -> runLeftoverPolicy policy r' lp
+
+buffer_ :: (Show e, Typeable e) 
+        => (Producer ByteString IO () -> IO (Either e a))
+        -> Producer ByteString IO () -> IO (Either e a)
+buffer_ activity producer = do
+    (outbox,inbox,seal) <- spawn' Unbounded
+    r <- conceit 
+              (do feeding <- async $ runEffect $ 
+                        producer >-> (toOutput outbox >> P.drain)
+                  Right <$> wait feeding `finally` atomically seal
+              )
+              (activity (fromInput inbox) `finally` atomically seal)
+    return $ fmap snd r 
 
 {-|
    Adapts a function that works with 'Producer's of decoded values so that it works with 'Producer's of still undecoded values, by supplying a decoding function and a 'LeftoverPolicy'.
  -}
 encoding :: (Show e, Typeable e) 
          => (Producer b IO r -> Producer t IO (Producer b IO r))
-         -> LeftoverPolicy (Producer b IO r) e x
+         -> LeftoverPolicy x b e
          -> (Producer t IO () -> IO (Either e x))
          -> Producer b IO r -> IO (Either e x)
 encoding decoder policy activity producer = buffer policy activity $ decoder producer 
-
-buffer_ :: (Show e, Typeable e) 
-        => (Producer ByteString IO () -> IO (Either e a))
-        -> Producer ByteString IO () -> IO (Either e a)
-buffer_ = buffer ignoreLeftovers
 
 
 data WrappedError e = WrappedError e
