@@ -24,23 +24,31 @@
 {-# LANGUAGE RankNTypes #-}
 
 module System.Process.Streaming ( 
-        -- * Execution helpers
+        -- * Execution
           execute
         , exitCode
+
+        -- * Piping standard streams
         , PipingPolicy
         , nopiping
         , pipeoe
         , pipeioe
+
+        -- * Separate stdout/stderr 
         , separated
-        -- * Execution with combined stdout/stderr
+
+        -- * stdout/stderr combined as text
+        , combined
         , LinePolicy
         , linePolicy
+
+        -- * Decoding and leftovers 
+        , encoding
         , LeftoverPolicy(..)
         , ignoreLeftovers
         , failOnLeftovers
-        , combined
 
-        -- * Constructing feeding/consuming functions
+        -- * Construction of feeding/consuming functions
         , useConsumer
         , useProducer
         , surely
@@ -48,12 +56,12 @@ module System.Process.Streaming (
         , fallibly
         , monoidally
         , nop
-        , encoding
 
         -- * Concurrency helpers
         , Conceit (..)
         , conceit
         , mapConceit
+
         , Siphon (..)
         , forkSiphon
         , SiphonL (..)
@@ -235,7 +243,7 @@ you to have a whole line in memory at any given time.
 
   See also 'linePolicy' and 'combined'.
 -} 
-type LinePolicy e = (FreeT (Producer T.Text IO) IO (Producer ByteString IO ()) -> IO (Producer ByteString IO ())) -> Producer ByteString IO () -> IO (Either e ())
+data LinePolicy e = LinePolicy ((FreeT (Producer T.Text IO) IO (Producer ByteString IO ()) -> IO (Producer ByteString IO ())) -> Producer ByteString IO () -> IO (Either e ()))
 
 {-|
     Constructs a 'LinePolicy'.
@@ -259,14 +267,13 @@ linePolicy :: (forall r. Producer ByteString IO r -> Producer T.Text IO (Produce
            -> (forall r. Producer T.Text IO r -> Producer T.Text IO r)
            -> (LeftoverPolicy () ByteString e)
            -> LinePolicy e 
-linePolicy decoder transform lopo teardown producer = do
+linePolicy decoder transform lopo = LinePolicy $ \teardown producer -> do
+    let freeLines = transFreeT transform 
+                  . viewLines 
+                  . decoder
+                  $ producer
+        viewLines = getConst . T.lines Const
     teardown freeLines >>= runLeftoverPolicy lopo ()
-    where
-    freeLines = transFreeT transform 
-              . viewLines 
-              . decoder
-              $ producer
-    viewLines = getConst . T.lines Const
 
 {-|
     In the Pipes ecosystem, leftovers from decoding operations are often stored
@@ -333,7 +340,7 @@ combined :: (Show e, Typeable e)
          -> LinePolicy e 
          -> (Producer T.Text IO () -> IO (Either e a))
          -> Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e a)
-combined fun1 fun2 combinedConsumer prod1 prod2 = 
+combined (LinePolicy fun1) (LinePolicy fun2) combinedConsumer prod1 prod2 = 
     manyCombined [fmap (($prod1).buffer_) fun1, fmap (($prod2).buffer_) fun2] combinedConsumer 
     
 manyCombined :: (Show e, Typeable e) 
