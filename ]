@@ -26,13 +26,11 @@
 module System.Process.Streaming ( 
         -- * Execution helpers
           execute
-        , execute'
         , executei
         , exitCode
         , separated
         , PipingPolicy
         , pipeoe
-        , pipeioe
         -- * Execution with combined stdout/stderr
         , LinePolicy
         , linePolicy
@@ -182,28 +180,9 @@ data PipingPolicy e a = forall t. PipingPolicy (CreateProcess -> CreateProcess) 
 
 pipeoe :: (Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e a))
        -> PipingPolicy e a
-pipeoe consumefunc = PipingPolicy changecp handle2' handler  
-    where handler (hout,herr) =
-            (,) (consumefunc (fromHandle hout) (fromHandle herr))
-                (hClose hout `finally` hClose herr)
-          changecp cp = cp { std_out = CreatePipe 
-                           , std_err = CreatePipe 
-                           }
+pipeoe = ( \cp -> cp { std_out = CreatePipe , std_err = CreatePipe } , handle3',  ) 
 
-pipeioe :: (Show e, Typeable e)
-        => (Consumer ByteString IO ()                              -> IO (Either e a))
-        -> (Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e b))
-        -> PipingPolicy e (a,b)
-pipeioe feeder consumefunc = PipingPolicy changecp handle3' handler  
-    where handler (hin,hout,herr) =
-            (,) (conceit (feeder (toHandle hin) `finally` hClose hin) 
-                         (consumefunc (fromHandle hout) (fromHandle herr)))
-                (hClose hin `finally` hClose hout `finally` hClose herr)
-          changecp cp = cp { std_in = CreatePipe
-                           , std_out = CreatePipe 
-                           , std_err = CreatePipe 
-                           }
-
+    spec' = spec { std_out = CreatePipe , std_err = CreatePipe } 
 executeX :: ((forall m. Applicative m => ((t, ProcessHandle) -> m (t, ProcessHandle)) -> (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) -> m (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle))) -> CreateProcess -> (t -> (IO (Either e a), IO())) -> IO (Either e (ExitCode,a))
 executeX somePrism procSpec action = mask $ \restore -> do
     handles <- createProcess procSpec  
@@ -215,22 +194,6 @@ executeX somePrism procSpec action = mask $ \restore -> do
             in terminateCarefully phandle 
         Just (htuple,phandle) -> 
             let (a, cleanup) = action htuple in 
-            -- Handles must be closed *after* terminating the process, because a close
-            -- operation may block if the external process has unflushed bytes in the stream.
-            (terminateOnError phandle $ restore a `onException` terminateCarefully phandle) 
-            `finally` 
-            cleanup 
-
-execute' :: PipingPolicy e a -> CreateProcess -> IO (Either e (ExitCode,a))
-execute' (PipingPolicy tr somePrism action) procSpec = mask $ \restore -> do
-    (min,mout,merr,phandle) <- createProcess (tr procSpec)
-    case getFirst . getConst . somePrism (Const . First . Just) $ (min,mout,merr) of
-        Nothing -> 
-            throwIO (userError "stdin/stdout/stderr handle unexpectedly null")
-            `finally`
-            terminateCarefully phandle 
-        Just t -> 
-            let (a, cleanup) = action t in 
             -- Handles must be closed *after* terminating the process, because a close
             -- operation may block if the external process has unflushed bytes in the stream.
             (terminateOnError phandle $ restore a `onException` terminateCarefully phandle) 

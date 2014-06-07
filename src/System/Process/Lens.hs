@@ -17,8 +17,11 @@ module System.Process.Lens (
        , pipe3
        , pipe2
        , pipe2h
+       , handles
        , handle3
+       , handle3'
        , handle2
+       , handle2'
     ) where
 
 import Data.Maybe
@@ -111,6 +114,13 @@ parameter.
 pipe2h :: Handle -> (StdStream,StdStream,StdStream)
 pipe2h handle = (UseHandle handle,CreatePipe,CreatePipe)
 
+handles :: forall m. Functor m => ((Maybe Handle, Maybe Handle, Maybe Handle) -> m (Maybe Handle, Maybe Handle, Maybe Handle)) -> (Maybe Handle,Maybe Handle ,Maybe Handle,ProcessHandle) -> m (Maybe Handle,Maybe Handle ,Maybe Handle,ProcessHandle) 
+handles f quad = setHandles quad <$> f (getHandles quad)  
+        where
+        setHandles (c1'',c2'',c3'',c4'') (c1',c2',c3') = (c1',c2',c3',c4'')
+        getHandles (c1'',c2'',c3'',c4'') = (c1'',c2'',c3'')
+    
+
 {-|
     A 'Prism' for the return value of 'createProcess' that removes the 'Maybe's from @stdin@, @stdout@ and @stderr@ or fails to match if any of them is 'Nothing'.
 
@@ -125,6 +135,15 @@ handle3 f quad = case impure quad of
     impure x = Left x
     justify ((h1, h2, h3), phandle) = (Just h1, Just h2, Just h3, phandle)  
 
+handle3' :: forall m. Applicative m => ((Handle, Handle, Handle) -> m (Handle, Handle, Handle)) -> (Maybe Handle, Maybe Handle, Maybe Handle) -> m (Maybe Handle, Maybe Handle, Maybe Handle)
+handle3' f quad = case impure quad of
+    Left l -> pure l
+    Right r -> fmap justify (f r)
+    where    
+    impure (Just h1, Just h2, Just h3) = Right (h1, h2, h3) 
+    impure x = Left x
+    justify (h1, h2, h3) = (Just h1, Just h2, Just h3)  
+
 {-|
     A 'Prism' for the return value of 'createProcess' that removes the 'Maybe's from @stdout@ and @stderr@ or fails to match if any of them is 'Nothing'.
 
@@ -138,4 +157,14 @@ handle2 f quad = case impure quad of
     impure (Nothing, Just h2, Just h3, phandle) = Right ((h2, h3), phandle) 
     impure x = Left x
     justify ((h2, h3), phandle) = (Nothing, Just h2, Just h3, phandle)  
+
+
+handle2' :: forall m. Applicative m => ((Handle, Handle) -> m (Handle, Handle)) -> (Maybe Handle, Maybe Handle, Maybe Handle) -> m (Maybe Handle, Maybe Handle, Maybe Handle)
+handle2' f quad = case impure quad of
+    Left l -> pure l
+    Right r -> fmap justify (f r)
+    where    
+    impure (Nothing, Just h2, Just h3) = Right (h2, h3) 
+    impure x = Left x
+    justify (h2, h3) = (Nothing, Just h2, Just h3)  
 
