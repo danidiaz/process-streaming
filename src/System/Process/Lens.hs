@@ -13,13 +13,14 @@ module System.Process.Lens (
        , _RawCommand
        , _cwd
        , _env
-       , stream3
-       , pipe3
-       , pipe2
-       , pipe2h
+       , streams
+       , _close_fds
+       , _create_group
+       , _delegate_ctlc 
        , handles
-       , handle3
-       , handle2
+       , nohandles
+       , handlesioe
+       , handlesoe
     ) where
 
 import Data.Maybe
@@ -81,69 +82,74 @@ _env f c = setEnv c <$> f (env c)
 {-| 
     A lens for the @(std_in,std_out,std_err)@ triplet.  
 
-    > stream3 :: Lens' CreateProcess (StdStream,StdStream,StdStream)
+    > streams :: Lens' CreateProcess (StdStream,StdStream,StdStream)
 -}
-stream3 :: forall f. Functor f => ((StdStream,StdStream,StdStream) -> f (StdStream,StdStream,StdStream)) -> CreateProcess -> f CreateProcess 
-stream3 f c = setStreams c <$> f (getStreams c)
+streams :: forall f. Functor f => ((StdStream,StdStream,StdStream) -> f (StdStream,StdStream,StdStream)) -> CreateProcess -> f CreateProcess 
+streams f c = setStreams c <$> f (getStreams c)
     where 
-    getStreams c = (std_in c,std_out c, std_err c)
-    setStreams c (s1,s2,s3) = c { std_in  = s1 
-                                , std_out = s2 
-                                , std_err = s3 
-                                } 
-{-|
-    > pipe3 = (CreatePipe,CreatePipe,CreatePipe)
--} 
-pipe3 :: (StdStream,StdStream,StdStream)
-pipe3 = (CreatePipe,CreatePipe,CreatePipe)
+        getStreams c = (std_in c,std_out c, std_err c)
+        setStreams c (s1,s2,s3) = c { std_in  = s1 
+                                    , std_out = s2 
+                                    , std_err = s3 
+                                    } 
 
-{-|
-    Specifies @CreatePipe@ for @std_out@ and @std_err@; @std_in@ is set to 'Inherit'.
+_close_fds :: forall f. Functor f => (Bool -> f Bool) -> CreateProcess -> f CreateProcess 
+_close_fds f c = set_close_fds c <$> f (close_fds c)
+    where
+    set_close_fds c cwd' = c { close_fds = cwd' } 
 
-    > pipe3 = (Inherit,CreatePipe,CreatePipe)
- -}
-pipe2 :: (StdStream,StdStream,StdStream)
-pipe2 = (Inherit,CreatePipe,CreatePipe)
 
-{-|
-    Specifies @CreatePipe@ for @std_out@ and @std_err@; @std_in@ is taken as 
-parameter. 
- -}
-pipe2h :: Handle -> (StdStream,StdStream,StdStream)
-pipe2h handle = (UseHandle handle,CreatePipe,CreatePipe)
+_create_group :: forall f. Functor f => (Bool -> f Bool) -> CreateProcess -> f CreateProcess 
+_create_group f c = set_create_group c <$> f (create_group c)
+    where
+    set_create_group c cwd' = c { create_group = cwd' } 
+
+_delegate_ctlc :: forall f. Functor f => (Bool -> f Bool) -> CreateProcess -> f CreateProcess 
+_delegate_ctlc f c = set_delegate_ctlc c <$> f (delegate_ctlc c)
+    where
+    set_delegate_ctlc c cwd' = c { delegate_ctlc = cwd' } 
 
 handles :: forall m. Functor m => ((Maybe Handle, Maybe Handle, Maybe Handle) -> m (Maybe Handle, Maybe Handle, Maybe Handle)) -> (Maybe Handle,Maybe Handle ,Maybe Handle,ProcessHandle) -> m (Maybe Handle,Maybe Handle ,Maybe Handle,ProcessHandle) 
 handles f quad = setHandles quad <$> f (getHandles quad)  
-        where
+    where
         setHandles (c1'',c2'',c3'',c4'') (c1',c2',c3') = (c1',c2',c3',c4'')
         getHandles (c1'',c2'',c3'',c4'') = (c1'',c2'',c3'')
     
 
-{-|
-    A 'Prism' for the return value of 'createProcess' that removes the 'Maybe's from @stdin@, @stdout@ and @stderr@ or fails to match if any of them is 'Nothing'.
-
-    > handle3 :: Prism' (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) -> ((Handle, Handle, Handle), ProcessHandle)
- -}
-handle3 :: forall m. Applicative m => ((Handle, Handle, Handle) -> m (Handle, Handle, Handle)) -> (Maybe Handle, Maybe Handle, Maybe Handle) -> m (Maybe Handle, Maybe Handle, Maybe Handle)
-handle3 f quad = case impure quad of
+nohandles :: forall m. Applicative m => (() -> m ()) -> (Maybe Handle, Maybe Handle, Maybe Handle) -> m (Maybe Handle, Maybe Handle, Maybe Handle)
+nohandles f quad = case impure quad of
     Left l -> pure l
     Right r -> fmap justify (f r)
     where    
-    impure (Just h1, Just h2, Just h3) = Right (h1, h2, h3) 
-    impure x = Left x
-    justify (h1, h2, h3) = (Just h1, Just h2, Just h3)  
+        impure (Nothing, Nothing, Nothing) = Right () 
+        impure x = Left x
+        justify () = (Nothing, Nothing, Nothing)  
+
+{-|
+    A 'Prism' for the return value of 'createProcess' that removes the 'Maybe's from @stdin@, @stdout@ and @stderr@ or fails to match if any of them is 'Nothing'.
+
+    > handlesioe :: Prism' (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) -> ((Handle, Handle, Handle), ProcessHandle)
+ -}
+handlesioe :: forall m. Applicative m => ((Handle, Handle, Handle) -> m (Handle, Handle, Handle)) -> (Maybe Handle, Maybe Handle, Maybe Handle) -> m (Maybe Handle, Maybe Handle, Maybe Handle)
+handlesioe f quad = case impure quad of
+    Left l -> pure l
+    Right r -> fmap justify (f r)
+    where    
+        impure (Just h1, Just h2, Just h3) = Right (h1, h2, h3) 
+        impure x = Left x
+        justify (h1, h2, h3) = (Just h1, Just h2, Just h3)  
 
 {-|
     A 'Prism' for the return value of 'createProcess' that removes the 'Maybe's from @stdout@ and @stderr@ or fails to match if any of them is 'Nothing'.
 
-    > handle2 :: Prism' (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) -> ((Handle, Handle), ProcessHandle)
+    > handlesoe :: Prism' (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) -> ((Handle, Handle), ProcessHandle)
  -}
-handle2 :: forall m. Applicative m => ((Handle, Handle) -> m (Handle, Handle)) -> (Maybe Handle, Maybe Handle, Maybe Handle) -> m (Maybe Handle, Maybe Handle, Maybe Handle)
-handle2 f quad = case impure quad of
+handlesoe :: forall m. Applicative m => ((Handle, Handle) -> m (Handle, Handle)) -> (Maybe Handle, Maybe Handle, Maybe Handle) -> m (Maybe Handle, Maybe Handle, Maybe Handle)
+handlesoe f quad = case impure quad of
     Left l -> pure l
     Right r -> fmap justify (f r)
     where    
-    impure (Nothing, Just h2, Just h3) = Right (h2, h3) 
-    impure x = Left x
-    justify (h2, h3) = (Nothing, Just h2, Just h3)  
+        impure (Nothing, Just h2, Just h3) = Right (h2, h3) 
+        impure x = Left x
+        justify (h2, h3) = (Nothing, Just h2, Just h3)  
 

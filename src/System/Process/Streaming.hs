@@ -27,10 +27,11 @@ module System.Process.Streaming (
         -- * Execution helpers
           execute
         , exitCode
-        , separated
         , PipingPolicy
+        , nopiping
         , pipeoe
         , pipeioe
+        , separated
         -- * Execution with combined stdout/stderr
         , LinePolicy
         , linePolicy
@@ -68,7 +69,6 @@ import Data.Bifunctor
 import Data.Profunctor
 import Data.Functor.Identity
 import Data.Either
---import Data.Either.Combinators
 import Data.Monoid
 import Data.Traversable
 import Data.Typeable
@@ -78,7 +78,6 @@ import Control.Monad
 import Control.Monad.Trans.Free
 import Control.Monad.Error
 import Control.Monad.State
---import Control.Monad.Morph
 import Control.Monad.Writer.Strict
 import qualified Control.Monad.Catch as C
 import Control.Exception
@@ -148,11 +147,14 @@ terminateOnError pHandle action = do
             exitCode <- waitForProcess pHandle 
             return $ Right (exitCode,r)  
 
-data PipingPolicy e a = forall t. PipingPolicy (CreateProcess -> CreateProcess) (forall m. Applicative m => (t -> m t) -> (Maybe Handle, Maybe Handle, Maybe Handle) -> m (Maybe Handle, Maybe Handle, Maybe Handle)) (t -> (IO (Either e a), IO()))
+data PipingPolicy e a = forall t. PipingPolicy (CreateProcess -> CreateProcess) (forall m. Applicative m => (t -> m t) -> (Maybe Handle, Maybe Handle, Maybe Handle) -> m (Maybe Handle, Maybe Handle, Maybe Handle)) (t -> (IO (Either e a), IO ()))
+
+nopiping :: PipingPolicy e ()
+nopiping = PipingPolicy id nohandles (\() -> (return $ return (), return ()))  
 
 pipeoe :: (Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e a))
        -> PipingPolicy e a
-pipeoe consumefunc = PipingPolicy changecp handle2 handler  
+pipeoe consumefunc = PipingPolicy changecp handlesoe handler  
     where handler (hout,herr) =
             (,) (consumefunc (fromHandle hout) (fromHandle herr))
                 (hClose hout `finally` hClose herr)
@@ -164,7 +166,7 @@ pipeioe :: (Show e, Typeable e)
         => (Consumer ByteString IO ()                              -> IO (Either e a))
         -> (Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e b))
         -> PipingPolicy e (a,b)
-pipeioe feeder consumefunc = PipingPolicy changecp handle3 handler  
+pipeioe feeder consumefunc = PipingPolicy changecp handlesioe handler  
     where handler (hin,hout,herr) =
             (,) (conceit (feeder (toHandle hin) `finally` hClose hin) 
                          (consumefunc (fromHandle hout) (fromHandle herr)))
