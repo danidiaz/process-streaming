@@ -1,3 +1,14 @@
+0.3.0.0
+-------
+
+- Renamed many functions (the number-based naming schema is gone).
+- Decisions about how to consume the standard streams were moved to the new
+"PipingPolicy" type.
+- "ForkProd" is now "Siphon". 
+- "execute" can now throw IOExceptions (but see "safeExecute").
+- Some complicated types were hidden behind data declarations.
+- Functor, Bifunctor and Profunctor instances for some types.
+
 0.0.1.1
 -------
 

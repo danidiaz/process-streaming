@@ -9,13 +9,9 @@
 -- There's also an emphasis in having error conditions explicit in the types,
 -- instead of throwing exceptions.
 --
--- See the functions 'execute' and 'executei' for an entry point. Then the
--- functions 'separate' and 'combined' that handle the consumption of
--- stdout and stderr.
---
 -- Regular 'Consumer's, 'Parser's from @pipes-parse@ and folds from
--- "Pipes.Prelude" (also folds @pipes-bytestring@ and @pipes-text@) can be used
--- to consume the output streams of the external processes.
+-- "Pipes.Prelude" (also folds from @pipes-bytestring@ and @pipes-text@) can be
+-- used to consume the output streams of the external processes.
 --
 -----------------------------------------------------------------------------
 
@@ -35,7 +31,7 @@ module System.Process.Streaming (
         , pipeoe
         , pipeioe
 
-        -- * Separate stdout/stderr 
+        -- * Separated stdout/stderr 
         , separated
 
         -- * Stdout/stderr combined as text
@@ -107,36 +103,56 @@ import System.Process.Lens
 import System.Exit
 
 {-|
-    This function takes as arguments a 'CreateProcess' record, an exception
-handler, and a consuming function for two 'Producers' associated to @stdout@
-and @stderr@, respectively.  
+   Executes an external process. The standard streams are piped and consumed in
+a way defined by the 'PipingPolicy' argument. 
 
-    'execute' tries to avoid launching exceptions, and represents all errors as
-@e@ values.
+   This fuction re-throws any 'IOException's it encounters.
 
-    If the consuming function fails with @e@, the whole computation is
-immediately aborted and @e@ is returned.  
+   If the consumption of the standard streams fails with @e@, the whole
+computation is immediately aborted and @e@ is returned. (An exception is not
+thrown in this case.).  
 
-   If an error or asynchronous exception happens, the external process is
+   If an error @e@ or an exception happens, the external process is
 terminated.
-
-   This function sets the @std_out@ and @std_err@ fields in the 'CreateProcess'
-record to 'CreatePipe'.
  -}
+execute :: PipingPolicy e a -> CreateProcess -> IO (Either e (ExitCode,a))
+execute (PipingPolicy tr somePrism action) procSpec = mask $ \restore -> do
+    (min,mout,merr,phandle) <- createProcess (tr procSpec)
+    case getFirst . getConst . somePrism (Const . First . Just) $ (min,mout,merr) of
+        Nothing -> 
+            throwIO (userError "stdin/stdout/stderr handle unexpectedly null")
+            `finally`
+            terminateCarefully phandle 
+        Just t -> 
+            let (a, cleanup) = action t in 
+            -- Handles must be closed *after* terminating the process, because a close
+            -- operation may block if the external process has unflushed bytes in the stream.
+            (restore (terminateOnError phandle a) `onException` terminateCarefully phandle) 
+            `finally` 
+            cleanup 
+
+exitCode :: (ExitCode,a) -> Either Int a
+exitCode (ec,a) = case ec of
+    ExitSuccess -> Right a 
+    ExitFailure i -> Left i
 
 {-|
-    Like `executei` but with an additional argument consisting in a /feeding/
-function that takes the @stdin@ 'Consumer' and writes to it. 
+  Like 'execute', but 'IOException's are caught and converted to the error type @e@. 
 
-    Like the consuming function, the feeding function can return a value and
-can also fail, terminating the process.
-
-    The feeding function is executed /concurrently/ with the consuming
-functions, not /before/ them.
-
-   'executei' sets the @std_in@, @std_out@ and @std_err@ fields in the
-'CreateProcess' record to 'CreatePipe'.
+  Exit codes denoting errors are also converted to @e@ values.
  -}
+safeExecute :: (IOError -> e) -> (Int -> e) -> PipingPolicy e a -> CreateProcess -> IO (Either e a)
+safeExecute exh ech pp cp = collapseEithers <$> (tryIOError $ execute pp cp) 
+    where
+        collapseEithers = join . join . bimap exh (fmap (bimap ech id . exitCode)) 
+
+{-|
+  A simpler version of 'safeExecute' that assumes the error type @e@ is 'String'.
+ -}
+simpleSafeExecute :: PipingPolicy String a -> CreateProcess -> IO (Either String a)
+simpleSafeExecute = safeExecute show (mappend "Exit code: " . show)
+
+
 terminateCarefully :: ProcessHandle -> IO ()
 terminateCarefully pHandle = do
     mExitCode <- getProcessExitCode pHandle   
@@ -157,6 +173,13 @@ terminateOnError pHandle action = do
             exitCode <- waitForProcess pHandle 
             return $ Right (exitCode,r)  
 
+{-|
+     A 'PipingPolicy' specifies what standard streams of the external process
+should be piped, and how to consume them.
+
+     Values of type @a@ denote successful consumption of the streams, values of
+type @e@ denote errors.
+-}
 data PipingPolicy e a = forall t. PipingPolicy (CreateProcess -> CreateProcess) (forall m. Applicative m => (t -> m t) -> (Maybe Handle, Maybe Handle, Maybe Handle) -> m (Maybe Handle, Maybe Handle, Maybe Handle)) (t -> (IO (Either e a), IO ()))
 
 instance Functor (PipingPolicy e) where
@@ -167,9 +190,17 @@ instance Bifunctor PipingPolicy where
   bimap f g (PipingPolicy cpf prsm func) = PipingPolicy cpf prsm $
        (fmap (bimap (fmap (bimap f g)) id) func)
 
+{-|
+    Do not pipe any standard stream. 
+-}
 nopiping :: PipingPolicy e ()
 nopiping = PipingPolicy id nohandles (\() -> (return $ return (), return ()))  
 
+{-|
+    Pipe stderr and stdout.
+
+    See also the 'separated' and 'combined' functions.
+-}
 pipeoe :: (Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e a))
        -> PipingPolicy e a
 pipeoe consumefunc = PipingPolicy changecp handlesoe handler  
@@ -180,6 +211,11 @@ pipeoe consumefunc = PipingPolicy changecp handlesoe handler
                            , std_err = CreatePipe 
                            }
 
+{-|
+    Pipe stdin, stderr and stdout.
+
+    See also the 'separated' and 'combined' functions.
+-}
 pipeioe :: (Show e, Typeable e)
         => (Consumer ByteString IO ()                              -> IO (Either e a))
         -> (Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e b))
@@ -194,46 +230,10 @@ pipeioe feeder consumefunc = PipingPolicy changecp handlesioe handler
                            , std_err = CreatePipe 
                            }
 
-execute :: PipingPolicy e a -> CreateProcess -> IO (Either e (ExitCode,a))
-execute (PipingPolicy tr somePrism action) procSpec = mask $ \restore -> do
-    (min,mout,merr,phandle) <- createProcess (tr procSpec)
-    case getFirst . getConst . somePrism (Const . First . Just) $ (min,mout,merr) of
-        Nothing -> 
-            throwIO (userError "stdin/stdout/stderr handle unexpectedly null")
-            `finally`
-            terminateCarefully phandle 
-        Just t -> 
-            let (a, cleanup) = action t in 
-            -- Handles must be closed *after* terminating the process, because a close
-            -- operation may block if the external process has unflushed bytes in the stream.
-            (restore (terminateOnError phandle a) `onException` terminateCarefully phandle) 
-            `finally` 
-            cleanup 
-
-safeExecute :: (IOError -> e) -> (Int -> e) -> PipingPolicy e a -> CreateProcess -> IO (Either e a)
-safeExecute exh ech pp cp = collapseEithers <$> (tryIOError $ execute pp cp) 
-    where
-        collapseEithers = join . join . bimap exh (fmap (bimap ech id . exitCode)) 
-
-simpleSafeExecute :: PipingPolicy String a -> CreateProcess -> IO (Either String a)
-simpleSafeExecute = safeExecute show (mappend "Exit code: " . show)
-
-{-|
-    Convenience function that merges 'ExitFailure' values into the @e@ value.
-
-    The @e@ value is created from the exit code. 
-
-    Usually composed with the @execute@ functions. 
-  -}
-exitCode :: (ExitCode,a) -> Either Int a
-exitCode (ec,a) = case ec of
-    ExitSuccess -> Right a 
-    ExitFailure i -> Left i
-
 {-|
     'separate' should be used when we want to consume @stdout@ and @stderr@
 concurrently and independently. It constructs a function that can be plugged
-into 'execute' or 'executei'. 
+into functions like 'pipeoe'. 
 
     If the consuming functions return with @a@ and @b@, the corresponding
 streams keep being drained until the end. The combined value is not returned
@@ -249,19 +249,10 @@ separated :: (Show e, Typeable e)
 separated outfunc errfunc outprod errprod = 
     conceit (buffer_ outfunc outprod) (buffer_ errfunc errprod)
 
-{-|
-  Type synonym for a function that takes a method to "tear down" a FreeT-based
-list of lines as first parameter, a 'ByteString' source as second parameter,
-and returns a (possibly failing) computation. Presumably, the bytes are decoded
-into text, the text split into lines, and the "tear down" function applied. 
-
-See the @pipes-group@ package for utilities on how to manipulate these
-FreeT-based lists. They allow you to handle individual lines without forcing
-you to have a whole line in memory at any given time.
-
-  See also 'linePolicy' and 'combined'.
--} 
 data LinePolicy e = LinePolicy ((FreeT (Producer T.Text IO) IO (Producer ByteString IO ()) -> IO (Producer ByteString IO ())) -> Producer ByteString IO () -> IO (Either e ()))
+
+instance Functor LinePolicy where
+  fmap f (LinePolicy func) = LinePolicy $ fmap (fmap (fmap (bimap f id))) func
 
 {-|
     Constructs a 'LinePolicy'.
@@ -295,9 +286,11 @@ linePolicy decoder transform lopo = LinePolicy $ \teardown producer -> do
 
 {-|
     In the Pipes ecosystem, leftovers from decoding operations are often stored
-in the result value of 'Producer's (often as 'Producer's themselves). This is a
-type synonym for a function that receives a value @a@ and some leftovers @l@,
-and may modify the value or fail outright, depending of what the leftovers are.
+in the result value of 'Producer's (as 'Producer's themselves). 
+
+    A 'LeftoverPolicy' receives a value @a@ and a producer of lefovers of type
+@l@. Analyzing the producer, it may modify the value @a@ or fail outright,
+depending of what the leftovers are. 
  -}
 data LeftoverPolicy a l e = LeftoverPolicy { runLeftoverPolicy :: a -> Producer l IO () -> IO (Either e a) }
 
@@ -339,12 +332,11 @@ consumed by the function passed as argument.
 
     For both @stdout@ and @stderr@, a 'LinePolicy' must be supplied.
 
-    Like with 'separate', the streams are drained to completion if no errors
+    Like with 'separated', the streams are drained to completion if no errors
 happen, but the computation is aborted immediately if any error @e@ is
 returned. 
 
-    'combined' returns a function that can be plugged into 'execute' or
-'executei'. 
+    'combined' returns a function that can be plugged into funtions like 'pipeioe'.
 
     /Beware!/ 'combined' avoids situations in which a line emitted
 in @stderr@ cuts a long line emitted in @stdout@, see
@@ -387,8 +379,7 @@ useConsumer :: Monad m => Consumer b m () -> Producer b m () -> m ()
 useConsumer consumer producer = runEffect $ producer >-> consumer 
 
 {-|
-    Useful for constructing @stdin@ feeding functions from a 'Producer', to be
-plugged into 'executei'.
+    Useful for constructing @stdin@ feeding functions from a 'Producer'.
 
     You may need to use 'surely' for the types to fit.
  -}
@@ -439,8 +430,8 @@ monoidally errh activity proxy = do
         Right () -> Right $ w
 
 {-|
-    Value to plug into a 'separate' or 'combined' function when we are not
-interested in doing anything with the handle. It returns immediately with @()@. 
+    Value to plug into 'separated' or 'combined' when we are not interested in
+doing anything with the stream. It returns immediately with @()@. 
 
     Notice that even if 'nop' returns immediately,  'separate' and
 'combined' drain the streams to completion before returning.
@@ -478,7 +469,9 @@ buffer_ activity producer = do
     return $ fmap snd r 
 
 {-|
-   Adapts a function that works with 'Producer's of decoded values so that it works with 'Producer's of still undecoded values, by supplying a decoding function and a 'LeftoverPolicy'.
+   Adapts a function that works with 'Producer's of decoded values so that it
+works with 'Producer's of still undecoded values, by supplying a decoding
+function and a 'LeftoverPolicy'.
  -}
 encoding :: (Show e, Typeable e) 
          => (Producer b IO () -> Producer t IO (Producer b IO ()))
