@@ -198,7 +198,7 @@ execute (PipingPolicy tr somePrism action) procSpec = mask $ \restore -> do
             let (a, cleanup) = action t in 
             -- Handles must be closed *after* terminating the process, because a close
             -- operation may block if the external process has unflushed bytes in the stream.
-            (terminateOnError phandle (restore a) `onException` terminateCarefully phandle) 
+            (restore (terminateOnError phandle a) `onException` terminateCarefully phandle) 
             `finally` 
             cleanup 
 
