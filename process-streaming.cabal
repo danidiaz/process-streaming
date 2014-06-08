@@ -23,21 +23,21 @@ Library
         System.Process.Lens
     other-modules: 
     build-depends:         
-        base >= 4.4 && < 5,
-        transformers >= 0.3.0.0 && < 0.5,
-        mtl >= 2.1.1 && < 2.2,
+        base >= 4.4 && < 4.8,
+        transformers >= 0.2.0.0 && < 0.5,
+        mtl >= 2.0.1 && < 2.3,
         free >= 4.2 && < 5,
         bifunctors >= 4.1 && < 5,
-        profunctors >= 4.0 && < 5,
-        async >= 2.0.1.3 && < 3,    
-        process >= 1.2.0.0 && < 1.3,
-        pipes >= 4.1.0 && < 4.2, 
+        profunctors >= 3.1.1 && < 4.1,
+        async >= 2.0.1 && < 2.1,
+        process >= 1.2.0 && < 1.3,
+        pipes >= 4.0 && < 4.2,
         pipes-bytestring >= 2.0.0 && < 2.1,
         pipes-text >= 0.0.0.9 && < 0.0.2,
-        text >= 0.11.3.1 && < 1.2,
+        text >= 0.11.2 && < 1.2,
         pipes-concurrency >= 2.0.2 && < 3,
         pipes-safe >= 2.2.0 && < 3,
-        exceptions >= 0.6.1 && < 4
+        exceptions >= 0.6.0 && < 0.7
         
     default-language: Haskell2010
 
