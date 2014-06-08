@@ -3,7 +3,7 @@
 -- This module contains helper functions and types built on top of
 -- "System.Process" and "Pipes".
 --
--- They provide conceiturrent, buffered (to avoid deadlocks) streaming access to
+-- They provide concurrent, buffered (to avoid deadlocks) streaming access to
 -- the inputs and outputs of system processes.
 --
 -- There's also an emphasis in having error conditions explicit in the types,
@@ -38,7 +38,7 @@ module System.Process.Streaming (
         -- * Separate stdout/stderr 
         , separated
 
-        -- * stdout/stderr combined as text
+        -- * Stdout/stderr combined as text
         , combined
         , LinePolicy
         , linePolicy
@@ -131,7 +131,7 @@ function that takes the @stdin@ 'Consumer' and writes to it.
     Like the consuming function, the feeding function can return a value and
 can also fail, terminating the process.
 
-    The feeding function is executed /conceiturrently/ with the consuming
+    The feeding function is executed /concurrently/ with the consuming
 functions, not /before/ them.
 
    'executei' sets the @std_in@, @std_out@ and @std_err@ fields in the
@@ -232,7 +232,7 @@ exitCode (ec,a) = case ec of
 
 {-|
     'separate' should be used when we want to consume @stdout@ and @stderr@
-conceiturrently and independently. It constructs a function that can be plugged
+concurrently and independently. It constructs a function that can be plugged
 into 'execute' or 'executei'. 
 
     If the consuming functions return with @a@ and @b@, the corresponding
@@ -501,16 +501,16 @@ revealError action = catch (action >>= return . Right)
                            (\(WrappedError e) -> return . Left $ e)   
 
 {-| 
-    'Conceit' is very similar to 'Control.Conceiturrent.Async.Conceiturrently' from the
+    'Conceit' is very similar to 'Control.Concurrent.Async.Concurrently' from the
 @async@ package, but it has an explicit error type @e@.
 
-   The 'Applicative' instance is used to run actions conceiturrently, wait until
+   The 'Applicative' instance is used to run actions concurrently, wait until
 they finish, and combine their results. 
 
    However, if any of the actions fails with @e@ the other actions are
 immediately cancelled and the whole computation fails with @e@. 
 
-    To put it another way: 'Conceit' behaves like 'Conceiturrently' for successes and
+    To put it another way: 'Conceit' behaves like 'Concurrently' for successes and
 like 'race' for errors.  
 -}
 newtype Conceit e a = Conceit { runConceit :: IO (Either e a) }
@@ -543,7 +543,7 @@ conceit :: (Show e, Typeable e)
 conceit c1 c2 = runConceit $ (,) <$> Conceit c1 <*> Conceit c2
 
 {-| 
-      Works similarly to 'Control.Conceiturrent.Async.mapConceiturrently' from the
+      Works similarly to 'Control.Concurrent.Async.mapConcurrently' from the
 @async@ package, but if any of the computations fails with @e@, the others are
 immediately cancelled and the whole computation fails with @e@. 
  -}
@@ -553,7 +553,7 @@ mapConceit f = revealError .  mapConcurrently (elideError . f)
 {-| 
     'Siphon' is a newtype around a function that does something with a
 'Producer'. The applicative instance fuses the functions, so that each one
-receives its own copy of the 'Producer' and runs conceiturrently with the others.
+receives its own copy of the 'Producer' and runs concurrently with the others.
 Like with 'Conceit', if any of the functions fails with @e@ the others are
 immediately cancelled and the whole computation fails with @e@.   
 

@@ -27,7 +27,6 @@ import Data.Maybe
 import Data.Functor.Identity
 import Data.Monoid
 import Data.Traversable
---import Data.Text 
 import Control.Applicative
 import System.IO
 import System.Process
@@ -109,6 +108,11 @@ _delegate_ctlc f c = set_delegate_ctlc c <$> f (delegate_ctlc c)
     where
     set_delegate_ctlc c cwd' = c { delegate_ctlc = cwd' } 
 
+{-|
+    A 'Lens' for the return value of 'createProcess' that focuses on the handles.
+
+    > handlesioe :: Lens' (Maybe Handle, Maybe Handle, Maybe Handle,ProcessHandle) (Maybe Handle, Maybe Handle, Maybe Handle)
+ -}
 handles :: forall m. Functor m => ((Maybe Handle, Maybe Handle, Maybe Handle) -> m (Maybe Handle, Maybe Handle, Maybe Handle)) -> (Maybe Handle,Maybe Handle ,Maybe Handle,ProcessHandle) -> m (Maybe Handle,Maybe Handle ,Maybe Handle,ProcessHandle) 
 handles f quad = setHandles quad <$> f (getHandles quad)  
     where
@@ -126,9 +130,9 @@ nohandles f quad = case impure quad of
         justify () = (Nothing, Nothing, Nothing)  
 
 {-|
-    A 'Prism' for the return value of 'createProcess' that removes the 'Maybe's from @stdin@, @stdout@ and @stderr@ or fails to match if any of them is 'Nothing'.
+    A 'Prism' that removes the 'Maybe's from @stdin@, @stdout@ and @stderr@ or fails to match if any of them is 'Nothing'.
 
-    > handlesioe :: Prism' (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) -> ((Handle, Handle, Handle), ProcessHandle)
+    > handlesioe :: Prism' (Maybe Handle, Maybe Handle, Maybe Handle) -> (Handle, Handle, Handle)
  -}
 handlesioe :: forall m. Applicative m => ((Handle, Handle, Handle) -> m (Handle, Handle, Handle)) -> (Maybe Handle, Maybe Handle, Maybe Handle) -> m (Maybe Handle, Maybe Handle, Maybe Handle)
 handlesioe f quad = case impure quad of
@@ -140,9 +144,9 @@ handlesioe f quad = case impure quad of
         justify (h1, h2, h3) = (Just h1, Just h2, Just h3)  
 
 {-|
-    A 'Prism' for the return value of 'createProcess' that removes the 'Maybe's from @stdout@ and @stderr@ or fails to match if any of them is 'Nothing'.
+    A 'Prism' that removes the 'Maybe's from @stdout@ and @stderr@ or fails to match if any of them is 'Nothing'.
 
-    > handlesoe :: Prism' (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) -> ((Handle, Handle), ProcessHandle)
+    > handlesoe :: Prism' (Maybe Handle, Maybe Handle, Maybe Handle) -> (Handle, Handle)
  -}
 handlesoe :: forall m. Applicative m => ((Handle, Handle) -> m (Handle, Handle)) -> (Maybe Handle, Maybe Handle, Maybe Handle) -> m (Maybe Handle, Maybe Handle, Maybe Handle)
 handlesoe f quad = case impure quad of

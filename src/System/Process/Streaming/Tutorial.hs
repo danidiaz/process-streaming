@@ -8,7 +8,7 @@ module System.Process.Streaming.Tutorial (
     -- * Introduction
     -- $introduction
   
-    -- * stdin and stderr to different files
+    -- * Stdin and stderr to different files
     -- $stdinstderr
     
     -- * Missing executable
@@ -70,7 +70,7 @@ Some preliminary imports:
 
 {- $stdinstderr
  
-Using 'separate' to consume @stdout@ and @stderr@ concurrently, and functions
+Using 'separated' to consume @stdout@ and @stderr@ concurrently, and functions
 from @pipes-safe@ to write the files.
 
 > example1 :: IO (Either String ((),()))
@@ -101,7 +101,7 @@ Returns:
 
 {- $combinelines
  
-Here we use 'combineLines' to process 'stdout' and 'stderr' together.
+Here we use 'combined' to process 'stdout' and 'stderr' together.
 
 Notice that they are consumed together as 'Text'. We have to specify a decoding
 function for each stream, and a 'LeftoverPolicy' as well.
@@ -125,7 +125,7 @@ We also add a prefix to the lines coming from @stderr@.
 
 {- $forkProd
 
-Plugging parsers from @pipes-parse@ into 'separate' or 'combineLines' is easy
+Plugging parsers from @pipes-parse@ into 'separated' or 'combined' is easy
 because running 'evalStateT' on a parser returns a function that consumes a
 'Producer'.
 
@@ -133,7 +133,7 @@ In this example we define two Attoparsec Text parsers and we convert them to
 Pipes parsers using function 'parse' from package @pipes-attoparsec@. 
 
 Stdout is decoded to Text and parsed by the two parsers in parallel using the
-auxiliary 'forkProd' function. The results are aggregated in a tuple.
+auxiliary 'forkSiphon' function. The results are aggregated in a tuple.
 
 Stderr is ignored using the 'nop' function.
 
@@ -195,9 +195,8 @@ We decode stdout to Text and collect the whole output using a fold from
 @pipes-text@. 
 
 Plugging folds defined in "Pipes.Prelude" (or @pipes-bytestring@ or
-@pipes-text@) into 'separate' or 'combineLines' is easy because the folds
-return functions that consume 'Producer's. Folds form the @foldl@ package
-could also be useful here. 
+@pipes-text@) into 'separated' or 'combined' is easy because the folds
+return functions that consume 'Producer's. 
 
 Notice that @stdin@ is written concurrently with the reading of @stdout@. It is
 not the case that @sdtin@ is written first and then @stdout@ is read. 
@@ -233,7 +232,7 @@ Returns:
 
 {- $wordcount
  
-  In this example we count words emitted to @stdout@ in a streaming fashing,
+  In this example we count words emitted to @stdout@ in a streaming fashion,
 without having to keep whole words in memory.
 
   We use a lens from @pipes-text@ to split the text into words, and a trivial
