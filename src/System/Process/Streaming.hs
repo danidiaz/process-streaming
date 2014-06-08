@@ -159,6 +159,14 @@ terminateOnError pHandle action = do
 
 data PipingPolicy e a = forall t. PipingPolicy (CreateProcess -> CreateProcess) (forall m. Applicative m => (t -> m t) -> (Maybe Handle, Maybe Handle, Maybe Handle) -> m (Maybe Handle, Maybe Handle, Maybe Handle)) (t -> (IO (Either e a), IO ()))
 
+instance Functor (PipingPolicy e) where
+  fmap f (PipingPolicy cpf prsm func) = PipingPolicy cpf prsm $
+       (fmap (bimap (fmap (fmap f)) id) func)
+
+instance Bifunctor PipingPolicy where
+  bimap f g (PipingPolicy cpf prsm func) = PipingPolicy cpf prsm $
+       (fmap (bimap (fmap (bimap f g)) id) func)
+
 nopiping :: PipingPolicy e ()
 nopiping = PipingPolicy id nohandles (\() -> (return $ return (), return ()))  
 

@@ -74,14 +74,13 @@ Using 'separate' to consume @stdout@ and @stderr@ concurrently, and functions
 from @pipes-safe@ to write the files.
 
 > example1 :: IO (Either String ((),()))
-> example1 = exitCode show $
->     execute program show $ separate 
->         (consume "stdout.log")
->         (consume "stderr.log")
->     where
->     consume file = surely . safely . useConsumer $
->         S.withFile file WriteMode B.toHandle
->     program = shell "{ echo ooo ; echo eee 1>&2 ; }"
+> example1 = simpleSafeExecute
+>          (pipeoe $ separated (consume "stdout.log") (consume "stderr.log"))
+>          (shell "{ echo ooo ; echo eee 1>&2 ; }")
+>      where
+>      consume file = surely . safely . useConsumer $
+>          S.withFile file WriteMode B.toHandle
+
 -}
 
 
@@ -90,11 +89,8 @@ from @pipes-safe@ to write the files.
 Missing executables and other 'IOException's are converted to an error type @e@
 and returned in the 'Left' of an 'Either':
 
-> example2 :: IO (Either String ((),()))
-> example2 = exitCode show $ 
->     execute (proc "fsdfsdf" []) show $ separate 
->         nop
->         nop 
+> example2 :: IO (Either String ())
+> example2 = simpleSafeExecute nopiping (proc "fsdfsdf" [])
 
 Returns:
 
@@ -113,16 +109,16 @@ function for each stream, and a 'LeftoverPolicy' as well.
 We also add a prefix to the lines coming from @stderr@.
 
 > example3 :: IO (Either String ())
-> example3 = exitCode show $ 
->    execute program show $ combineLines
->        (linePolicy T.decodeIso8859_1 id policy)
->        (linePolicy T.decodeIso8859_1 annotate policy)
->        (surely . safely . useConsumer $ 
->            S.withFile "combined.txt" WriteMode T.toHandle)
+> example3 = simpleSafeExecute
+>        (pipeoe $ combined
+>            (linePolicy T.decodeIso8859_1 id policy)
+>            (linePolicy T.decodeIso8859_1 annotate policy)
+>            (surely . safely . useConsumer $
+>                S.withFile "combined.txt" WriteMode T.toHandle))
+>        (shell "{ echo ooo ; echo eee 1>&2 ; echo ppp ;  echo ffff 1>&2 ; }")
 >     where
->     policy = failOnLeftovers $ \_ _->"badbytes"
->     annotate x = P.yield "errprefix: " *> x
->     program = shell "{ echo ooo ; echo eee 1>&2 ; echo ppp ;  echo ffff 1>&2 ; }"
+>         policy = failOnLeftovers $ \_ _->"badbytes"
+>         annotate x = P.yield "errprefix: " *> x
 
 -}
 
@@ -150,15 +146,18 @@ Stderr is ignored using the 'nop' function.
 > parser2 = parseChars 'a'
 > 
 > example4 ::IO (Either String (([Char], [Char]),()))
-> example4 = exitCode show $ 
->     execute program show $ separate
->         (encoding T.decodeIso8859_1 (failOnLeftovers $ \_ _->"badbytes") $  
->             forkProd (P.evalStateT $ adapt parser1)
->                      (P.evalStateT $ adapt parser2))
->         nop 
+> example4 = simpleSafeExecute
+>        (pipeoe $ separated
+>            (encoding T.decodeIso8859_1 (failOnLeftovers $ \_ _->"badbytes") $
+>                forkSiphon (adapt parser1) (adapt parser2))
+>            nop)
+>        (shell "{ echo ooaaoo ; echo aaooaoa; }")
 >     where
->     adapt p = bimap (const "parse error") id <$> P.parse p
->     program = shell "{ echo ooaaoo ; echo aaooaoa; }"
+>        adapt p = P.evalStateT $ do
+>            r <- P.parse p
+>            return $ case r of
+>                Just (Right r') -> Right r'
+>                _ -> Left "parse error"
 
 Returns:
 
@@ -174,10 +173,9 @@ the external program is terminated and the computation returns immediately with
 @e@.
 
 > example5 ::IO (Either String ((),()))
-> example5 = exitCode show $  
->     execute (shell "sleep 10s") show $ separate
->             (\_ -> return $ Left "fast return!")
->             nop
+> example5 = simpleSafeExecute
+>         (pipeoe $ separated (\_ -> return $ Left "fast return!") nop)
+>         (shell "sleep 10s")
 
 Returns:
 
@@ -204,13 +202,13 @@ could also be useful here.
 Notice that @stdin@ is written concurrently with the reading of @stdout@. It is
 not the case that @sdtin@ is written first and then @stdout@ is read. 
 
-> example6 = exitCode show $  
->     execute3 (shell "cat") show  
->         (surely . useProducer $ yield "aaaaaa\naaaaa")
->         (separate 
->             (encoding T.decodeIso8859_1 ignoreLeftovers $ surely $ T.toLazyM)  
->             nop
->         )
+> example6 = simpleSafeExecute
+>         (pipeioe
+>             (surely . useProducer $ yield "aaaaaa\naaaaa")
+>             (separated
+>                 (encoding T.decodeIso8859_1 ignoreLeftovers $ surely $ T.toLazyM)
+>                 nop))
+>         (shell "cat")
 
 Returns:
 
@@ -223,10 +221,9 @@ Returns:
 In this example we collect @stdout@ and @stderr@ as lazy bytestrings, using a
 fold defined in @pipes-bytestring@.
 
-> example7 = exitCode show $
->     execute program show $ separate (surely B.toLazyM) (surely B.toLazyM)
->     where
->     program = shell "{ echo ooo ; echo eee 1>&2 ; echo ppp ;  echo ffff 1>&2 ; }"
+> example7 = simpleSafeExecute
+>         (pipeoe $ separated (surely B.toLazyM) (surely B.toLazyM))
+>         (shell "{ echo ooo ; echo eee 1>&2 ; echo ppp ;  echo ffff 1>&2 ; }")
 
 Returns:
 
@@ -243,14 +240,12 @@ without having to keep whole words in memory.
 fold from @pipes-group@ to create a 'Producer' of 'Int' values. Then we sum the
 ints using a fold from "Pipes.Prelude".
  
-> example8 = exitCode show $
->     execute program show $ separate
->         (encoding T.decodeIso8859_1 ignoreLeftovers $ surely $
->              P.sum . G.folds const () (const 1) . view T.words
->         )
->         nop
->     where
->     program = shell "{ echo aaa ; echo bbb ; echo ccc ; }"
+> example8 = simpleSafeExecute
+>         (pipeoe $ separated
+>              (encoding T.decodeIso8859_1 ignoreLeftovers $ surely $
+>                   P.sum . G.folds const () (const 1) . view T.words)
+>              nop)
+>         (shell "{ echo aaa ; echo bbb ; echo ccc ; }")
 
 -}
 
@@ -259,7 +254,7 @@ ints using a fold from "Pipes.Prelude".
 Sometimes it's useful to launch external programs during a ghci session, like
 this:
 
->>> a <- async $ execute (proc "xeyes" []) show $ separate nop nop
+>>> a <- async $ execute nopiping (proc "xeyes" [])
 
 Cancelling the async causes the termination of the external program:
 
