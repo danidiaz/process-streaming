@@ -27,7 +27,8 @@ module System.Process.Streaming (
         -- * Execution
           execute
         , exitCode
-
+        , safeExecute
+        , simpleSafeExecute
         -- * Piping standard streams
         , PipingPolicy
         , nopiping
@@ -100,6 +101,7 @@ import qualified Pipes.Text as T
 import Pipes.Concurrent
 import Pipes.Safe (SafeT, runSafeT)
 import System.IO
+import System.IO.Error
 import System.Process
 import System.Process.Lens
 import System.Exit
@@ -196,9 +198,17 @@ execute (PipingPolicy tr somePrism action) procSpec = mask $ \restore -> do
             let (a, cleanup) = action t in 
             -- Handles must be closed *after* terminating the process, because a close
             -- operation may block if the external process has unflushed bytes in the stream.
-            (terminateOnError phandle $ restore a `onException` terminateCarefully phandle) 
+            (terminateOnError phandle (restore a) `onException` terminateCarefully phandle) 
             `finally` 
             cleanup 
+
+safeExecute :: (IOError -> e) -> (Int -> e) -> PipingPolicy e a -> CreateProcess -> IO (Either e a)
+safeExecute exh ech pp cp = collapseEithers <$> (tryIOError $ execute pp cp) 
+    where
+        collapseEithers = join . join . bimap exh (fmap (bimap ech id . exitCode)) 
+
+simpleSafeExecute :: PipingPolicy String a -> CreateProcess -> IO (Either String a)
+simpleSafeExecute = safeExecute show (mappend "Exit code: " . show)
 
 {-|
     Convenience function that merges 'ExitFailure' values into the @e@ value.
