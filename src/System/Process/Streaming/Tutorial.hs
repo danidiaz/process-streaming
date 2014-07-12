@@ -253,7 +253,7 @@ ints using a fold from "Pipes.Prelude".
 Sometimes it's useful to launch external programs during a ghci session, like
 this:
 
->>> a <- async $ execute nopiping (proc "xeyes" [])
+>>> a <- async $ execute (pipeoe (separated nop nop)) (proc "xeyes" [])
 
 Cancelling the async causes the termination of the external program:
 

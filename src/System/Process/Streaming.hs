@@ -22,9 +22,8 @@
 module System.Process.Streaming ( 
         -- * Execution
           execute
-        , exitCode
-        , safeExecute
-        , simpleSafeExecute
+        , blendIOExceptions
+        , blendExitFailure
         -- * Piping standard streams
         , PipingPolicy
         , nopiping
@@ -40,11 +39,11 @@ module System.Process.Streaming (
         , linePolicy
 
         -- * Decoding and leftovers 
-        , encoding
+        , encoded
         , LeftoverPolicy(..)
         , ignoreLeftovers
-        , failOnLeftovers
-
+        , whenLeftovers 
+        , fromFirstLeftovers
         -- * Construction of feeding/consuming functions
         , useConsumer
         , useProducer
@@ -53,11 +52,6 @@ module System.Process.Streaming (
         , fallibly
         , monoidally
         , nop
-
-        -- * Concurrency helpers
-        , Conceit (..)
-        , conceit
-        , mapConceit
 
         , Siphon (..)
         , forkSiphon
@@ -136,22 +130,11 @@ exitCode (ec,a) = case ec of
     ExitSuccess -> Right a 
     ExitFailure i -> Left i
 
-{-|
-  Like 'execute', but 'IOException's are caught and converted to the error type @e@. 
+blendIOExceptions :: (IOError -> e) -> IO (Either e a) -> IO (Either e a)
+blendIOExceptions exh task = join . bimap exh id <$> tryIOError task  
 
-  Exit codes denoting errors are also converted to @e@ values.
- -}
-safeExecute :: (IOError -> e) -> (Int -> e) -> PipingPolicy e a -> CreateProcess -> IO (Either e a)
-safeExecute exh ech pp cp = collapseEithers <$> (tryIOError $ execute pp cp) 
-    where
-        collapseEithers = join . join . bimap exh (fmap (bimap ech id . exitCode)) 
-
-{-|
-  A simpler version of 'safeExecute' that assumes the error type @e@ is 'String'.
- -}
-simpleSafeExecute :: PipingPolicy String a -> CreateProcess -> IO (Either String a)
-simpleSafeExecute = safeExecute show (mappend "Exit code: " . show)
-
+blendExitFailure :: (Int -> e) -> Either e (ExitCode,a) -> Either e a
+blendExitFailure ech x = join $ bimap id (bimap ech id . exitCode) x 
 
 terminateCarefully :: ProcessHandle -> IO ()
 terminateCarefully pHandle = do
@@ -318,12 +301,17 @@ first undedcoded data.
 the error @a@ and/or the first undecoded values @b@ in your custom error
 datatype.
  -}
-failOnLeftovers :: (a -> b -> e) -> LeftoverPolicy a b e 
-failOnLeftovers errh = LeftoverPolicy $ \a remainingBytes -> do
+fromFirstLeftovers ::  (a -> l -> e) -> LeftoverPolicy a l e 
+fromFirstLeftovers errh = LeftoverPolicy $ \a remainingBytes -> do
     r <- next remainingBytes
     return $ case r of 
         Left () -> Right a
         Right (somebytes,_) -> Left $ errh a somebytes 
+
+whenLeftovers :: e -> LeftoverPolicy a l e 
+whenLeftovers e = fromFirstLeftovers $ \_ _ -> e
+
+
 
 {-|
     The bytes from @stdout@ and @stderr@ are decoded into 'Text', splitted into
@@ -473,12 +461,12 @@ buffer_ activity producer = do
 works with 'Producer's of still undecoded values, by supplying a decoding
 function and a 'LeftoverPolicy'.
  -}
-encoding :: (Show e, Typeable e) 
+encoded :: (Show e, Typeable e) 
          => (Producer b IO () -> Producer t IO (Producer b IO ()))
          -> LeftoverPolicy a b e
          -> (Producer t IO () -> IO (Either e a))
          ->  Producer b IO () -> IO (Either e a)
-encoding decoder policy activity producer = buffer policy activity $ decoder producer 
+encoded decoder policy activity producer = buffer policy activity $ decoder producer 
 
 
 data WrappedError e = WrappedError e
