@@ -22,14 +22,20 @@
 module System.Process.Streaming ( 
         -- * Execution
           execute
-        , blendIOExceptions
-        , blendExitFailure
+--        , blendIOExceptions
+--        , blendExitFailure
         -- * Piping standard streams
         , PipingPolicy
         , nopiping
+        , pipeo
+        , pipee
         , pipeoe
+        , pipeoec
+        , pipei
+        , pipeio
+        , pipeie
         , pipeioe
-
+        , pipeioec
         -- * Separated stdout/stderr 
         , separated
 
@@ -55,8 +61,8 @@ module System.Process.Streaming (
 
         , Pump (..)
         , Siphon (..)
-        , SiphonL (..)
-        , SiphonR (..)
+--        , SiphonL (..)
+--        , SiphonR (..)
 
         -- * Re-exports
         -- $reexports
@@ -72,6 +78,7 @@ import Data.Monoid
 import Data.Traversable
 import Data.Typeable
 import Data.Text 
+import Data.Void
 import Control.Applicative
 import Control.Monad
 import Control.Monad.Trans.Free
@@ -131,11 +138,11 @@ exitCode (ec,a) = case ec of
     ExitSuccess -> Right a 
     ExitFailure i -> Left i
 
-blendIOExceptions :: (IOError -> e) -> IO (Either e a) -> IO (Either e a)
-blendIOExceptions exh task = join . bimap exh id <$> tryIOError task  
-
-blendExitFailure :: (Int -> e) -> Either e (ExitCode,a) -> Either e a
-blendExitFailure ech x = join $ bimap id (bimap ech id . exitCode) x 
+-- blendIOExceptions :: (IOError -> e) -> IO (Either e a) -> IO (Either e a)
+-- blendIOExceptions exh task = join . bimap exh id <$> tryIOError task  
+-- 
+-- blendExitFailure :: (Int -> e) -> Either e (ExitCode,a) -> Either e a
+-- blendExitFailure ech x = join $ bimap id (bimap ech id . exitCode) x 
 
 terminateCarefully :: ProcessHandle -> IO ()
 terminateCarefully pHandle = do
@@ -180,6 +187,15 @@ instance Bifunctor PipingPolicy where
 nopiping :: PipingPolicy e ()
 nopiping = PipingPolicy id nohandles (\() -> (return $ return (), return ()))  
 
+pipeo :: PipingPolicy e a
+pipeo = undefined
+
+pipee :: PipingPolicy e a
+pipee = undefined
+
+pipeoec :: PipingPolicy e a
+pipeoec = undefined
+
 {-|
     Pipe stderr and stdout.
 
@@ -194,6 +210,15 @@ pipeoe consumefunc = PipingPolicy changecp handlesoe handler
           changecp cp = cp { std_out = CreatePipe 
                            , std_err = CreatePipe 
                            }
+
+pipei :: PipingPolicy e a
+pipei = undefined
+
+pipeio :: PipingPolicy e a
+pipeio = undefined
+
+pipeie :: PipingPolicy e a
+pipeie = undefined
 
 {-|
     Pipe stdin, stderr and stdout.
@@ -214,6 +239,9 @@ pipeioe feeder consumefunc = PipingPolicy changecp handlesioe handler
                            , std_err = CreatePipe 
                            }
 
+pipeioec :: PipingPolicy e a
+pipeioec = undefined
+
 {-|
     'separate' should be used when we want to consume @stdout@ and @stderr@
 concurrently and independently. It constructs a function that can be plugged
@@ -233,6 +261,9 @@ separated :: (Show e, Typeable e)
 separated outfunc errfunc outprod errprod = 
     conceit (buffer_ outfunc outprod) (buffer_ errfunc errprod)
 
+{-|
+   Defines how to decode a stream of bytes into text, manipulate each line of text, and handle leftovers.  
+ -}
 data LinePolicy e = LinePolicy ((FreeT (Producer T.Text IO) IO (Producer ByteString IO ()) -> IO (Producer ByteString IO ())) -> Producer ByteString IO () -> IO (Either e ()))
 
 instance Functor LinePolicy where
@@ -613,15 +644,15 @@ instance (Show e, Typeable e, Monoid a) => Monoid (Siphon b e a) where
    mempty = Siphon . pure . pure . pure $ mempty
    mappend s1 s2 = (<>) <$> s1 <*> s2
 
-newtype SiphonL a b e = SiphonL { runSiphonL :: Producer b IO () -> IO (Either e a) }
-
-instance Profunctor (SiphonL e) where
-     dimap ab cd (SiphonL pf) = SiphonL $ \p -> liftM (bimap cd id) $ pf $ p >-> P.map ab
-
-newtype SiphonR e b a = SiphonR { runSiphonR :: Producer b IO () -> IO (Either e a) }
-
-instance Profunctor (SiphonR e) where
-     dimap ab cd (SiphonR pf) = SiphonR $ \p -> liftM (fmap cd) $ pf $ p >-> P.map ab
+-- newtype SiphonL a b e = SiphonL { runSiphonL :: Producer b IO () -> IO (Either e a) }
+-- 
+-- instance Profunctor (SiphonL e) where
+--      dimap ab cd (SiphonL pf) = SiphonL $ \p -> liftM (bimap cd id) $ pf $ p >-> P.map ab
+-- 
+-- newtype SiphonR e b a = SiphonR { runSiphonR :: Producer b IO () -> IO (Either e a) }
+-- 
+-- instance Profunctor (SiphonR e) where
+--      dimap ab cd (SiphonR pf) = SiphonR $ \p -> liftM (fmap cd) $ pf $ p >-> P.map ab
 
 {- $reexports
  
