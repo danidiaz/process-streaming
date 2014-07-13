@@ -35,12 +35,12 @@ module System.Process.Streaming (
         , pipeioe
         , pipeioec
 
-        -- * Pumping bytes into the process
+        -- * Pumping bytes into stdin
         , Pump (..)
         , useProducer
         , useSafeProducer
         , useFallibleProducer
-        -- * Siphoning bytes from the process
+        -- * Siphoning bytes stdout/stderr
         , Siphon (..)
         , useConsumer
         , useSafeConsumer
@@ -330,10 +330,10 @@ decoding failures.
  -}
 
 linePolicy :: (forall r. Producer ByteString IO r -> Producer T.Text IO (Producer ByteString IO r)) 
-           -> (forall r. Producer T.Text IO r -> Producer T.Text IO r)
            -> (LeftoverPolicy () ByteString e)
+           -> (forall r. Producer T.Text IO r -> Producer T.Text IO r)
            -> LinePolicy e 
-linePolicy decoder transform lopo = LinePolicy $ \teardown producer -> do
+linePolicy decoder lopo transform = LinePolicy $ \teardown producer -> do
     let freeLines = transFreeT transform 
                   . viewLines 
                   . decoder
@@ -481,25 +481,6 @@ fallibly :: (MFunctor t, Monad m, Error e)
          => (t (ErrorT e m) l -> (ErrorT e m) x) 
          ->  t m            l -> m (Either e x) 
 fallibly activity = runErrorT . activity . hoist lift 
-
-{-|
-  Usually, it is better to use a fold form "Pipes.Prelude" instead of this
-function.  But this function has the ability to return the monoidal result
-accumulated up until the error happened. 
-
- The first argument is a function that combines the initial error with the
-monoidal result to build the definitive error value. If you want to discard the
-results, use 'const' as the first argument.  
- -}
-monoidally :: (MFunctor t,Monad m,Monoid w, Error e') 
-           => (e' -> w -> e) 
-           -> (t (ErrorT e' (WriterT w m)) l -> ErrorT e' (WriterT w m) ())
-           ->  t m                         l -> m                       (Either e w)
-monoidally errh activity proxy = do
-    (r,w) <- runWriterT . runErrorT . activity . hoist (lift.lift) $ proxy
-    return $ case r of
-        Left e' -> Left $ errh e' w    
-        Right () -> Right $ w
 
 buffer :: (Show e, Typeable e)
        => LeftoverPolicy a l e
@@ -685,16 +666,6 @@ instance (Show e, Typeable e) => Applicative (Siphon b e) where
 instance (Show e, Typeable e, Monoid a) => Monoid (Siphon b e a) where
    mempty = Siphon . pure . pure . pure $ mempty
    mappend s1 s2 = (<>) <$> s1 <*> s2
-
--- newtype SiphonL a b e = SiphonL { runSiphonL :: Producer b IO () -> IO (Either e a) }
--- 
--- instance Profunctor (SiphonL e) where
---      dimap ab cd (SiphonL pf) = SiphonL $ \p -> liftM (bimap cd id) $ pf $ p >-> P.map ab
--- 
--- newtype SiphonR e b a = SiphonR { runSiphonR :: Producer b IO () -> IO (Either e a) }
--- 
--- instance Profunctor (SiphonR e) where
---      dimap ab cd (SiphonR pf) = SiphonR $ \p -> liftM (fmap cd) $ pf $ p >-> P.map ab
 
 {- $reexports
  
