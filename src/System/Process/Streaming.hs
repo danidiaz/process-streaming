@@ -22,9 +22,7 @@
 module System.Process.Streaming ( 
         -- * Execution
           execute
---        , blendIOExceptions
---        , blendExitFailure
-        -- * Piping standard streams
+        -- * Piping Policies
         , PipingPolicy
         , nopiping
         , pipeo
@@ -36,11 +34,21 @@ module System.Process.Streaming (
         , pipeie
         , pipeioe
         , pipeioec
-        -- * Separated stdout/stderr 
-        , separated
 
-        -- * Stdout/stderr combined as text
-        , combined
+        -- * Pumping bytes into the process
+        , Pump (..)
+        , useProducer
+        , useSafeProducer
+        , useFallibleProducer
+        -- * Siphoning bytes from the process
+        , Siphon (..)
+        , useConsumer
+        , useSafeConsumer
+        , useFallibleConsumer
+        , useFold
+        , useParser
+
+        -- * Handling lines
         , LinePolicy
         , linePolicy
 
@@ -50,19 +58,6 @@ module System.Process.Streaming (
         , ignoreLeftovers
         , whenLeftovers 
         , fromFirstLeftovers
-        -- * Construction of feeding/consuming functions
-        , useConsumer
-        , useProducer
-        , surely
-        , safely
-        , fallibly
-        , monoidally
-        , nop
-
-        , Pump (..)
-        , Siphon (..)
---        , SiphonL (..)
---        , SiphonR (..)
 
         -- * Re-exports
         -- $reexports
@@ -95,6 +90,7 @@ import qualified Pipes as P
 import qualified Pipes.Prelude as P
 import Pipes.Lift
 import Pipes.ByteString
+import Pipes.Parse
 import qualified Pipes.Text as T
 import Pipes.Concurrent
 import Pipes.Safe (SafeT, runSafeT)
@@ -187,11 +183,19 @@ instance Bifunctor PipingPolicy where
 nopiping :: PipingPolicy e ()
 nopiping = PipingPolicy id nohandles (\() -> (return $ return (), return ()))  
 
-pipeo :: PipingPolicy e a
-pipeo = undefined
+pipeo :: (Show e,Typeable e) => Siphon ByteString e a -> PipingPolicy e a
+pipeo (Siphon siphonout) = PipingPolicy changecp handleso handler  
+    where handler hout =
+            (,) (siphonout (fromHandle hout))
+                (hClose hout)
+          changecp cp = cp { std_out = CreatePipe }
 
-pipee :: PipingPolicy e a
-pipee = undefined
+pipee :: (Show e,Typeable e) => Siphon ByteString e a -> PipingPolicy e a
+pipee (Siphon siphonerr) = PipingPolicy changecp handlese handler  
+    where handler herr =
+            (,) (siphonerr (fromHandle herr))
+                (hClose herr)
+          changecp cp = cp { std_err = CreatePipe }
 
 {-|
     Pipe stderr and stdout.
@@ -218,14 +222,34 @@ pipeoec policy1 policy2 (Siphon siphon) = PipingPolicy changecp handlesoe handle
                            }
           consumefunc = combined policy1 policy2 siphon  
 
-pipei :: PipingPolicy e a
-pipei = undefined
+pipei :: (Show e, Typeable e) => Pump ByteString e i -> PipingPolicy e i
+pipei (Pump feeder) = PipingPolicy changecp handlesi handler  
+    where handler hin = 
+            (,) (feeder (toHandle hin) `finally` hClose hin) 
+                (hClose hin)
+          changecp cp = cp { std_in = CreatePipe }
 
-pipeio :: PipingPolicy e a
-pipeio = undefined
+pipeio :: (Show e, Typeable e)
+        => Pump ByteString e i -> Siphon ByteString e a -> PipingPolicy e (i,a)
+pipeio (Pump feeder) (Siphon siphonout) = PipingPolicy changecp handlesio handler  
+    where handler (hin,hout) = 
+            (,) (conceit (feeder (toHandle hin) `finally` hClose hin) 
+                         (siphonout (fromHandle hout) ))
+                (hClose hin `finally` hClose hout)
+          changecp cp = cp { std_in = CreatePipe
+                           , std_out = CreatePipe 
+                           }
 
-pipeie :: PipingPolicy e a
-pipeie = undefined
+pipeie :: (Show e, Typeable e)
+        => Pump ByteString e i -> Siphon ByteString e a -> PipingPolicy e (i,a)
+pipeie (Pump feeder) (Siphon siphonerr) = PipingPolicy changecp handlesie handler  
+    where handler (hin,herr) = 
+            (,) (conceit (feeder (toHandle hin) `finally` hClose hin) 
+                         (siphonerr (fromHandle herr) ))
+                (hClose hin `finally` hClose herr)
+          changecp cp = cp { std_in = CreatePipe
+                           , std_err = CreatePipe 
+                           }
 
 {-|
     Pipe stdin, stderr and stdout.
@@ -336,20 +360,12 @@ instance Functor (LeftoverPolicy a l) where
 {-|
     Never fails for any leftover.
  -}
-ignoreLeftovers :: LeftoverPolicy a l e
+ignoreLeftovers :: LeftoverPolicy a l Void 
 ignoreLeftovers =  LeftoverPolicy $ pure . pure . pure
 
 {-|
     Fails if it encounters any leftover, and constructs the error out of the
-first undedcoded data. 
-
-    For simple error handling, just ignore the @a@ and the undecoded data:
-
-    > (failOnLeftvoers (\_ _->"badbytes")) :: LeftoverPolicy (Producer b IO ()) String a
-
-    For more detailed error handling, you may want to include the result until
-the error @a@ and/or the first undecoded values @b@ in your custom error
-datatype.
+result of type @a@ and the first undedcoded data. 
  -}
 fromFirstLeftovers ::  (a -> l -> e) -> LeftoverPolicy a l e 
 fromFirstLeftovers errh = LeftoverPolicy $ \a remainingBytes -> do
@@ -413,16 +429,34 @@ manyCombined actions consumer = do
 
     You may need to use 'surely' for the types to fit.
  -}
-useConsumer :: Monad m => Consumer b m () -> Producer b m () -> m ()
-useConsumer consumer producer = runEffect $ producer >-> consumer 
+useConsumer :: Consumer b IO () -> Siphon b Void ()
+useConsumer consumer = Siphon $ \producer -> fmap pure $ runEffect $ producer >-> consumer 
+
+useSafeConsumer :: Consumer b (SafeT IO) () -> Siphon b Void ()
+useSafeConsumer consumer = Siphon $ safely $ \producer -> fmap pure $ runEffect $ producer >-> consumer 
+
+useFallibleConsumer :: Error e => Consumer b (ErrorT e IO) () -> Siphon b e ()
+useFallibleConsumer consumer = Siphon $ \producer -> runErrorT $ runEffect (hoist lift producer >-> consumer) 
+
+useFold :: (Producer b IO () -> IO a) -> Siphon b Void a 
+useFold aFold = Siphon $ fmap (fmap pure) $ aFold 
+
+useParser :: Parser b IO (Either e a) -> Siphon b e a 
+useParser parser = Siphon $ Pipes.Parse.evalStateT parser 
 
 {-|
     Useful for constructing @stdin@ feeding functions from a 'Producer'.
 
     You may need to use 'surely' for the types to fit.
  -}
-useProducer :: Monad m => Producer b m () -> Consumer b m () -> m ()
-useProducer producer consumer = runEffect (producer >-> consumer) 
+useProducer :: Producer b IO () -> Pump b Void ()
+useProducer producer = Pump $ \consumer -> fmap pure $ runEffect (producer >-> consumer) 
+
+useSafeProducer :: Producer b (SafeT IO) () -> Pump b Void ()
+useSafeProducer producer = Pump $ safely $ \consumer -> fmap pure $ runEffect (producer >-> consumer) 
+
+useFallibleProducer :: Error e => Producer b (ErrorT e IO) () -> Pump b e ()
+useFallibleProducer producer = Pump $ \consumer -> runErrorT $ runEffect (producer >-> hoist lift consumer) 
 
 {-| 
   Useful when we want to plug in a handler that doesn't return an 'Either'. For
@@ -467,16 +501,6 @@ monoidally errh activity proxy = do
         Left e' -> Left $ errh e' w    
         Right () -> Right $ w
 
-{-|
-    Value to plug into 'separated' or 'combined' when we are not interested in
-doing anything with the stream. It returns immediately with @()@. 
-
-    Notice that even if 'nop' returns immediately,  'separate' and
-'combined' drain the streams to completion before returning.
-  -}
-nop :: Applicative m => i -> m (Either e ()) 
-nop = pure . pure . pure $ ()
-
 buffer :: (Show e, Typeable e)
        => LeftoverPolicy a l e
        -> (Producer b IO ()                 -> IO (Either e a))
@@ -512,11 +536,11 @@ works with 'Producer's of still undecoded values, by supplying a decoding
 function and a 'LeftoverPolicy'.
  -}
 encoded :: (Show e, Typeable e) 
-         => (Producer b IO () -> Producer t IO (Producer b IO ()))
-         -> LeftoverPolicy a b e
-         -> (Producer t IO () -> IO (Either e a))
-         ->  Producer b IO () -> IO (Either e a)
-encoded decoder policy activity producer = buffer policy activity $ decoder producer 
+        => (Producer bytes IO () -> Producer text IO (Producer bytes IO ()))
+        -> LeftoverPolicy a bytes e
+        -> Siphon text e a 
+        -> Siphon bytes e a
+encoded decoder policy (Siphon activity) = Siphon $ \producer -> buffer policy activity $ decoder producer 
 
 
 data WrappedError e = WrappedError e

@@ -19,8 +19,13 @@ module System.Process.Lens (
        , _delegate_ctlc 
        , handles
        , nohandles
-       , handlesioe
+       , handleso
+       , handlese
        , handlesoe
+       , handlesi
+       , handlesio
+       , handlesie
+       , handlesioe
     ) where
 
 import Data.Maybe
@@ -129,6 +134,34 @@ nohandles f quad = case impure quad of
         impure x = Left x
         justify () = (Nothing, Nothing, Nothing)  
 
+
+handlesi :: forall m. Applicative m => (Handle -> m Handle) -> (Maybe Handle, Maybe Handle, Maybe Handle) -> m (Maybe Handle, Maybe Handle, Maybe Handle)
+handlesi f quad = case impure quad of
+    Left l -> pure l
+    Right r -> fmap justify (f r)
+    where    
+        impure (Just h1, Just h2, Just h3) = Right h1
+        impure x = Left x
+        justify h1 = (Just h1, Nothing, Nothing)  
+
+handlesio :: forall m. Applicative m => ((Handle,Handle) -> m (Handle,Handle)) -> (Maybe Handle, Maybe Handle, Maybe Handle) -> m (Maybe Handle, Maybe Handle, Maybe Handle)
+handlesio f quad = case impure quad of
+    Left l -> pure l
+    Right r -> fmap justify (f r)
+    where    
+        impure (Just h1, Just h2, Just h3) = Right (h1,h2)
+        impure x = Left x
+        justify (h1,h2) = (Just h1, Just h2, Nothing)  
+
+handlesie :: forall m. Applicative m => ((Handle,Handle) -> m (Handle,Handle)) -> (Maybe Handle, Maybe Handle, Maybe Handle) -> m (Maybe Handle, Maybe Handle, Maybe Handle)
+handlesie f quad = case impure quad of
+    Left l -> pure l
+    Right r -> fmap justify (f r)
+    where    
+        impure (Just h1, Nothing, Just h2) = Right (h1,h2)
+        impure x = Left x
+        justify (h1,h2) = (Just h1, Nothing, Just h2)  
+
 {-|
     A 'Prism' that removes the 'Maybe's from @stdin@, @stdout@ and @stderr@ or fails to match if any of them is 'Nothing'.
 
@@ -157,3 +190,20 @@ handlesoe f quad = case impure quad of
         impure x = Left x
         justify (h2, h3) = (Nothing, Just h2, Just h3)  
 
+handleso :: forall m. Applicative m => (Handle -> m Handle) -> (Maybe Handle, Maybe Handle, Maybe Handle) -> m (Maybe Handle, Maybe Handle, Maybe Handle)
+handleso f quad = case impure quad of
+    Left l -> pure l
+    Right r -> fmap justify (f r)
+    where    
+        impure (Nothing, Just h2, Nothing) = Right h2
+        impure x = Left x
+        justify h2 = (Nothing, Just h2, Nothing)  
+
+handlese :: forall m. Applicative m => (Handle -> m Handle) -> (Maybe Handle, Maybe Handle, Maybe Handle) -> m (Maybe Handle, Maybe Handle, Maybe Handle)
+handlese f quad = case impure quad of
+    Left l -> pure l
+    Right r -> fmap justify (f r)
+    where    
+        impure (Nothing, Nothing, Just h2) = Right h2
+        impure x = Left x
+        justify h2 = (Nothing, Nothing, Just h2)  
