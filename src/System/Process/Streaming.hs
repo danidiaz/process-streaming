@@ -47,17 +47,16 @@ module System.Process.Streaming (
         , useFallibleConsumer
         , useFold
         , useParser
-
-        -- * Handling lines
+        , unlessEmpty
+        , encoded
+        -- * Line utilities
         , LinePolicy
         , linePolicy
 
-        -- * Decoding and leftovers 
-        , encoded
-        , LeftoverPolicy(..)
-        , ignoreLeftovers
-        , whenLeftovers 
-        , fromFirstLeftovers
+--        , LeftoverPolicy(..)
+--        , ignoreLeftovers
+--        , whenLeftovers 
+--        , fromFirstLeftovers
 
         -- * Re-exports
         -- $reexports
@@ -330,54 +329,16 @@ decoding failures.
  -}
 
 linePolicy :: (forall r. Producer ByteString IO r -> Producer T.Text IO (Producer ByteString IO r)) 
-           -> (LeftoverPolicy () ByteString e)
+           ->  Siphon ByteString e ()
            -> (forall r. Producer T.Text IO r -> Producer T.Text IO r)
-           -> LinePolicy e 
+           ->  LinePolicy e 
 linePolicy decoder lopo transform = LinePolicy $ \teardown producer -> do
     let freeLines = transFreeT transform 
                   . viewLines 
                   . decoder
                   $ producer
         viewLines = getConst . T.lines Const
-    teardown freeLines >>= runLeftoverPolicy lopo ()
-
-{-|
-    In the Pipes ecosystem, leftovers from decoding operations are often stored
-in the result value of 'Producer's (as 'Producer's themselves). 
-
-    A 'LeftoverPolicy' receives a value @a@ and a producer of lefovers of type
-@l@. Analyzing the producer, it may modify the value @a@ or fail outright,
-depending of what the leftovers are. 
- -}
-data LeftoverPolicy a l e = LeftoverPolicy { runLeftoverPolicy :: a -> Producer l IO () -> IO (Either e a) }
-
-instance Functor (LeftoverPolicy a l) where
-  fmap f (LeftoverPolicy x) = LeftoverPolicy $ fmap (fmap (fmap (bimap f id))) x
-
--- instance Profunctor (LeftoverPolicy a) where
---      dimap ab cd (LeftoverPolicy pf) = LeftoverPolicy $ \a p -> liftM (bimap cd id) $ pf a $ p >-> P.map ab
-
-{-|
-    Never fails for any leftover.
- -}
-ignoreLeftovers :: LeftoverPolicy a l Void 
-ignoreLeftovers =  LeftoverPolicy $ pure . pure . pure
-
-{-|
-    Fails if it encounters any leftover, and constructs the error out of the
-result of type @a@ and the first undedcoded data. 
- -}
-fromFirstLeftovers ::  (a -> l -> e) -> LeftoverPolicy a l e 
-fromFirstLeftovers errh = LeftoverPolicy $ \a remainingBytes -> do
-    r <- next remainingBytes
-    return $ case r of 
-        Left () -> Right a
-        Right (somebytes,_) -> Left $ errh a somebytes 
-
-whenLeftovers :: e -> LeftoverPolicy a l e 
-whenLeftovers e = fromFirstLeftovers $ \_ _ -> e
-
-
+    teardown freeLines >>= runSiphon lopo
 
 {-|
     The bytes from @stdout@ and @stderr@ are decoded into 'Text', splitted into
@@ -408,15 +369,16 @@ combined (LinePolicy fun1) (LinePolicy fun2) combinedConsumer prod1 prod2 =
     manyCombined [fmap (($prod1).buffer_) fun1, fmap (($prod2).buffer_) fun2] combinedConsumer 
     
 manyCombined :: (Show e, Typeable e) 
-             => [((FreeT (Producer T.Text IO) IO (Producer ByteString IO ())) -> IO (Producer ByteString IO ())) -> IO (Either e ())]
+             => [(FreeT (Producer T.Text IO) IO (Producer ByteString IO ()) -> IO (Producer ByteString IO ())) -> IO (Either e ())]
         	 -> (Producer T.Text IO () -> IO (Either e a))
         	 -> IO (Either e a) 
 manyCombined actions consumer = do
     (outbox, inbox, seal) <- spawn' Unbounded
     mVar <- newMVar outbox
-    r <- conceit (mapConceit ($ iterTLines mVar) actions `finally` atomically seal)
-              (consumer (fromInput inbox) `finally` atomically seal)
-    return $ snd <$> r
+    runConceit $ 
+        Conceit (mapConceit ($ iterTLines mVar) actions `finally` atomically seal)
+        *>
+        Conceit (consumer (fromInput inbox) `finally` atomically seal)
     where 
     iterTLines mvar = iterT $ \textProducer -> do
         -- the P.drain bit was difficult to figure out!!!
@@ -483,7 +445,7 @@ fallibly :: (MFunctor t, Monad m, Error e)
 fallibly activity = runErrorT . activity . hoist lift 
 
 buffer :: (Show e, Typeable e)
-       => LeftoverPolicy a l e
+       =>  Siphon l e ()
        -> (Producer b IO ()                 -> IO (Either e a))
        ->  Producer b IO (Producer l IO ()) -> IO (Either e a)
 buffer policy activity producer = do
@@ -496,7 +458,8 @@ buffer policy activity producer = do
               (activity (fromInput inbox) `finally` atomically seal)
     case r of 
         Left e -> return $ Left e
-        Right (lp,r') -> runLeftoverPolicy policy r' lp
+        Right (lp,r') -> runSiphon (fmap (const r') policy) lp
+        --Right (lp,r') -> fmap (const r') . runSiphon policy $ lp
 
 buffer_ :: (Show e, Typeable e) 
         => (Producer ByteString IO () -> IO (Either e a))
@@ -518,7 +481,7 @@ function and a 'LeftoverPolicy'.
  -}
 encoded :: (Show e, Typeable e) 
         => (Producer bytes IO () -> Producer text IO (Producer bytes IO ()))
-        -> LeftoverPolicy a bytes e
+        -> Siphon bytes e ()
         -> Siphon text e a 
         -> Siphon bytes e a
 encoded decoder policy (Siphon activity) = Siphon $ \producer -> buffer policy activity $ decoder producer 
@@ -666,6 +629,13 @@ instance (Show e, Typeable e) => Applicative (Siphon b e) where
 instance (Show e, Typeable e, Monoid a) => Monoid (Siphon b e a) where
    mempty = Siphon . pure . pure . pure $ mempty
    mappend s1 s2 = (<>) <$> s1 <*> s2
+
+unlessEmpty :: e -> Siphon b e ()
+unlessEmpty e = Siphon $ \producer -> do
+    r <- next producer  
+    return $ case r of 
+        Left _ -> pure ()
+        Right _ -> Left e 
 
 {- $reexports
  
