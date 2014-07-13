@@ -71,7 +71,7 @@ module System.Process.Streaming (
 
 import Data.Maybe
 import Data.Bifunctor
-import Data.Profunctor
+-- import Data.Profunctor
 import Data.Functor.Identity
 import Data.Either
 import Data.Monoid
@@ -193,23 +193,30 @@ pipeo = undefined
 pipee :: PipingPolicy e a
 pipee = undefined
 
-pipeoec :: PipingPolicy e a
-pipeoec = undefined
-
 {-|
     Pipe stderr and stdout.
 
     See also the 'separated' and 'combined' functions.
 -}
-pipeoe :: (Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e a))
-       -> PipingPolicy e a
-pipeoe consumefunc = PipingPolicy changecp handlesoe handler  
+pipeoe :: (Show e,Typeable e) => Siphon ByteString e a -> Siphon ByteString e b -> PipingPolicy e (a,b)
+pipeoe (Siphon siphonout) (Siphon siphonerr) = PipingPolicy changecp handlesoe handler  
     where handler (hout,herr) =
             (,) (consumefunc (fromHandle hout) (fromHandle herr))
                 (hClose hout `finally` hClose herr)
           changecp cp = cp { std_out = CreatePipe 
                            , std_err = CreatePipe 
                            }
+          consumefunc = separated siphonout siphonerr
+
+pipeoec :: (Show e,Typeable e) => LinePolicy e -> LinePolicy e -> Siphon Text e a -> PipingPolicy e a
+pipeoec policy1 policy2 (Siphon siphon) = PipingPolicy changecp handlesoe handler  
+    where handler (hout,herr) = 
+            (,) (consumefunc (fromHandle hout) (fromHandle herr))
+                (hClose hout `finally` hClose herr)
+          changecp cp = cp { std_out = CreatePipe 
+                           , std_err = CreatePipe 
+                           }
+          consumefunc = combined policy1 policy2 siphon  
 
 pipei :: PipingPolicy e a
 pipei = undefined
@@ -226,11 +233,9 @@ pipeie = undefined
     See also the 'separated' and 'combined' functions.
 -}
 pipeioe :: (Show e, Typeable e)
-        => (Consumer ByteString IO ()                              -> IO (Either e a))
-        -> (Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e b))
-        -> PipingPolicy e (a,b)
-pipeioe feeder consumefunc = PipingPolicy changecp handlesioe handler  
-    where handler (hin,hout,herr) =
+        => Pump ByteString e i -> Siphon ByteString e a -> Siphon ByteString e b -> PipingPolicy e (i,a,b)
+pipeioe (Pump feeder) (Siphon siphonout) (Siphon siphonerr) = flattenTuple <$> PipingPolicy changecp handlesioe handler  
+    where handler (hin,hout,herr) = 
             (,) (conceit (feeder (toHandle hin) `finally` hClose hin) 
                          (consumefunc (fromHandle hout) (fromHandle herr)))
                 (hClose hin `finally` hClose hout `finally` hClose herr)
@@ -239,8 +244,21 @@ pipeioe feeder consumefunc = PipingPolicy changecp handlesioe handler
                            , std_err = CreatePipe 
                            }
 
-pipeioec :: PipingPolicy e a
-pipeioec = undefined
+          consumefunc = separated siphonout siphonerr
+          flattenTuple (i, (a, b)) = (i,a,b)
+
+pipeioec :: (Show e, Typeable e)
+         => Pump ByteString e i -> LinePolicy e -> LinePolicy e -> Siphon Text e a -> PipingPolicy e (i,a)
+pipeioec (Pump feeder) policy1 policy2 (Siphon siphon) = PipingPolicy changecp handlesioe handler  
+    where handler (hin,hout,herr) = 
+            (,) (conceit (feeder (toHandle hin) `finally` hClose hin) 
+                         (consumefunc (fromHandle hout) (fromHandle herr)))
+                (hClose hin `finally` hClose hout `finally` hClose herr)
+          changecp cp = cp { std_in = CreatePipe
+                           , std_out = CreatePipe 
+                           , std_err = CreatePipe 
+                           }
+          consumefunc = combined policy1 policy2 siphon
 
 {-|
     'separate' should be used when we want to consume @stdout@ and @stderr@
@@ -312,8 +330,8 @@ data LeftoverPolicy a l e = LeftoverPolicy { runLeftoverPolicy :: a -> Producer 
 instance Functor (LeftoverPolicy a l) where
   fmap f (LeftoverPolicy x) = LeftoverPolicy $ fmap (fmap (fmap (bimap f id))) x
 
-instance Profunctor (LeftoverPolicy a) where
-     dimap ab cd (LeftoverPolicy pf) = LeftoverPolicy $ \a p -> liftM (bimap cd id) $ pf a $ p >-> P.map ab
+-- instance Profunctor (LeftoverPolicy a) where
+--      dimap ab cd (LeftoverPolicy pf) = LeftoverPolicy $ \a p -> liftM (bimap cd id) $ pf a $ p >-> P.map ab
 
 {-|
     Never fails for any leftover.
