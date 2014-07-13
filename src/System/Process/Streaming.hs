@@ -53,8 +53,8 @@ module System.Process.Streaming (
         , monoidally
         , nop
 
+        , Pump (..)
         , Siphon (..)
-        , forkSiphon
         , SiphonL (..)
         , SiphonR (..)
 
@@ -76,6 +76,7 @@ import Control.Applicative
 import Control.Monad
 import Control.Monad.Trans.Free
 import Control.Monad.Error
+import Control.Monad.Except
 import Control.Monad.State
 import Control.Monad.Writer.Strict
 import qualified Control.Monad.Catch as C
@@ -531,6 +532,41 @@ immediately cancelled and the whole computation fails with @e@.
 mapConceit :: (Show e, Typeable e, Traversable t) => (a -> IO (Either e b)) -> t a -> IO (Either e (t b))
 mapConceit f = revealError .  mapConcurrently (elideError . f)
 
+newtype Pump b e a = Pump { runPump :: Consumer b IO () -> IO (Either e a) }
+
+instance Functor (Pump b e) where
+  fmap f (Pump x) = Pump $ fmap (fmap (fmap f)) x
+
+instance Bifunctor (Pump b) where
+  bimap f g (Pump x) = Pump $ fmap (liftM  (bimap f g)) x
+
+instance (Show e, Typeable e) => Applicative (Pump b e) where
+  pure = Pump . pure . pure . pure
+  Pump fs <*> Pump as = 
+      Pump $ \consumer -> do
+          (outbox1,inbox1,seal1) <- spawn' Unbounded
+          (outbox2,inbox2,seal2) <- spawn' Unbounded
+          runConceit $ 
+              Conceit (runExceptT $ do
+                           r1 <- ExceptT $ (fs $ toOutput outbox1) 
+                                               `finally` atomically seal1
+                           r2 <- ExceptT $ (as $ toOutput outbox2) 
+                                               `finally` atomically seal2
+                           return $ r1 r2 
+                      )
+              <* 
+              Conceit (do
+                         (runEffect $
+                             (fromInput inbox1 >> fromInput inbox2) >-> consumer)
+                            `finally` atomically seal1
+                            `finally` atomically seal2
+                         return $ pure ()
+                      )
+
+instance (Show e, Typeable e, Monoid a) => Monoid (Pump b e a) where
+   mempty = Pump . pure . pure . pure $ mempty
+   mappend s1 s2 = (<>) <$> s1 <*> s2
+
 {-| 
     'Siphon' is a newtype around a function that does something with a
 'Producer'. The applicative instance fuses the functions, so that each one
@@ -555,30 +591,27 @@ instance (Show e, Typeable e) => Applicative (Siphon b e) where
       Siphon $ \producer -> do
           (outbox1,inbox1,seal1) <- spawn' Unbounded
           (outbox2,inbox2,seal2) <- spawn' Unbounded
-          r <- conceit (do
-                          feeding <- async $ runEffect $ 
-                              producer >-> P.tee (toOutput outbox1 >> P.drain) 
-                                       >->       (toOutput outbox2 >> P.drain)   
-                          sealing <- async $ wait feeding `finally` atomically seal1 
-                                                          `finally` atomically seal2
-                          return $ Right ()
-                       )
-                       (fmap (uncurry ($)) <$> conceit ((fs $ fromInput inbox1) 
-                                                       `finally` atomically seal1) 
-                                                       ((as $ fromInput inbox2) 
-                                                       `finally` atomically seal2) 
-                       )
-          return $ fmap snd r
+          runConceit $
+              Conceit (do
+                         -- mmm who cancels these asyncs ??
+                         feeding <- async $ runEffect $ 
+                             producer >-> P.tee (toOutput outbox1 >> P.drain) 
+                                      >->       (toOutput outbox2 >> P.drain)   
+                         -- is these async neccessary ??
+                         sealing <- async $ wait feeding `finally` atomically seal1 
+                                                         `finally` atomically seal2
+                         return $ pure ()
+                      )
+              *>
+              Conceit (fmap (uncurry ($)) <$> conceit ((fs $ fromInput inbox1) 
+                                                      `finally` atomically seal1) 
+                                                      ((as $ fromInput inbox2) 
+                                                      `finally` atomically seal2) 
+                      )
 
 instance (Show e, Typeable e, Monoid a) => Monoid (Siphon b e a) where
    mempty = Siphon . pure . pure . pure $ mempty
    mappend s1 s2 = (<>) <$> s1 <*> s2
-
-forkSiphon :: (Show e, Typeable e) 
-           => (Producer b IO () -> IO (Either e x))
-           -> (Producer b IO () -> IO (Either e y))
-           ->  Producer b IO () -> IO (Either e (x,y))
-forkSiphon c1 c2 = runSiphon $ (,) <$> Siphon c1 <*> Siphon c2
 
 newtype SiphonL a b e = SiphonL { runSiphonL :: Producer b IO () -> IO (Either e a) }
 
