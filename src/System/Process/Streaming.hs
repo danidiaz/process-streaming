@@ -466,13 +466,13 @@ buffer_ :: (Show e, Typeable e)
         ->  Producer ByteString IO () -> IO (Either e a)
 buffer_ activity producer = do
     (outbox,inbox,seal) <- spawn' Unbounded
-    r <- conceit 
-              (do feeding <- async $ runEffect $ 
+    runConceit $
+        Conceit (do feeding <- async $ runEffect $ 
                         producer >-> (toOutput outbox >> P.drain)
-                  Right <$> wait feeding `finally` atomically seal
-              )
-              (activity (fromInput inbox) `finally` atomically seal)
-    return $ fmap snd r 
+                    Right <$> wait feeding `finally` atomically seal
+                )
+        *>
+        Conceit (activity (fromInput inbox) `finally` atomically seal)
 
 {-|
    Adapts a function that works with 'Producer's of decoded values so that it
