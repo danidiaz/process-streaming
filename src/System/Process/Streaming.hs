@@ -47,7 +47,7 @@ module System.Process.Streaming (
         , useFallibleConsumer
         , useFold
         , useParser
-        , unlessEmpty
+        , unexpected
         , encoded
         -- * Line utilities
         , LinePolicy
@@ -629,12 +629,12 @@ instance (Show e, Typeable e, Monoid a) => Monoid (Siphon b e a) where
    mempty = Siphon . pure . pure . pure $ mempty
    mappend s1 s2 = (<>) <$> s1 <*> s2
 
-unlessEmpty :: e -> Siphon b e ()
-unlessEmpty e = Siphon $ \producer -> do
+unexpected :: a -> Siphon b b a
+unexpected a = Siphon $ \producer -> do
     r <- next producer  
     return $ case r of 
-        Left _ -> pure ()
-        Right _ -> Left e 
+        Left () -> Right a
+        Right (b,_) -> Left b
 
 {- $reexports
  
