@@ -445,9 +445,9 @@ fallibly :: (MFunctor t, Monad m, Error e)
 fallibly activity = runErrorT . activity . hoist lift 
 
 buffer :: (Show e, Typeable e)
-       =>  Siphon l e ()
-       -> (Producer b IO ()                 -> IO (Either e a))
-       ->  Producer b IO (Producer l IO ()) -> IO (Either e a)
+       =>  Siphon bytes e (a -> b)
+       ->  Siphon text e a
+       ->  Producer text  IO (Producer bytes IO ()) -> IO (Either e b)
 buffer policy activity producer = do
     (outbox,inbox,seal) <- spawn' Unbounded
     r <- conceit 
@@ -455,10 +455,10 @@ buffer policy activity producer = do
                         producer >-> (toOutput outbox >> P.drain)
                   Right <$> wait feeding `finally` atomically seal
               )
-              (activity (fromInput inbox) `finally` atomically seal)
+              (runSiphon activity (fromInput inbox) `finally` atomically seal)
     case r of 
         Left e -> return $ Left e
-        Right (lp,r') -> runSiphon (fmap (const r') policy) lp
+        Right (lp,r') -> runSiphon (fmap ($r') policy) lp
         --Right (lp,r') -> fmap (const r') . runSiphon policy $ lp
 
 buffer_ :: (Show e, Typeable e) 
@@ -481,10 +481,10 @@ function and a 'LeftoverPolicy'.
  -}
 encoded :: (Show e, Typeable e) 
         => (Producer bytes IO () -> Producer text IO (Producer bytes IO ()))
-        -> Siphon bytes e ()
-        -> Siphon text e a 
-        -> Siphon bytes e a
-encoded decoder policy (Siphon activity) = Siphon $ \producer -> buffer policy activity $ decoder producer 
+        -> Siphon bytes e (a -> b)
+        -> Siphon text  e a 
+        -> Siphon bytes e b
+encoded decoder policy activity = Siphon $ \producer -> buffer policy activity $ decoder producer 
 
 
 data WrappedError e = WrappedError e
