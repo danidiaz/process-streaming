@@ -458,8 +458,7 @@ buffer policy activity producer = do
               (runSiphon activity (fromInput inbox) `finally` atomically seal)
     case r of 
         Left e -> return $ Left e
-        Right (lp,r') -> runSiphon (fmap ($r') policy) lp
-        --Right (lp,r') -> fmap (const r') . runSiphon policy $ lp
+        Right (leftovers,a) -> runSiphon (fmap ($a) policy) leftovers
 
 buffer_ :: (Show e, Typeable e) 
         => (Producer ByteString IO () -> IO (Either e a))
