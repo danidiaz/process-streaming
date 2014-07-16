@@ -397,16 +397,16 @@ manyCombined actions consumer = do
 
     You may need to use 'surely' for the types to fit.
  -}
-useConsumer :: Consumer b IO () -> Siphon b Void ()
+useConsumer :: Consumer b IO () -> Siphon b e ()
 useConsumer consumer = Siphon $ \producer -> fmap pure $ runEffect $ producer >-> consumer 
 
-useSafeConsumer :: Consumer b (SafeT IO) () -> Siphon b Void ()
+useSafeConsumer :: Consumer b (SafeT IO) () -> Siphon b e ()
 useSafeConsumer consumer = Siphon $ safely $ \producer -> fmap pure $ runEffect $ producer >-> consumer 
 
 useFallibleConsumer :: Error e => Consumer b (ErrorT e IO) () -> Siphon b e ()
 useFallibleConsumer consumer = Siphon $ \producer -> runErrorT $ runEffect (hoist lift producer >-> consumer) 
 
-useFold :: (Producer b IO () -> IO a) -> Siphon b Void a 
+useFold :: (Producer b IO () -> IO a) -> Siphon b e a 
 useFold aFold = Siphon $ fmap (fmap pure) $ aFold 
 
 useParser :: Parser b IO (Either e a) -> Siphon b e a 
@@ -417,10 +417,10 @@ useParser parser = Siphon $ Pipes.Parse.evalStateT parser
 
     You may need to use 'surely' for the types to fit.
  -}
-useProducer :: Producer b IO () -> Pump b Void ()
+useProducer :: Producer b IO () -> Pump b e ()
 useProducer producer = Pump $ \consumer -> fmap pure $ runEffect (producer >-> consumer) 
 
-useSafeProducer :: Producer b (SafeT IO) () -> Pump b Void ()
+useSafeProducer :: Producer b (SafeT IO) () -> Pump b e ()
 useSafeProducer producer = Pump $ safely $ \consumer -> fmap pure $ runEffect (producer >-> consumer) 
 
 useFallibleProducer :: Error e => Producer b (ErrorT e IO) () -> Pump b e ()
