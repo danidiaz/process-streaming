@@ -22,6 +22,7 @@
 module System.Process.Streaming ( 
         -- * Execution
           execute
+        , executeFallibly
         -- * Piping Policies
         , PipingPolicy
         , nopiping
@@ -99,6 +100,9 @@ import System.Process
 import System.Process.Lens
 import System.Exit
 
+execute :: PipingPolicy Void a -> CreateProcess -> IO (ExitCode,a)
+execute pp cprocess = either absurd id <$> executeFallibly pp cprocess
+
 {-|
    Executes an external process. The standard streams are piped and consumed in
 a way defined by the 'PipingPolicy' argument. 
@@ -112,8 +116,8 @@ thrown in this case.).
    If an error @e@ or an exception happens, the external process is
 terminated.
  -}
-execute :: PipingPolicy e a -> CreateProcess -> IO (Either e (ExitCode,a))
-execute (PipingPolicy tr somePrism action) procSpec = mask $ \restore -> do
+executeFallibly :: PipingPolicy e a -> CreateProcess -> IO (Either e (ExitCode,a))
+executeFallibly (PipingPolicy tr somePrism action) procSpec = mask $ \restore -> do
     (min,mout,merr,phandle) <- createProcess (tr procSpec)
     case getFirst . getConst . somePrism (Const . First . Just) $ (min,mout,merr) of
         Nothing -> 
@@ -127,6 +131,8 @@ execute (PipingPolicy tr somePrism action) procSpec = mask $ \restore -> do
             (restore (terminateOnError phandle a) `onException` terminateCarefully phandle) 
             `finally` 
             cleanup 
+
+
 
 exitCode :: (ExitCode,a) -> Either Int a
 exitCode (ec,a) = case ec of
