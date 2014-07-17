@@ -165,7 +165,8 @@ terminateOnError pHandle action = do
             exitCode <- waitForProcess pHandle 
             return $ Right (exitCode,r)  
 
--- Doesn't know anything about file handles of CreateProcess
+-- Knows that there is a stdin, stdout and stderr,
+-- But doesn't know anything about file handles of CreateProcess
 data PP e a = 
       PPNone (IO (Either e a))
     | PPOutput (Producer ByteString IO () -> IO (Either e a))
@@ -176,9 +177,19 @@ data PP e a =
     | PPInputError  (Consumer ByteString IO () -> IO () -> Producer ByteString IO () -> IO (Either e a))
     | PPInputOutputError  (Consumer ByteString IO () -> IO () -> Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e a))
 
-
 -- Doesn't know anything about the exact set of handles targeted
 data PPZ e a = forall t u. PPZ (CreateProcess -> CreateProcess) (forall m. Applicative m => (t -> m t) -> (Maybe Handle, Maybe Handle, Maybe Handle) -> m (Maybe Handle, Maybe Handle, Maybe Handle)) (t ->(u,IO (),IO ()))  (u -> IO () -> IO (Either e a))
+
+innerExecute :: PP e a -> PPZ e a
+innerExecute pp = case pp of
+      PPNone io -> PPZ id nohandles (\() -> ((),return (),return())) (\() _ -> io)
+      PPOutput _ -> undefined
+      PPError _ -> undefined
+      PPOutputError _ -> undefined
+      PPInput _ -> undefined
+      PPInputOutput _ -> undefined
+      PPInputError _ -> undefined 
+      PPInputOutputError _ -> undefined
 
 {-|
      A 'PipingPolicy' specifies what standard streams of the external process
