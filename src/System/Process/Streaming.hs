@@ -165,6 +165,21 @@ terminateOnError pHandle action = do
             exitCode <- waitForProcess pHandle 
             return $ Right (exitCode,r)  
 
+-- Doesn't know anything about file handles of CreateProcess
+data PP e a = 
+      PPNone (IO (Either e a))
+    | PPOutput (Producer ByteString IO () -> IO (Either e a))
+    | PPError  (Producer ByteString IO () -> IO (Either e a))
+    | PPOutputError (Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e a))
+    | PPInput (Consumer ByteString IO () -> IO () -> IO (Either e a))
+    | PPInputOutput  (Consumer ByteString IO () -> IO () -> Producer ByteString IO () -> IO (Either e a))
+    | PPInputError  (Consumer ByteString IO () -> IO () -> Producer ByteString IO () -> IO (Either e a))
+    | PPInputOutputError  (Consumer ByteString IO () -> IO () -> Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e a))
+
+
+-- Doesn't know anything about the exact set of handles targeted
+data PPZ e a = forall t u. PPZ (CreateProcess -> CreateProcess) (forall m. Applicative m => (t -> m t) -> (Maybe Handle, Maybe Handle, Maybe Handle) -> m (Maybe Handle, Maybe Handle, Maybe Handle)) (t ->(u,IO (),IO ()))  (u -> IO () -> IO (Either e a))
+
 {-|
      A 'PipingPolicy' specifies what standard streams of the external process
 should be piped, and how to consume them.
