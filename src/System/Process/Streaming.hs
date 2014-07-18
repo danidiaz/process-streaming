@@ -51,6 +51,7 @@ module System.Process.Streaming (
         , unexpected
         , encoded
         -- * Line utilities
+        , DecodingFunction
         , LinePolicy
         , linePolicy
 
@@ -171,25 +172,40 @@ data PP e a =
       PPNone (IO (Either e a))
     | PPOutput (Producer ByteString IO () -> IO (Either e a))
     | PPError  (Producer ByteString IO () -> IO (Either e a))
-    | PPOutputError (Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e a))
-    | PPInput (Consumer ByteString IO () -> IO () -> IO (Either e a))
-    | PPInputOutput  (Consumer ByteString IO () -> IO () -> Producer ByteString IO () -> IO (Either e a))
-    | PPInputError  (Consumer ByteString IO () -> IO () -> Producer ByteString IO () -> IO (Either e a))
-    | PPInputOutputError  (Consumer ByteString IO () -> IO () -> Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e a))
+    | PPOutputError ((Producer ByteString IO (),Producer ByteString IO ()) -> IO (Either e a))
+    | PPInput (IO () -> Consumer ByteString IO () -> IO (Either e a))
+    | PPInputOutput (IO () -> (Consumer ByteString IO (), Producer ByteString IO ()) -> IO (Either e a))
+    | PPInputError  (IO () -> (Consumer ByteString IO (), Producer ByteString IO ()) -> IO (Either e a))
+    | PPInputOutputError  (IO () -> (Consumer ByteString IO (),Producer ByteString IO (),Producer ByteString IO ()) -> IO (Either e a))
 
 -- Doesn't know anything about the exact set of handles targeted
-data PPZ e a = forall t u. PPZ (CreateProcess -> CreateProcess) (forall m. Applicative m => (t -> m t) -> (Maybe Handle, Maybe Handle, Maybe Handle) -> m (Maybe Handle, Maybe Handle, Maybe Handle)) (t ->(u,IO (),IO ()))  (u -> IO () -> IO (Either e a))
+data PPZ e a = forall t u. PPZ (CreateProcess -> CreateProcess) (forall m. Applicative m => (t -> m t) -> (Maybe Handle, Maybe Handle, Maybe Handle) -> m (Maybe Handle, Maybe Handle, Maybe Handle)) (t ->(u,IO (),IO ()))  (IO () -> u -> IO (Either e a))
 
 innerExecute :: PP e a -> PPZ e a
 innerExecute pp = case pp of
-      PPNone io -> PPZ id nohandles (\() -> ((),return (),return())) (\() _ -> io)
-      PPOutput _ -> undefined
-      PPError _ -> undefined
-      PPOutputError _ -> undefined
-      PPInput _ -> undefined
-      PPInputOutput _ -> undefined
-      PPInputError _ -> undefined 
-      PPInputOutputError _ -> undefined
+      PPNone action -> PPZ id nohandles (\() -> ((),return (),return())) (pure $ pure  $ action)
+      PPOutput action -> PPZ (\c->c{std_out = CreatePipe}) handleso (\h->(fromHandle h,return (),hClose h)) (pure action) 
+      PPError action ->  PPZ (\c->c{std_err = CreatePipe}) handlese (\h->(fromHandle h,return (),hClose h)) (pure action) 
+      PPOutputError action -> PPZ (\c->c{std_out = CreatePipe, std_err = CreatePipe}) 
+                             handlesoe 
+                             (\(hout,herr)->((fromHandle hout,fromHandle herr),return (),hClose hout `finally` hClose herr)) 
+                             (pure action) 
+      PPInput action -> PPZ (\c->c{std_in = CreatePipe})
+                       handlesi
+                       (\h -> (toHandle h,hClose h,return ()))
+                       action
+      PPInputOutput action -> PPZ (\c->c{std_in = CreatePipe,std_out = CreatePipe})
+                             handlesio
+                             (\(hin,hout) -> ((toHandle hin,fromHandle hout),hClose hin,hClose hout))
+                             action
+      PPInputError action -> PPZ (\c->c{std_in = CreatePipe,std_err = CreatePipe})
+                            handlesie
+                            (\(hin,herr) -> ((toHandle hin,fromHandle herr), hClose hin, hClose herr))
+                            action
+      PPInputOutputError action -> PPZ (\c->c{std_in = CreatePipe, std_out = CreatePipe, std_err = CreatePipe})
+                              handlesioe
+                              (\(hin,hout,herr) -> ((toHandle hin,fromHandle hout,fromHandle herr),hClose hin,hClose hout `finally` hClose herr))
+                              action
 
 {-|
      A 'PipingPolicy' specifies what standard streams of the external process
@@ -360,7 +376,8 @@ easy to add using applicative notation:
 decoding failures. 
  -}
 
-linePolicy :: (forall r. Producer ByteString IO r -> Producer T.Text IO (Producer ByteString IO r)) 
+--linePolicy :: (forall r. Producer ByteString IO r -> Producer T.Text IO (Producer ByteString IO r)) 
+linePolicy :: DecodingFunction ByteString Text 
            ->  Siphon ByteString e ()
            -> (forall r. Producer T.Text IO r -> Producer T.Text IO r)
            ->  LinePolicy e 
@@ -505,13 +522,17 @@ buffer_ activity producer = do
         *>
         Conceit (activity (fromInput inbox) `finally` atomically seal)
 
+type DecodingFunction bytes text = forall r. Producer bytes IO r -> Producer text IO (Producer bytes IO r)
+
 {-|
    Adapts a function that works with 'Producer's of decoded values so that it
 works with 'Producer's of still undecoded values, by supplying a decoding
 function and a 'LeftoverPolicy'.
  -}
 encoded :: (Show e, Typeable e) 
-        => (Producer bytes IO () -> Producer text IO (Producer bytes IO ()))
+        -- => (Producer bytes IO () -> Producer text IO (Producer bytes IO ()))
+        => DecodingFunction bytes text
+        -- => (forall r. Producer bytes IO r -> Producer text IO (Producer bytes IO r))
         -> Siphon bytes e (a -> b)
         -> Siphon text  e a 
         -> Siphon bytes e b
