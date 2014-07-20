@@ -113,32 +113,27 @@ terminated.
  -}
 executeFallibly :: PipingPolicy e a -> CreateProcess -> IO (Either e (ExitCode,a))
 executeFallibly pp record = case pp of
-      PPNone action -> innerExecute record nohandles (\() -> ((),return (),return())) (pure $ pure $ action)
-      PPOutput action -> innerExecute (record{std_out = CreatePipe}) handleso (\h->(fromHandle h,return (),hClose h)) (pure action) 
-      PPError action ->  innerExecute (record{std_err = CreatePipe}) handlese (\h->(fromHandle h,return (),hClose h)) (pure action) 
+      PPNone action -> innerExecute record nohandles (\() -> (action,return ())) 
+      PPOutput action -> innerExecute (record{std_out = CreatePipe}) handleso (\h->(action (fromHandle h),hClose h)) 
+      PPError action ->  innerExecute (record{std_err = CreatePipe}) handlese (\h->(action (fromHandle h),hClose h))
       PPOutputError action -> innerExecute (record{std_out = CreatePipe, std_err = CreatePipe}) 
                                    handlesoe 
-                                  (\(hout,herr)->((fromHandle hout,fromHandle herr),return (),hClose hout `finally` hClose herr)) 
-                                  (pure action) 
+                                  (\(hout,herr)->(action (fromHandle hout,fromHandle herr),hClose hout `finally` hClose herr)) 
       PPInput action -> innerExecute (record{std_in = CreatePipe})
                             handlesi
-                            (\h -> (toHandle h,hClose h,return ()))
-                            action
+                            (\h -> (action (hClose h) (toHandle h),return ()))
       PPInputOutput action -> innerExecute (record{std_in = CreatePipe,std_out = CreatePipe})
-                             handlesio
-                             (\(hin,hout) -> ((toHandle hin,fromHandle hout),hClose hin,hClose hout))
-                             action
+                              handlesio
+                              (\(hin,hout) -> (action (hClose hin) ((toHandle hin),(fromHandle hout)), hClose hout))
       PPInputError action -> innerExecute (record{std_in = CreatePipe,std_err = CreatePipe})
-                            handlesie
-                            (\(hin,herr) -> ((toHandle hin,fromHandle herr), hClose hin, hClose herr))
-                            action
+                             handlesie
+                             (\(hin,herr) -> (action (hClose hin) (toHandle hin, fromHandle herr), hClose herr))
       PPInputOutputError action -> innerExecute (record{std_in = CreatePipe, std_out = CreatePipe, std_err = CreatePipe})
                               handlesioe
-                              (\(hin,hout,herr) -> ((toHandle hin,fromHandle hout,fromHandle herr),hClose hin,hClose hout `finally` hClose herr))
-                              action
+                              (\(hin,hout,herr) -> (action (hClose hin) (toHandle hin,fromHandle hout,fromHandle herr), hClose hout `finally` hClose herr))
 
-innerExecute :: CreateProcess -> (forall m. Applicative m => (t -> m t) -> (Maybe Handle, Maybe Handle, Maybe Handle) -> m (Maybe Handle, Maybe Handle, Maybe Handle)) -> (t ->(u,IO (),IO ())) -> (IO () -> u -> IO (Either e a)) -> IO (Either e (ExitCode,a))
-innerExecute record somePrism allocator runfunc = mask $ \restore -> do
+innerExecute :: CreateProcess -> (forall m. Applicative m => (t -> m t) -> (Maybe Handle, Maybe Handle, Maybe Handle) -> m (Maybe Handle, Maybe Handle, Maybe Handle)) -> (t ->(IO (Either e a),IO ())) -> IO (Either e (ExitCode,a))
+innerExecute record somePrism allocator = mask $ \restore -> do
     (min,mout,merr,phandle) <- createProcess record
     case getFirst . getConst . somePrism (Const . First . Just) $ (min,mout,merr) of
         Nothing -> 
@@ -146,12 +141,10 @@ innerExecute record somePrism allocator runfunc = mask $ \restore -> do
             `finally`
             terminateCarefully phandle 
         Just t -> 
-            let (u,innerCleanup,cleanup) = allocator t in
+            let (action,cleanup) = allocator t in
             -- Handles must be closed *after* terminating the process, because a close
             -- operation may block if the external process has unflushed bytes in the stream.
-            (restore (terminateOnError phandle (runfunc innerCleanup u)) `onException` terminateCarefully phandle) 
-                `finally` 
-                cleanup 
+            (restore (terminateOnError phandle action) `onException` terminateCarefully phandle) `finally` cleanup 
 
 exitCode :: (ExitCode,a) -> Either Int a
 exitCode (ec,a) = case ec of
