@@ -104,6 +104,10 @@ import System.Exit
 execute :: PipingPolicy Void a -> CreateProcess -> IO (ExitCode,a)
 execute pp cprocess = either absurd id <$> executeFallibly pp cprocess
 
+
+execute' :: PP Void a -> CreateProcess -> IO (ExitCode,a)
+execute' pp cprocess = either absurd id <$> executeFallibly' pp cprocess
+
 {-|
    Executes an external process. The standard streams are piped and consumed in
 a way defined by the 'PipingPolicy' argument. 
@@ -117,6 +121,32 @@ thrown in this case.).
    If an error @e@ or an exception happens, the external process is
 terminated.
  -}
+executeFallibly' :: PP e a -> CreateProcess -> IO (Either e (ExitCode,a))
+executeFallibly' pp record = case pp of
+      PPNone action -> innerExecute record nohandles (\() -> ((),return (),return())) (pure $ pure $ action)
+      PPOutput action -> innerExecute (record{std_out = CreatePipe}) handleso (\h->(fromHandle h,return (),hClose h)) (pure action) 
+      PPError action ->  innerExecute (record{std_err = CreatePipe}) handlese (\h->(fromHandle h,return (),hClose h)) (pure action) 
+      PPOutputError action -> innerExecute (record{std_out = CreatePipe, std_err = CreatePipe}) 
+                                   handlesoe 
+                                  (\(hout,herr)->((fromHandle hout,fromHandle herr),return (),hClose hout `finally` hClose herr)) 
+                                  (pure action) 
+      PPInput action -> innerExecute (record{std_in = CreatePipe})
+                            handlesi
+                            (\h -> (toHandle h,hClose h,return ()))
+                            action
+      PPInputOutput action -> innerExecute (record{std_in = CreatePipe,std_out = CreatePipe})
+                             handlesio
+                             (\(hin,hout) -> ((toHandle hin,fromHandle hout),hClose hin,hClose hout))
+                             action
+      PPInputError action -> innerExecute (record{std_in = CreatePipe,std_err = CreatePipe})
+                            handlesie
+                            (\(hin,herr) -> ((toHandle hin,fromHandle herr), hClose hin, hClose herr))
+                            action
+      PPInputOutputError action -> innerExecute (record{std_in = CreatePipe, std_out = CreatePipe, std_err = CreatePipe})
+                              handlesioe
+                              (\(hin,hout,herr) -> ((toHandle hin,fromHandle hout,fromHandle herr),hClose hin,hClose hout `finally` hClose herr))
+                              action
+
 executeFallibly :: PipingPolicy e a -> CreateProcess -> IO (Either e (ExitCode,a))
 executeFallibly (PipingPolicy tr somePrism action) procSpec = mask $ \restore -> do
     (min,mout,merr,phandle) <- createProcess (tr procSpec)
@@ -133,22 +163,39 @@ executeFallibly (PipingPolicy tr somePrism action) procSpec = mask $ \restore ->
             `finally` 
             cleanup 
 
-executeFallibly' :: PP e a -> CreateProcess -> IO (Either e (ExitCode,a))
-executeFallibly' policy procSpec = mask $ \restore -> do
-    let PPZ tr somePrism changer action = innerExecute policy
-    (min,mout,merr,phandle) <- createProcess (tr procSpec)
+
+innerExecute :: CreateProcess -> (forall m. Applicative m => (t -> m t) -> (Maybe Handle, Maybe Handle, Maybe Handle) -> m (Maybe Handle, Maybe Handle, Maybe Handle)) -> (t ->(u,IO (),IO ())) -> (IO () -> u -> IO (Either e a)) -> IO (Either e (ExitCode,a))
+innerExecute record somePrism allocator runfunc = mask $ \restore -> do
+    (min,mout,merr,phandle) <- createProcess record
     case getFirst . getConst . somePrism (Const . First . Just) $ (min,mout,merr) of
         Nothing -> 
             throwIO (userError "stdin/stdout/stderr handle unexpectedly null")
             `finally`
             terminateCarefully phandle 
         Just t -> 
-            let (t',innerCleanup,cleanup) = changer t in
+            let (u,innerCleanup,cleanup) = allocator t in
             -- Handles must be closed *after* terminating the process, because a close
             -- operation may block if the external process has unflushed bytes in the stream.
-            (restore (terminateOnError phandle (action innerCleanup t')) `onException` terminateCarefully phandle) 
+            (restore (terminateOnError phandle (runfunc innerCleanup u)) `onException` terminateCarefully phandle) 
                 `finally` 
                 cleanup 
+
+--executeFallibly' :: PP e a -> CreateProcess -> IO (Either e (ExitCode,a))
+--executeFallibly' policy procSpec = mask $ \restore -> do
+--    let PPZ tr somePrism changer action = innerExecute policy
+--    (min,mout,merr,phandle) <- createProcess (tr procSpec)
+--    case getFirst . getConst . somePrism (Const . First . Just) $ (min,mout,merr) of
+--        Nothing -> 
+--            throwIO (userError "stdin/stdout/stderr handle unexpectedly null")
+--            `finally`
+--            terminateCarefully phandle 
+--        Just t -> 
+--            let (t',innerCleanup,cleanup) = changer t in
+--            -- Handles must be closed *after* terminating the process, because a close
+--            -- operation may block if the external process has unflushed bytes in the stream.
+--            (restore (terminateOnError phandle (action innerCleanup t')) `onException` terminateCarefully phandle) 
+--                `finally` 
+--                cleanup 
 
 
 exitCode :: (ExitCode,a) -> Either Int a
@@ -217,33 +264,8 @@ instance Bifunctor PP where
         PPInputOutputError action -> PPInputOutputError $ fmap (fmap (fmap (bimap f g))) action
 
 -- Doesn't know anything about the exact set of handles targeted
-data PPZ e a = forall t u. PPZ (CreateProcess -> CreateProcess) (forall m. Applicative m => (t -> m t) -> (Maybe Handle, Maybe Handle, Maybe Handle) -> m (Maybe Handle, Maybe Handle, Maybe Handle)) (t ->(u,IO (),IO ()))  (IO () -> u -> IO (Either e a))
+-- data PPZ t u e a = PPZ (CreateProcess -> CreateProcess) (forall m. Applicative m => (t -> m t) -> (Maybe Handle, Maybe Handle, Maybe Handle) -> m (Maybe Handle, Maybe Handle, Maybe Handle)) (t ->(u,IO (),IO ()))  (IO () -> u -> IO (Either e a))
 
-innerExecute :: PP e a -> PPZ e a
-innerExecute pp = case pp of
-      PPNone action -> PPZ id nohandles (\() -> ((),return (),return())) (pure $ pure  $ action)
-      PPOutput action -> PPZ (\c->c{std_out = CreatePipe}) handleso (\h->(fromHandle h,return (),hClose h)) (pure action) 
-      PPError action ->  PPZ (\c->c{std_err = CreatePipe}) handlese (\h->(fromHandle h,return (),hClose h)) (pure action) 
-      PPOutputError action -> PPZ (\c->c{std_out = CreatePipe, std_err = CreatePipe}) 
-                             handlesoe 
-                             (\(hout,herr)->((fromHandle hout,fromHandle herr),return (),hClose hout `finally` hClose herr)) 
-                             (pure action) 
-      PPInput action -> PPZ (\c->c{std_in = CreatePipe})
-                       handlesi
-                       (\h -> (toHandle h,hClose h,return ()))
-                       action
-      PPInputOutput action -> PPZ (\c->c{std_in = CreatePipe,std_out = CreatePipe})
-                             handlesio
-                             (\(hin,hout) -> ((toHandle hin,fromHandle hout),hClose hin,hClose hout))
-                             action
-      PPInputError action -> PPZ (\c->c{std_in = CreatePipe,std_err = CreatePipe})
-                            handlesie
-                            (\(hin,herr) -> ((toHandle hin,fromHandle herr), hClose hin, hClose herr))
-                            action
-      PPInputOutputError action -> PPZ (\c->c{std_in = CreatePipe, std_out = CreatePipe, std_err = CreatePipe})
-                              handlesioe
-                              (\(hin,hout,herr) -> ((toHandle hin,fromHandle hout,fromHandle herr),hClose hin,hClose hout `finally` hClose herr))
-                              action
 
 {-|
      A 'PipingPolicy' specifies what standard streams of the external process
