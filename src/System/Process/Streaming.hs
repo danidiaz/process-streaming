@@ -16,6 +16,7 @@
 -----------------------------------------------------------------------------
 
 {-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE RankNTypes #-}
 
@@ -188,17 +189,7 @@ data PipingPolicy e a =
     | PPInputOutput (IO () -> (Consumer ByteString IO (), Producer ByteString IO ()) -> IO (Either e a))
     | PPInputError  (IO () -> (Consumer ByteString IO (), Producer ByteString IO ()) -> IO (Either e a))
     | PPInputOutputError  (IO () -> (Consumer ByteString IO (),Producer ByteString IO (),Producer ByteString IO ()) -> IO (Either e a))
-
-instance Functor (PipingPolicy e) where
-    fmap f pp = case pp of 
-        PPNone action -> PPNone $ fmap (fmap f) action 
-        PPOutput action -> PPOutput $ fmap (fmap (fmap f)) action
-        PPError action -> PPError $ fmap (fmap (fmap f)) action
-        PPOutputError action -> PPOutputError $  fmap (fmap (fmap f)) action
-        PPInput action -> PPInput $ fmap (fmap (fmap (fmap f))) action
-        PPInputOutput action -> PPInputOutput $ fmap (fmap (fmap (fmap f))) action
-        PPInputError action -> PPInputError $ fmap (fmap (fmap (fmap f))) action
-        PPInputOutputError action -> PPInputOutputError $ fmap (fmap (fmap (fmap f))) action
+    deriving (Functor)
 
 instance Bifunctor PipingPolicy where
   bimap f g pp = case pp of
