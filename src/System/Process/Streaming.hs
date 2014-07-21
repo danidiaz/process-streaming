@@ -42,7 +42,7 @@ module System.Process.Streaming (
         , useProducer
         , useSafeProducer
         , useFallibleProducer
-        -- * Siphoning bytes stdout/stderr
+        -- * Siphoning bytes out of stdout/stderr
         , Siphon (..)
         , useConsumer
         , useSafeConsumer
@@ -51,7 +51,7 @@ module System.Process.Streaming (
         , useParser
         , unexpected
         , encoded
-        -- * Line utilities
+        -- * Line handling
         , DecodingFunction
         , LinePolicy
         , linePolicy
@@ -113,25 +113,25 @@ terminated.
  -}
 executeFallibly :: PipingPolicy e a -> CreateProcess -> IO (Either e (ExitCode,a))
 executeFallibly pp record = case pp of
-      PPNone action -> innerExecute record nohandles $  
+      PPNone action -> executeInternal record nohandles $  
           \() -> (action (),return ())
-      PPOutput action -> innerExecute (record{std_out = CreatePipe}) handleso $
+      PPOutput action -> executeInternal (record{std_out = CreatePipe}) handleso $
           \h->(action (fromHandle h),hClose h) 
-      PPError action ->  innerExecute (record{std_err = CreatePipe}) handlese $
+      PPError action ->  executeInternal (record{std_err = CreatePipe}) handlese $
           \h->(action (fromHandle h),hClose h)
-      PPOutputError action -> innerExecute (record{std_out = CreatePipe, std_err = CreatePipe}) handlesoe $
+      PPOutputError action -> executeInternal (record{std_out = CreatePipe, std_err = CreatePipe}) handlesoe $
           \(hout,herr)->(action (fromHandle hout,fromHandle herr),hClose hout `finally` hClose herr)
-      PPInput action -> innerExecute (record{std_in = CreatePipe}) handlesi $
+      PPInput action -> executeInternal (record{std_in = CreatePipe}) handlesi $
           \h -> (action (toHandle h, hClose h), return ())
-      PPInputOutput action -> innerExecute (record{std_in = CreatePipe,std_out = CreatePipe}) handlesio $
+      PPInputOutput action -> executeInternal (record{std_in = CreatePipe,std_out = CreatePipe}) handlesio $
           \(hin,hout) -> (action (toHandle hin,hClose hin,fromHandle hout), hClose hout)
-      PPInputError action -> innerExecute (record{std_in = CreatePipe,std_err = CreatePipe}) handlesie $
+      PPInputError action -> executeInternal (record{std_in = CreatePipe,std_err = CreatePipe}) handlesie $
           \(hin,herr) -> (action (toHandle hin,hClose hin,fromHandle herr), hClose herr)
-      PPInputOutputError action -> innerExecute (record{std_in = CreatePipe, std_out = CreatePipe, std_err = CreatePipe}) handlesioe $
+      PPInputOutputError action -> executeInternal (record{std_in = CreatePipe, std_out = CreatePipe, std_err = CreatePipe}) handlesioe $
           \(hin,hout,herr) -> (action (toHandle hin,hClose hin,fromHandle hout,fromHandle herr), hClose hout `finally` hClose herr)
 
-innerExecute :: CreateProcess -> (forall m. Applicative m => (t -> m t) -> (Maybe Handle, Maybe Handle, Maybe Handle) -> m (Maybe Handle, Maybe Handle, Maybe Handle)) -> (t ->(IO (Either e a),IO ())) -> IO (Either e (ExitCode,a))
-innerExecute record somePrism allocator = mask $ \restore -> do
+executeInternal :: CreateProcess -> (forall m. Applicative m => (t -> m t) -> (Maybe Handle, Maybe Handle, Maybe Handle) -> m (Maybe Handle, Maybe Handle, Maybe Handle)) -> (t ->(IO (Either e a),IO ())) -> IO (Either e (ExitCode,a))
+executeInternal record somePrism allocator = mask $ \restore -> do
     (min,mout,merr,phandle) <- createProcess record
     case getFirst . getConst . somePrism (Const . First . Just) $ (min,mout,merr) of
         Nothing -> 
@@ -192,7 +192,6 @@ instance Bifunctor PipingPolicy where
         PPInputOutput action -> PPInputOutput $ fmap (fmap (bimap f g)) action
         PPInputError action -> PPInputError $ fmap (fmap (bimap f g)) action
         PPInputOutputError action -> PPInputOutputError $ fmap (fmap (bimap f g)) action
-
 
 {-|
     Do not pipe any standard stream. 
@@ -473,19 +472,6 @@ revealError :: (Show e, Typeable e) => IO a -> IO (Either e a)
 revealError action = catch (action >>= return . Right)
                            (\(WrappedError e) -> return . Left $ e)   
 
-{-| 
-    'Conceit' is very similar to 'Control.Concurrent.Async.Concurrently' from the
-@async@ package, but it has an explicit error type @e@.
-
-   The 'Applicative' instance is used to run actions concurrently, wait until
-they finish, and combine their results. 
-
-   However, if any of the actions fails with @e@ the other actions are
-immediately cancelled and the whole computation fails with @e@. 
-
-    To put it another way: 'Conceit' behaves like 'Concurrently' for successes and
-like 'race' for errors.  
--}
 newtype Conceit e a = Conceit { runConceit :: IO (Either e a) }
 
 instance Functor (Conceit e) where
