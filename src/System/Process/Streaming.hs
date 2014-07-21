@@ -113,7 +113,7 @@ terminated.
  -}
 executeFallibly :: PipingPolicy e a -> CreateProcess -> IO (Either e (ExitCode,a))
 executeFallibly pp record = case pp of
-      PPNone action -> innerExecute record nohandles (\() -> (action,return ())) 
+      PPNone action -> innerExecute record nohandles (\() -> (action (),return ())) 
       PPOutput action -> innerExecute (record{std_out = CreatePipe}) handleso (\h->(action (fromHandle h),hClose h)) 
       PPError action ->  innerExecute (record{std_err = CreatePipe}) handlese (\h->(action (fromHandle h),hClose h))
       PPOutputError action -> innerExecute (record{std_out = CreatePipe, std_err = CreatePipe}) 
@@ -121,16 +121,16 @@ executeFallibly pp record = case pp of
                                   (\(hout,herr)->(action (fromHandle hout,fromHandle herr),hClose hout `finally` hClose herr)) 
       PPInput action -> innerExecute (record{std_in = CreatePipe})
                             handlesi
-                            (\h -> (action (hClose h) (toHandle h),return ()))
+                            (\h -> (action (toHandle h, hClose h) ,return ()))
       PPInputOutput action -> innerExecute (record{std_in = CreatePipe,std_out = CreatePipe})
                               handlesio
-                              (\(hin,hout) -> (action (hClose hin) ((toHandle hin),(fromHandle hout)), hClose hout))
+                              (\(hin,hout) -> (action (toHandle hin,hClose hin,fromHandle hout), hClose hout))
       PPInputError action -> innerExecute (record{std_in = CreatePipe,std_err = CreatePipe})
                              handlesie
-                             (\(hin,herr) -> (action (hClose hin) (toHandle hin, fromHandle herr), hClose herr))
+                             (\(hin,herr) -> (action (toHandle hin,hClose hin,fromHandle herr), hClose herr))
       PPInputOutputError action -> innerExecute (record{std_in = CreatePipe, std_out = CreatePipe, std_err = CreatePipe})
                               handlesioe
-                              (\(hin,hout,herr) -> (action (hClose hin) (toHandle hin,fromHandle hout,fromHandle herr), hClose hout `finally` hClose herr))
+                              (\(hin,hout,herr) -> (action (toHandle hin,hClose hin,fromHandle hout,fromHandle herr), hClose hout `finally` hClose herr))
 
 innerExecute :: CreateProcess -> (forall m. Applicative m => (t -> m t) -> (Maybe Handle, Maybe Handle, Maybe Handle) -> m (Maybe Handle, Maybe Handle, Maybe Handle)) -> (t ->(IO (Either e a),IO ())) -> IO (Either e (ExitCode,a))
 innerExecute record somePrism allocator = mask $ \restore -> do
@@ -174,33 +174,33 @@ terminateOnError pHandle action = do
 -- Knows that there is a stdin, stdout and stderr,
 -- But doesn't know anything about file handles of CreateProcess
 data PipingPolicy e a = 
-      PPNone (IO (Either e a))
+      PPNone (() -> IO (Either e a))
     | PPOutput (Producer ByteString IO () -> IO (Either e a))
     | PPError  (Producer ByteString IO () -> IO (Either e a))
     | PPOutputError ((Producer ByteString IO (),Producer ByteString IO ()) -> IO (Either e a))
-    | PPInput (IO () -> Consumer ByteString IO () -> IO (Either e a))
-    | PPInputOutput (IO () -> (Consumer ByteString IO (), Producer ByteString IO ()) -> IO (Either e a))
-    | PPInputError  (IO () -> (Consumer ByteString IO (), Producer ByteString IO ()) -> IO (Either e a))
-    | PPInputOutputError  (IO () -> (Consumer ByteString IO (),Producer ByteString IO (),Producer ByteString IO ()) -> IO (Either e a))
+    | PPInput ((Consumer ByteString IO (), IO ()) -> IO (Either e a))
+    | PPInputOutput ((Consumer ByteString IO (), IO (),Producer ByteString IO ()) -> IO (Either e a))
+    | PPInputError  ((Consumer ByteString IO (), IO (), Producer ByteString IO ()) -> IO (Either e a))
+    | PPInputOutputError  ((Consumer ByteString IO (),IO (),Producer ByteString IO (),Producer ByteString IO ()) -> IO (Either e a))
     deriving (Functor)
 
 instance Bifunctor PipingPolicy where
   bimap f g pp = case pp of
-        PPNone action -> PPNone $ fmap (bimap f g) action 
+        PPNone action -> PPNone $ fmap (fmap (bimap f g)) action 
         PPOutput action -> PPOutput $ fmap (fmap (bimap f g)) action
         PPError action -> PPError $ fmap (fmap (bimap f g)) action
         PPOutputError action -> PPOutputError $ fmap (fmap (bimap f g)) action
-        PPInput action -> PPInput $ fmap (fmap (fmap (bimap f g))) action
-        PPInputOutput action -> PPInputOutput $ fmap (fmap (fmap (bimap f g))) action
-        PPInputError action -> PPInputError $ fmap (fmap (fmap (bimap f g))) action
-        PPInputOutputError action -> PPInputOutputError $ fmap (fmap (fmap (bimap f g))) action
+        PPInput action -> PPInput $ fmap (fmap (bimap f g)) action
+        PPInputOutput action -> PPInputOutput $ fmap (fmap (bimap f g)) action
+        PPInputError action -> PPInputError $ fmap (fmap (bimap f g)) action
+        PPInputOutputError action -> PPInputOutputError $ fmap (fmap (bimap f g)) action
 
 
 {-|
     Do not pipe any standard stream. 
 -}
 nopiping :: PipingPolicy e ()
-nopiping = PPNone $ pure $ pure $ ()
+nopiping = PPNone $ pure $ pure $ pure $ ()
 
 pipeo :: (Show e,Typeable e) => Siphon ByteString e a -> PipingPolicy e a
 pipeo (Siphon siphonout) = PPOutput $ siphonout
@@ -222,16 +222,16 @@ pipeoec policy1 policy2 (Siphon siphon) =
     PPOutputError $ uncurry $ combined policy1 policy2 siphon  
 
 pipei :: (Show e, Typeable e) => Pump ByteString e i -> PipingPolicy e i
-pipei (Pump feeder) = PPInput $ \cleanup consumer -> feeder consumer `finally` cleanup
+pipei (Pump feeder) = PPInput $ \(consumer,cleanup) -> feeder consumer `finally` cleanup
 
 pipeio :: (Show e, Typeable e)
         => Pump ByteString e i -> Siphon ByteString e a -> PipingPolicy e (i,a)
-pipeio (Pump feeder) (Siphon siphonout) = PPInputOutput $ \cleanup (consumer,producer) ->
+pipeio (Pump feeder) (Siphon siphonout) = PPInputOutput $ \(consumer,cleanup,producer) ->
         (conceit (feeder consumer `finally` cleanup) (siphonout producer))
 
 pipeie :: (Show e, Typeable e)
         => Pump ByteString e i -> Siphon ByteString e a -> PipingPolicy e (i,a)
-pipeie (Pump feeder) (Siphon siphonerr) = PPInputError $ \cleanup (consumer,producer) ->
+pipeie (Pump feeder) (Siphon siphonerr) = PPInputError $ \(consumer,cleanup,producer) ->
         (conceit (feeder consumer `finally` cleanup) (siphonerr producer))
 
 {-|
@@ -242,7 +242,7 @@ pipeie (Pump feeder) (Siphon siphonerr) = PPInputError $ \cleanup (consumer,prod
 pipeioe :: (Show e, Typeable e)
         => Pump ByteString e i -> Siphon ByteString e a -> Siphon ByteString e b -> PipingPolicy e (i,a,b)
 pipeioe (Pump feeder) (Siphon siphonout) (Siphon siphonerr) = fmap flattenTuple $ PPInputOutputError $
-    \cleanup (consumer,outprod,errprod) -> 
+    \(consumer,cleanup,outprod,errprod) -> 
              (conceit (feeder consumer `finally` cleanup) 
                       (separated siphonout siphonerr outprod errprod))
     where
@@ -251,7 +251,7 @@ pipeioe (Pump feeder) (Siphon siphonout) (Siphon siphonerr) = fmap flattenTuple 
 pipeioec :: (Show e, Typeable e)
         => Pump ByteString e i -> LinePolicy e -> LinePolicy e -> Siphon Text e a -> PipingPolicy e (i,a)
 pipeioec (Pump feeder) policy1 policy2 (Siphon siphon) = PPInputOutputError $
-    \cleanup (consumer,outprod,errprod) -> 
+    \(consumer,cleanup,outprod,errprod) -> 
              (conceit (feeder consumer `finally` cleanup) 
                       (combined policy1 policy2 siphon outprod errprod))
 
