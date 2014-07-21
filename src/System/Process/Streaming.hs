@@ -19,6 +19,7 @@
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module System.Process.Streaming ( 
         -- * Execution
@@ -55,6 +56,12 @@ module System.Process.Streaming (
         , DecodingFunction
         , LinePolicy
         , linePolicy
+        -- * Pipelines
+        , executePipeline
+        , executePipelineFallibly
+        , Pipeline (..)
+        , Stage (..)
+        , BetweenStages (..)
         -- * Re-exports
         -- $reexports
         , module System.Process
@@ -69,6 +76,7 @@ import Data.Traversable
 import Data.Typeable
 import Data.Text 
 import Data.Void
+import Data.List.NonEmpty
 import Control.Applicative
 import Control.Monad
 import Control.Monad.Trans.Free
@@ -596,6 +604,32 @@ unexpected a = Siphon $ \producer -> do
     return $ case r of 
         Left () -> Right a
         Right (b,_) -> Left b
+
+
+executePipeline :: PipingPolicy Void a -> Pipeline Void -> IO a
+executePipeline = undefined
+
+executePipelineFallibly :: PipingPolicy e a -> Pipeline e -> IO (Either e a)
+executePipelineFallibly = undefined
+
+data Pipeline e = Pipeline (Stage e, NonEmpty (BetweenStages e, Stage e))
+
+instance Functor Pipeline where
+    fmap f (Pipeline (stage1, otherStages)) = Pipeline (fmap f stage1, fmap (mapTuple f) otherStages)
+        where mapTuple f (betweenPipes,stageN) = (fmap f betweenPipes,fmap f stageN)  
+
+data Stage e = Stage 
+           {
+             processDefinition :: CreateProcess 
+           , exitCodePolicy :: Int -> Maybe e
+           , stderrLinePolicy :: LinePolicy e
+           } deriving (Functor)
+
+data BetweenStages e = BetweenStages (forall a.Pipe ByteString ByteString (ExceptT e IO) a)
+
+instance Functor BetweenStages where
+    fmap f (BetweenStages bs) = BetweenStages $ hoist (mapExceptT $ liftM (bimap f id)) bs
+
 
 {- $reexports
  
