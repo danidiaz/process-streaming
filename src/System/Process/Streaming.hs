@@ -113,24 +113,22 @@ terminated.
  -}
 executeFallibly :: PipingPolicy e a -> CreateProcess -> IO (Either e (ExitCode,a))
 executeFallibly pp record = case pp of
-      PPNone action -> innerExecute record nohandles (\() -> (action (),return ())) 
-      PPOutput action -> innerExecute (record{std_out = CreatePipe}) handleso (\h->(action (fromHandle h),hClose h)) 
-      PPError action ->  innerExecute (record{std_err = CreatePipe}) handlese (\h->(action (fromHandle h),hClose h))
-      PPOutputError action -> innerExecute (record{std_out = CreatePipe, std_err = CreatePipe}) 
-                                   handlesoe 
-                                  (\(hout,herr)->(action (fromHandle hout,fromHandle herr),hClose hout `finally` hClose herr)) 
-      PPInput action -> innerExecute (record{std_in = CreatePipe})
-                            handlesi
-                            (\h -> (action (toHandle h, hClose h) ,return ()))
-      PPInputOutput action -> innerExecute (record{std_in = CreatePipe,std_out = CreatePipe})
-                              handlesio
-                              (\(hin,hout) -> (action (toHandle hin,hClose hin,fromHandle hout), hClose hout))
-      PPInputError action -> innerExecute (record{std_in = CreatePipe,std_err = CreatePipe})
-                             handlesie
-                             (\(hin,herr) -> (action (toHandle hin,hClose hin,fromHandle herr), hClose herr))
-      PPInputOutputError action -> innerExecute (record{std_in = CreatePipe, std_out = CreatePipe, std_err = CreatePipe})
-                              handlesioe
-                              (\(hin,hout,herr) -> (action (toHandle hin,hClose hin,fromHandle hout,fromHandle herr), hClose hout `finally` hClose herr))
+      PPNone action -> innerExecute record nohandles $  
+          \() -> (action (),return ())
+      PPOutput action -> innerExecute (record{std_out = CreatePipe}) handleso $
+          \h->(action (fromHandle h),hClose h) 
+      PPError action ->  innerExecute (record{std_err = CreatePipe}) handlese $
+          \h->(action (fromHandle h),hClose h)
+      PPOutputError action -> innerExecute (record{std_out = CreatePipe, std_err = CreatePipe}) handlesoe $
+          \(hout,herr)->(action (fromHandle hout,fromHandle herr),hClose hout `finally` hClose herr)
+      PPInput action -> innerExecute (record{std_in = CreatePipe}) handlesi $
+          \h -> (action (toHandle h, hClose h), return ())
+      PPInputOutput action -> innerExecute (record{std_in = CreatePipe,std_out = CreatePipe}) handlesio $
+          \(hin,hout) -> (action (toHandle hin,hClose hin,fromHandle hout), hClose hout)
+      PPInputError action -> innerExecute (record{std_in = CreatePipe,std_err = CreatePipe}) handlesie $
+          \(hin,herr) -> (action (toHandle hin,hClose hin,fromHandle herr), hClose herr)
+      PPInputOutputError action -> innerExecute (record{std_in = CreatePipe, std_out = CreatePipe, std_err = CreatePipe}) handlesioe $
+          \(hin,hout,herr) -> (action (toHandle hin,hClose hin,fromHandle hout,fromHandle herr), hClose hout `finally` hClose herr)
 
 innerExecute :: CreateProcess -> (forall m. Applicative m => (t -> m t) -> (Maybe Handle, Maybe Handle, Maybe Handle) -> m (Maybe Handle, Maybe Handle, Maybe Handle)) -> (t ->(IO (Either e a),IO ())) -> IO (Either e (ExitCode,a))
 innerExecute record somePrism allocator = mask $ \restore -> do
