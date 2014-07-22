@@ -612,11 +612,11 @@ executePipeline = undefined
 executePipelineFallibly :: PipingPolicy e a -> Pipeline e -> IO (Either e a)
 executePipelineFallibly = undefined
 
-data Pipeline e = Pipeline (NonEmpty (BetweenStages e, Stage e), Stage e)
+data Pipeline e = Pipeline (NonEmpty (Stage e,BetweenStages e), Stage e)
 
 instance Functor Pipeline where
     fmap f (Pipeline (otherStages, stage1)) = Pipeline (fmap (mapTuple f) otherStages, fmap f stage1)
-        where mapTuple f (betweenPipes,stageN) = (fmap f betweenPipes,fmap f stageN)  
+        where mapTuple f (stageN,betweenPipes) = (fmap f stageN, fmap f betweenPipes)  
 
 data Stage e = Stage 
            {
