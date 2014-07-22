@@ -607,10 +607,37 @@ unexpected a = Siphon $ \producer -> do
 
 
 executePipeline :: PipingPolicy Void a -> Pipeline Void -> IO a
-executePipeline = undefined
+executePipeline pp pipeline = either absurd id <$> executePipelineFallibly pp pipeline
 
 executePipelineFallibly :: PipingPolicy e a -> Pipeline e -> IO (Either e a)
 executePipelineFallibly = undefined
+
+executeDumbPipeline :: (Show e,Typeable e) => Pipeline e -> IO (Either e ())
+executeDumbPipeline (Pipeline ((initialStage :| stages), finalStage)) = 
+        final finalStage (return ())
+    where   
+        blende :: (Int -> Maybe e) -> Either e (ExitCode,()) -> Either e ()
+        blende f (Right (ExitFailure i,())) = case f i of
+            Nothing -> Right ()
+            Just e -> Left e
+        blende _ (Right (ExitSuccess,())) = Right () 
+        blende _ (Left e) = Left e
+
+        final :: (Show e,Typeable e) => Stage e -> Producer ByteString IO () -> IO (Either e ())  
+        final (Stage cp lpol ecpol) producer = 
+            blende ecpol <$> executeFallibly (pipei (useProducer producer)) 
+                                             (cp{std_in = CreatePipe})
+
+        foldy :: (Stage e, BetweenStages e) 
+              -> (Producer ByteString IO () -> IO (Either e ()))
+              ->  Producer ByteString IO () -> IO (Either e ())
+        foldy = undefined
+
+        initial :: (Stage e, BetweenStages e) 
+                -> (Producer ByteString IO () -> IO (Either e ()))
+                ->  Producer ByteString IO () -> IO (Either e ())
+        initial = undefined
+            
 
 data Pipeline e = Pipeline (NonEmpty (Stage e,BetweenStages e), Stage e)
 
@@ -621,8 +648,8 @@ instance Functor Pipeline where
 data Stage e = Stage 
            {
              processDefinition :: CreateProcess 
-           , exitCodePolicy :: Int -> Maybe e
            , stderrLinePolicy :: LinePolicy e
+           , exitCodePolicy :: Int -> Maybe e
            } deriving (Functor)
 
 data BetweenStages e = BetweenStages (forall a.Pipe ByteString ByteString (ExceptT e IO) a)
