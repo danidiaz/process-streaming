@@ -72,6 +72,7 @@ import Data.Bifunctor
 import Data.Functor.Identity
 import Data.Either
 import Data.Monoid
+import Data.Foldable
 import Data.Traversable
 import Data.Typeable
 import Data.Text 
@@ -614,7 +615,7 @@ executePipelineFallibly = undefined
 
 executeDumbPipeline :: (Show e,Typeable e) => Pipeline e -> IO (Either e ())
 executeDumbPipeline (Pipeline ((initialStage :| stages), finalStage)) = 
-        final finalStage (return ())
+        initial initialStage . Data.Foldable.foldr foldy (final finalStage) $ stages 
     where   
         blende :: (Int -> Maybe e) -> Either e (ExitCode,()) -> Either e ()
         blende f (Right (ExitFailure i,())) = case f i of
@@ -635,7 +636,7 @@ executeDumbPipeline (Pipeline ((initialStage :| stages), finalStage)) =
 
         initial :: (Stage e, BetweenStages e) 
                 -> (Producer ByteString IO () -> IO (Either e ()))
-                ->  Producer ByteString IO () -> IO (Either e ())
+                ->  IO (Either e ())
         initial = undefined
             
 
