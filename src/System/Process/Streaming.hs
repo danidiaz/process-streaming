@@ -629,15 +629,22 @@ executeDumbPipeline (Pipeline ((initialStage :| stages), finalStage)) =
             blende ecpol <$> executeFallibly (pipei (useProducer producer)) 
                                              (cp{std_in = CreatePipe})
 
-        foldy :: (Stage e, BetweenStages e) 
+        foldy :: (Show e,Typeable e)  
+              => (Stage e, BetweenStages e) 
               -> (Producer ByteString IO () -> IO (Either e ()))
               ->  Producer ByteString IO () -> IO (Either e ())
-        foldy = undefined
-
-        initial :: (Stage e, BetweenStages e) 
+        foldy ((Stage cp lpol ecpol), BetweenStages pipe) previous producer =
+             -- beware when contructing this siphon
+             blende ecpol <$> executeFallibly (const () <$> (pipeio (useProducer producer) (Siphon previous)))
+                                              (cp{std_in = CreatePipe, std_out = CreatePipe})
+                                    
+        initial :: (Show e,Typeable e) 
+                => (Stage e, BetweenStages e) 
                 -> (Producer ByteString IO () -> IO (Either e ()))
                 ->  IO (Either e ())
-        initial = undefined
+        initial ((Stage cp lpol ecpol), BetweenStages pipe) previous = 
+            blende ecpol <$> executeFallibly (pipeo (Siphon previous))
+                                                    (cp{std_out = CreatePipe})
             
 
 data Pipeline e = Pipeline (NonEmpty (Stage e,BetweenStages e), Stage e)
