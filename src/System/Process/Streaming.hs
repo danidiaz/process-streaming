@@ -20,6 +20,7 @@
 {-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE ViewPatterns #-}
 
 module System.Process.Streaming ( 
         -- * Execution
@@ -78,6 +79,7 @@ import Data.Typeable
 import Data.Text 
 import Data.Void
 import Data.List.NonEmpty
+import qualified Data.List.NonEmpty as N
 import Control.Applicative
 import Control.Monad
 import Control.Monad.Trans.Free
@@ -614,7 +616,7 @@ executePipelineFallibly :: PipingPolicy e a -> Pipeline e -> IO (Either e a)
 executePipelineFallibly = undefined
 
 executeDumbPipeline :: (Show e,Typeable e) => Pipeline e -> IO (Either e ())
-executeDumbPipeline (Pipeline ((initialStage :| stages), finalStage)) = 
+executeDumbPipeline (Pipeline (initialStage,liftA2 (,) N.init N.last -> (stages, finalStage))) = 
         initial initialStage . Data.Foldable.foldr foldy (final finalStage) $ stages 
     where   
         blende :: (Int -> Maybe e) -> Either e (ExitCode,()) -> Either e ()
@@ -624,34 +626,37 @@ executeDumbPipeline (Pipeline ((initialStage :| stages), finalStage)) =
         blende _ (Right (ExitSuccess,())) = Right () 
         blende _ (Left e) = Left e
 
-        final :: (Show e,Typeable e) => Stage e -> Producer ByteString IO () -> IO (Either e ())  
-        final (Stage cp lpol ecpol) producer = 
+        final :: (Show e,Typeable e) 
+              => (BetweenStages e, Stage e) 
+              -> Producer ByteString IO () 
+              -> IO (Either e ())  
+        final (BetweenStages pipe, Stage cp lpol ecpol) producer = 
             blende ecpol <$> executeFallibly (pipei (useProducer producer)) 
                                              (cp{std_in = CreatePipe})
 
         foldy :: (Show e,Typeable e)  
-              => (Stage e, BetweenStages e) 
+              => (BetweenStages e, Stage e) 
               -> (Producer ByteString IO () -> IO (Either e ()))
               ->  Producer ByteString IO () -> IO (Either e ())
-        foldy ((Stage cp lpol ecpol), BetweenStages pipe) previous producer =
+        foldy (BetweenStages pipe, Stage cp lpol ecpol) previous producer =
              -- beware when contructing this siphon
              blende ecpol <$> executeFallibly (const () <$> (pipeio (useProducer producer) (Siphon previous)))
                                               (cp{std_in = CreatePipe, std_out = CreatePipe})
                                     
         initial :: (Show e,Typeable e) 
-                => (Stage e, BetweenStages e) 
+                =>  Stage e
                 -> (Producer ByteString IO () -> IO (Either e ()))
                 ->  IO (Either e ())
-        initial ((Stage cp lpol ecpol), BetweenStages pipe) previous = 
+        initial (Stage cp lpol ecpol) previous = 
             blende ecpol <$> executeFallibly (pipeo (Siphon previous))
                                                     (cp{std_out = CreatePipe})
             
 
-data Pipeline e = Pipeline (NonEmpty (Stage e,BetweenStages e), Stage e)
+data Pipeline e = Pipeline (Stage e, NonEmpty (BetweenStages e,Stage e))
 
 instance Functor Pipeline where
-    fmap f (Pipeline (otherStages, stage1)) = Pipeline (fmap (mapTuple f) otherStages, fmap f stage1)
-        where mapTuple f (stageN,betweenPipes) = (fmap f stageN, fmap f betweenPipes)  
+    fmap f (Pipeline (stage1, otherStages)) = Pipeline (fmap f stage1, fmap (mapTuple f) otherStages)
+        where mapTuple f (betweenPipes,stageN) = (fmap f betweenPipes,fmap f stageN)  
 
 data Stage e = Stage 
            {
