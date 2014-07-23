@@ -83,7 +83,6 @@ import qualified Data.List.NonEmpty as N
 import Control.Applicative
 import Control.Monad
 import Control.Monad.Trans.Free
-import Control.Monad.Error
 import Control.Monad.Except
 import Control.Monad.State
 import Control.Monad.Writer.Strict
@@ -378,8 +377,8 @@ useConsumer consumer = Siphon $ \producer -> fmap pure $ runEffect $ producer >-
 useSafeConsumer :: Consumer b (SafeT IO) () -> Siphon b e ()
 useSafeConsumer consumer = Siphon $ safely $ \producer -> fmap pure $ runEffect $ producer >-> consumer 
 
-useFallibleConsumer :: Error e => Consumer b (ErrorT e IO) () -> Siphon b e ()
-useFallibleConsumer consumer = Siphon $ \producer -> runErrorT $ runEffect (hoist lift producer >-> consumer) 
+useFallibleConsumer :: Consumer b (ExceptT e IO) () -> Siphon b e ()
+useFallibleConsumer consumer = Siphon $ \producer -> runExceptT $ runEffect (hoist lift producer >-> consumer) 
 
 useFold :: (Producer b IO () -> IO a) -> Siphon b e a 
 useFold aFold = Siphon $ fmap (fmap pure) $ aFold 
@@ -398,8 +397,8 @@ useProducer producer = Pump $ \consumer -> fmap pure $ runEffect (producer >-> c
 useSafeProducer :: Producer b (SafeT IO) () -> Pump b e ()
 useSafeProducer producer = Pump $ safely $ \consumer -> fmap pure $ runEffect (producer >-> consumer) 
 
-useFallibleProducer :: Error e => Producer b (ErrorT e IO) () -> Pump b e ()
-useFallibleProducer producer = Pump $ \consumer -> runErrorT $ runEffect (producer >-> hoist lift consumer) 
+useFallibleProducer :: Producer b (ExceptT e IO) () -> Pump b e ()
+useFallibleProducer producer = Pump $ \consumer -> runExceptT $ runEffect (producer >-> hoist lift consumer) 
 
 {-| 
   Useful when we want to plug in a handler that doesn't return an 'Either'. For
@@ -420,10 +419,10 @@ safely :: (MFunctor t, C.MonadMask m, MonadIO m)
        ->  t m         l -> m         x 
 safely activity = runSafeT . activity . hoist lift 
 
-fallibly :: (MFunctor t, Monad m, Error e) 
-         => (t (ErrorT e m) l -> (ErrorT e m) x) 
-         ->  t m            l -> m (Either e x) 
-fallibly activity = runErrorT . activity . hoist lift 
+-- fallibly :: (MFunctor t, Monad m, Error e) 
+--          => (t (ErrorT e m) l -> (ErrorT e m) x) 
+--          ->  t m            l -> m (Either e x) 
+-- fallibly activity = runErrorT . activity . hoist lift 
 
 buffer :: (Show e, Typeable e)
        =>  Siphon bytes e (a -> b)
@@ -626,12 +625,14 @@ executeDumbPipeline (Pipeline (initialStage,liftA2 (,) N.init N.last -> (stages,
         blende _ (Right (ExitSuccess,())) = Right () 
         blende _ (Left e) = Left e
 
+        -- runExceptP = runExceptT . distribute
+
         final :: (Show e,Typeable e) 
               => (BetweenStages e, Stage e) 
               -> Producer ByteString IO () 
               -> IO (Either e ())  
         final (BetweenStages pipe, Stage cp lpol ecpol) producer = 
-            blende ecpol <$> executeFallibly (pipei (useProducer producer)) 
+            blende ecpol <$> executeFallibly (pipei (useFallibleProducer $ hoist lift producer >-> pipe)) 
                                              (cp{std_in = CreatePipe})
 
         foldy :: (Show e,Typeable e)  
@@ -640,7 +641,8 @@ executeDumbPipeline (Pipeline (initialStage,liftA2 (,) N.init N.last -> (stages,
               ->  Producer ByteString IO () -> IO (Either e ())
         foldy (BetweenStages pipe, Stage cp lpol ecpol) previous producer =
              -- beware when contructing this siphon
-             blende ecpol <$> executeFallibly (const () <$> (pipeio (useProducer producer) (Siphon previous)))
+             blende ecpol <$> executeFallibly (const () <$> (pipeio (useFallibleProducer $ hoist lift producer >-> pipe) 
+                                                                    (Siphon previous)))
                                               (cp{std_in = CreatePipe, std_out = CreatePipe})
                                     
         initial :: (Show e,Typeable e) 
