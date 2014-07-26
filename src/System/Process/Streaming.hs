@@ -612,7 +612,53 @@ executePipeline :: PipingPolicy Void a -> Pipeline Void -> IO a
 executePipeline pp pipeline = either absurd id <$> executePipelineFallibly pp pipeline
 
 executePipelineFallibly :: PipingPolicy e a -> Pipeline e -> IO (Either e a)
-executePipelineFallibly = undefined
+executePipelineFallibly pp record = case pp of 
+      PPNone action -> undefined
+      PPOutput action -> undefined
+      PPError action -> undefined
+      PPOutputError action -> undefined
+      PPInput action -> undefined
+      PPInputOutput action -> undefined
+      PPInputError action -> undefined
+      PPInputOutputError action -> undefined
+
+executeDumbPipeline' :: (Show e,Typeable e) 
+                     => (Siphon ByteString e () -> PipingPolicy e ())
+                     -> (Pump ByteString e () -> Siphon ByteString e () -> PipingPolicy e ())
+                     -> (Pump ByteString e () -> PipingPolicy e ())
+                     -> Pipeline e 
+                     -> IO (Either e ())
+executeDumbPipeline' ppinitial ppmiddle ppend (Pipeline (initialStage,liftA2 (,) N.init N.last -> (stages, finalStage))) = 
+        initial initialStage $ Data.Foldable.foldr foldy (final finalStage) stages 
+    where   
+        blende :: (Int -> Maybe e) -> Either e (ExitCode,()) -> Either e ()
+        blende f (Right (ExitFailure i,())) = case f i of
+            Nothing -> Right ()
+            Just e -> Left e
+        blende _ (Right (ExitSuccess,())) = Right () 
+        blende _ (Left e) = Left e
+
+--        final :: (BetweenStages e, Stage e) 
+--              -> Producer ByteString IO () 
+--              -> IO (Either e ())  
+        final (BetweenStages pipe, Stage cp lpol ecpol) producer = 
+            blende ecpol <$> executeFallibly (ppend (useFallibleProducer $ hoist lift producer >-> pipe)) cp
+
+--        foldy :: (Show e,Typeable e)  
+--              => (BetweenStages e, Stage e) 
+--              -> (Producer ByteString IO () -> IO (Either e ()))
+--              ->  Producer ByteString IO () -> IO (Either e ())
+        foldy (BetweenStages pipe, Stage cp lpol ecpol) previous producer =
+             -- beware when contructing this siphon
+             blende ecpol <$> executeFallibly (ppmiddle (useFallibleProducer $ hoist lift producer >-> pipe) (Siphon previous)) cp
+                                    
+--        initial :: (Show e,Typeable e) 
+--                =>  Stage e
+--                -> (Producer ByteString IO () -> IO (Either e ()))
+--                ->  IO (Either e ())
+        initial (Stage cp lpol ecpol) previous = 
+            blende ecpol <$> executeFallibly (ppinitial (Siphon previous)) cp
+
 
 executeDumbPipeline :: (Show e,Typeable e) => Pipeline e -> IO (Either e ())
 executeDumbPipeline (Pipeline (initialStage,liftA2 (,) N.init N.last -> (stages, finalStage))) = 
@@ -633,7 +679,7 @@ executeDumbPipeline (Pipeline (initialStage,liftA2 (,) N.init N.last -> (stages,
               -> IO (Either e ())  
         final (BetweenStages pipe, Stage cp lpol ecpol) producer = 
             blende ecpol <$> executeFallibly (pipei (useFallibleProducer $ hoist lift producer >-> pipe)) 
-                                             (cp{std_in = CreatePipe})
+                                             cp
 
         foldy :: (Show e,Typeable e)  
               => (BetweenStages e, Stage e) 
@@ -643,7 +689,7 @@ executeDumbPipeline (Pipeline (initialStage,liftA2 (,) N.init N.last -> (stages,
              -- beware when contructing this siphon
              blende ecpol <$> executeFallibly (const () <$> (pipeio (useFallibleProducer $ hoist lift producer >-> pipe) 
                                                                     (Siphon previous)))
-                                              (cp{std_in = CreatePipe, std_out = CreatePipe})
+                                              cp
                                     
         initial :: (Show e,Typeable e) 
                 =>  Stage e
@@ -651,7 +697,7 @@ executeDumbPipeline (Pipeline (initialStage,liftA2 (,) N.init N.last -> (stages,
                 ->  IO (Either e ())
         initial (Stage cp lpol ecpol) previous = 
             blende ecpol <$> executeFallibly (pipeo (Siphon previous))
-                                                    (cp{std_out = CreatePipe})
+                                             cp
             
 
 data Pipeline e = Pipeline (Stage e, NonEmpty (BetweenStages e,Stage e))
