@@ -637,12 +637,13 @@ executeDumbPipeline' ppinitial ppmiddle ppend (Pipeline (initialStage,liftA2 (,)
             Just e -> Left e
         blende _ (Right (ExitSuccess,())) = Right () 
         blende _ (Left e) = Left e
-
---        final :: (BetweenStages e, Stage e) 
---              -> Producer ByteString IO () 
---              -> IO (Either e ())  
-        final (BetweenStages pipe, Stage cp lpol ecpol) producer = 
-            blende ecpol <$> executeFallibly (ppend (useFallibleProducer $ hoist lift producer >-> pipe)) cp
+                                    
+--        initial :: (Show e,Typeable e) 
+--                =>  Stage e
+--                -> (Producer ByteString IO () -> IO (Either e ()))
+--                ->  IO (Either e ())
+        initial (Stage cp lpol ecpol) previous = 
+            blende ecpol <$> executeFallibly (ppinitial (Siphon previous)) cp
 
 --        foldy :: (Show e,Typeable e)  
 --              => (BetweenStages e, Stage e) 
@@ -651,13 +652,12 @@ executeDumbPipeline' ppinitial ppmiddle ppend (Pipeline (initialStage,liftA2 (,)
         foldy (BetweenStages pipe, Stage cp lpol ecpol) previous producer =
              -- beware when contructing this siphon
              blende ecpol <$> executeFallibly (ppmiddle (useFallibleProducer $ hoist lift producer >-> pipe) (Siphon previous)) cp
-                                    
---        initial :: (Show e,Typeable e) 
---                =>  Stage e
---                -> (Producer ByteString IO () -> IO (Either e ()))
---                ->  IO (Either e ())
-        initial (Stage cp lpol ecpol) previous = 
-            blende ecpol <$> executeFallibly (ppinitial (Siphon previous)) cp
+
+--        final :: (BetweenStages e, Stage e) 
+--              -> Producer ByteString IO () 
+--              -> IO (Either e ())  
+        final (BetweenStages pipe, Stage cp lpol ecpol) producer = 
+            blende ecpol <$> executeFallibly (ppend (useFallibleProducer $ hoist lift producer >-> pipe)) cp
 
 
 executeDumbPipeline :: (Show e,Typeable e) => Pipeline e -> IO (Either e ())
