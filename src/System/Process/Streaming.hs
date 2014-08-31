@@ -123,8 +123,8 @@ terminated.
  -}
 executeFallibly :: PipingPolicy e a -> CreateProcess -> IO (Either e (ExitCode,a))
 executeFallibly pp record = case pp of
-      PPNone action -> executeInternal record nohandles $  
-          \() -> (action (),return ())
+      PPNone a -> executeInternal record nohandles $  
+          \() -> (return . Right $ a,return ())
       PPOutput action -> executeInternal (record{std_out = CreatePipe}) handleso $
           \h->(action (fromHandle h),hClose h) 
       PPError action ->  executeInternal (record{std_err = CreatePipe}) handlese $
@@ -182,7 +182,7 @@ terminateOnError pHandle action = do
 -- Knows that there is a stdin, stdout and stderr,
 -- But doesn't know anything about file handles of CreateProcess
 data PipingPolicy e a = 
-      PPNone (() -> IO (Either e a))
+      PPNone a
     | PPOutput (Producer ByteString IO () -> IO (Either e a))
     | PPError  (Producer ByteString IO () -> IO (Either e a))
     | PPOutputError ((Producer ByteString IO (),Producer ByteString IO ()) -> IO (Either e a))
@@ -194,7 +194,7 @@ data PipingPolicy e a =
 
 instance Bifunctor PipingPolicy where
   bimap f g pp = case pp of
-        PPNone action -> PPNone $ fmap (fmap (bimap f g)) action 
+        PPNone a -> PPNone $ g a 
         PPOutput action -> PPOutput $ fmap (fmap (bimap f g)) action
         PPError action -> PPError $ fmap (fmap (bimap f g)) action
         PPOutputError action -> PPOutputError $ fmap (fmap (bimap f g)) action
@@ -207,7 +207,7 @@ instance Bifunctor PipingPolicy where
     Do not pipe any standard stream. 
 -}
 nopiping :: PipingPolicy e ()
-nopiping = PPNone $ pure $ pure $ pure $ ()
+nopiping = PPNone ()
 
 pipeo :: (Show e,Typeable e) => Siphon ByteString e a -> PipingPolicy e a
 pipeo (Siphon siphonout) = PPOutput $ siphonout
@@ -608,12 +608,15 @@ unexpected a = Siphon $ \producer -> do
         Right (b,_) -> Left b
 
 
-executePipeline :: PipingPolicy Void a -> Pipeline Void -> IO a
+executePipeline :: PipingPolicy Void () -> Pipeline Void -> IO ()
 executePipeline pp pipeline = either absurd id <$> executePipelineFallibly pp pipeline
 
-executePipelineFallibly :: PipingPolicy e a -> Pipeline e -> IO (Either e a)
-executePipelineFallibly pp record = case pp of 
-      PPNone action -> undefined
+executePipelineFallibly :: (Show e,Typeable e) => PipingPolicy e () -> Pipeline e -> IO (Either e ())
+executePipelineFallibly policy = case policy of 
+      PPNone () -> 
+           executeDumbPipeline' pipeo 
+                                pipeio
+                                pipei 
       PPOutput action -> undefined
       PPError action -> undefined
       PPOutputError action -> undefined
@@ -624,7 +627,7 @@ executePipelineFallibly pp record = case pp of
 
 executeDumbPipeline' :: (Show e,Typeable e) 
                      => (Siphon ByteString e () -> PipingPolicy e ())
-                     -> (Pump ByteString e () -> Siphon ByteString e () -> PipingPolicy e ())
+                     -> (Pump ByteString e () -> Siphon ByteString e () -> PipingPolicy e ((),()))
                      -> (Pump ByteString e () -> PipingPolicy e ())
                      -> Pipeline e 
                      -> IO (Either e ())
@@ -651,7 +654,7 @@ executeDumbPipeline' ppinitial ppmiddle ppend (Pipeline (initialStage,liftA2 (,)
 --              ->  Producer ByteString IO () -> IO (Either e ())
         foldy (BetweenStages pipe, Stage cp lpol ecpol) previous producer =
              -- beware when contructing this siphon
-             blende ecpol <$> executeFallibly (ppmiddle (useFallibleProducer $ hoist lift producer >-> pipe) (Siphon previous)) cp
+             blende ecpol <$> executeFallibly (fmap (const ()) $ ppmiddle (useFallibleProducer $ hoist lift producer >-> pipe) (Siphon previous)) cp
 
 --        final :: (BetweenStages e, Stage e) 
 --              -> Producer ByteString IO () 
