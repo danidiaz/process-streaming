@@ -62,7 +62,11 @@ module System.Process.Streaming (
         , executePipelineFallibly
         , Pipeline (..)
         , Stage (..)
+        , SubsequentStage (..)
         , BetweenStages (..)
+        , RootedArborescent (..)
+        , Arborescent (..)
+        , fromPipeline 
         -- * Re-exports
         -- $reexports
         , module System.Process
@@ -660,7 +664,7 @@ executePipelineInternal :: (Show e,Typeable e)
                      -> (Pump ByteString e () -> PipingPolicy e ())
                      -> Pipeline e 
                      -> IO (Either e ())
-executePipelineInternal ppinitial ppmiddle ppend (Pipeline (initialStage,liftA2 (,) N.init N.last -> (stages, finalStage))) = 
+executePipelineInternal ppinitial ppmiddle ppend (Pipeline initialStage (liftA2 (,) N.init N.last -> (stages, finalStage))) = 
         initial initialStage $ Data.Foldable.foldr foldy (final finalStage) stages 
     where   
         blende :: (Int -> Maybe e) -> Either e (ExitCode,()) -> Either e ()
@@ -681,21 +685,17 @@ executePipelineInternal ppinitial ppmiddle ppend (Pipeline (initialStage,liftA2 
 --              => (BetweenStages e, Stage e) 
 --              -> (Producer ByteString IO () -> IO (Either e ()))
 --              ->  Producer ByteString IO () -> IO (Either e ())
-        foldy (BetweenStages pipe, Stage cp lpol ecpol) previous producer =
+        foldy (SubsequentStage (BetweenStages pipe) (Stage cp lpol ecpol)) previous producer =
              -- beware when contructing this siphon
              blende ecpol <$> executeFallibly (fmap (const ()) $ ppmiddle (useFallibleProducer $ hoist lift producer >-> pipe) (Siphon previous)) cp
 
 --        final :: (BetweenStages e, Stage e) 
 --              -> Producer ByteString IO () 
 --              -> IO (Either e ())  
-        final (BetweenStages pipe, Stage cp lpol ecpol) producer = 
+        final (SubsequentStage (BetweenStages pipe) (Stage cp lpol ecpol)) producer = 
             blende ecpol <$> executeFallibly (ppend (useFallibleProducer $ hoist lift producer >-> pipe)) cp
 
-data Pipeline e = Pipeline (Stage e, NonEmpty (BetweenStages e,Stage e))
-
-instance Functor Pipeline where
-    fmap f (Pipeline (stage1, otherStages)) = Pipeline (fmap f stage1, fmap (mapTuple f) otherStages)
-        where mapTuple f (betweenPipes,stageN) = (fmap f betweenPipes,fmap f stageN)  
+data Pipeline e = Pipeline (Stage e) (NonEmpty (SubsequentStage e)) deriving (Functor)
 
 data Stage e = Stage 
            {
@@ -704,11 +704,24 @@ data Stage e = Stage
            , exitCodePolicy :: Int -> Maybe e
            } deriving (Functor)
 
+data SubsequentStage e = SubsequentStage (BetweenStages e) (Stage e) deriving (Functor)
+
 data BetweenStages e = BetweenStages (forall a.Pipe ByteString ByteString (ExceptT e IO) a)
 
 instance Functor BetweenStages where
     fmap f (BetweenStages bs) = BetweenStages $ hoist (mapExceptT $ liftM (bimap f id)) bs
 
+data RootedArborescent e =  RootedArborescent (Stage e) (Arborescent e) deriving (Functor)
+
+data Arborescent e =
+        Branches (NonEmpty (SubsequentStage e, Arborescent e))
+      | Tip (SubsequentStage e)
+      deriving (Functor)
+
+fromPipeline :: Pipeline e -> RootedArborescent e
+fromPipeline (Pipeline root (liftA2 (,) N.init N.last -> (stages, finalStage))) = 
+    (RootedArborescent root arborescent)
+        where arborescent = Data.Foldable.foldr (curry $ Branches . pure) (Tip finalStage) stages
 
 {- $reexports
  
