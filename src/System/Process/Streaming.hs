@@ -614,7 +614,7 @@ executePipeline pp pipeline = either absurd id <$> executePipelineFallibly pp pi
 executePipelineFallibly :: (Show e,Typeable e) => PipingPolicy e () -> Pipeline e -> IO (Either e ())
 executePipelineFallibly policy pipeline = case policy of 
       PPNone () -> 
-           executeDumbPipeline' pipeo 
+           executePipelineInternal pipeo 
                                 pipeio 
                                 pipei 
                                 pipeline
@@ -623,7 +623,7 @@ executePipelineFallibly policy pipeline = case policy of
             runConceit $  
                 (Conceit $ action $ fromInput inbox)
                 *>
-                (Conceit $ executeDumbPipeline' pipeo 
+                (Conceit $ executePipelineInternal pipeo 
                                                 pipeio 
                                                 (fmap snd . flip pipeio (useConsumer . toOutput $ outbox))
                                                 pipeline
@@ -635,7 +635,7 @@ executePipelineFallibly policy pipeline = case policy of
             runConceit $  
                 (Conceit $ action (toOutput outbox,atomically seal))
                 *>
-                (Conceit $ executeDumbPipeline' (fmap fst . pipeio (useProducer . fromInput $ inbox))
+                (Conceit $ executePipelineInternal (fmap fst . pipeio (useProducer . fromInput $ inbox))
                                                 pipeio 
                                                 pipei 
                                                 pipeline
@@ -646,7 +646,7 @@ executePipelineFallibly policy pipeline = case policy of
             runConceit $  
                 (Conceit $ action (toOutput ioutbox,atomically iseal,fromInput oinbox))
                 *>
-                (Conceit $ executeDumbPipeline' (fmap fst . pipeio (useProducer . fromInput $ iinbox))
+                (Conceit $ executePipelineInternal (fmap fst . pipeio (useProducer . fromInput $ iinbox))
                                                 pipeio 
                                                 (fmap snd . flip pipeio (useConsumer . toOutput $ ooutbox))
                                                 pipeline
@@ -654,13 +654,13 @@ executePipelineFallibly policy pipeline = case policy of
       PPInputError action -> undefined
       PPInputOutputError action -> undefined
 
-executeDumbPipeline' :: (Show e,Typeable e) 
+executePipelineInternal :: (Show e,Typeable e) 
                      => (Siphon ByteString e () -> PipingPolicy e ())
                      -> (Pump ByteString e () -> Siphon ByteString e () -> PipingPolicy e ((),()))
                      -> (Pump ByteString e () -> PipingPolicy e ())
                      -> Pipeline e 
                      -> IO (Either e ())
-executeDumbPipeline' ppinitial ppmiddle ppend (Pipeline (initialStage,liftA2 (,) N.init N.last -> (stages, finalStage))) = 
+executePipelineInternal ppinitial ppmiddle ppend (Pipeline (initialStage,liftA2 (,) N.init N.last -> (stages, finalStage))) = 
         initial initialStage $ Data.Foldable.foldr foldy (final finalStage) stages 
     where   
         blende :: (Int -> Maybe e) -> Either e (ExitCode,()) -> Either e ()
@@ -690,47 +690,6 @@ executeDumbPipeline' ppinitial ppmiddle ppend (Pipeline (initialStage,liftA2 (,)
 --              -> IO (Either e ())  
         final (BetweenStages pipe, Stage cp lpol ecpol) producer = 
             blende ecpol <$> executeFallibly (ppend (useFallibleProducer $ hoist lift producer >-> pipe)) cp
-
-
-executeDumbPipeline :: (Show e,Typeable e) => Pipeline e -> IO (Either e ())
-executeDumbPipeline (Pipeline (initialStage,liftA2 (,) N.init N.last -> (stages, finalStage))) = 
-        initial initialStage . Data.Foldable.foldr foldy (final finalStage) $ stages 
-    where   
-        blende :: (Int -> Maybe e) -> Either e (ExitCode,()) -> Either e ()
-        blende f (Right (ExitFailure i,())) = case f i of
-            Nothing -> Right ()
-            Just e -> Left e
-        blende _ (Right (ExitSuccess,())) = Right () 
-        blende _ (Left e) = Left e
-
-        -- runExceptP = runExceptT . distribute
-
-        final :: (Show e,Typeable e) 
-              => (BetweenStages e, Stage e) 
-              -> Producer ByteString IO () 
-              -> IO (Either e ())  
-        final (BetweenStages pipe, Stage cp lpol ecpol) producer = 
-            blende ecpol <$> executeFallibly (pipei (useFallibleProducer $ hoist lift producer >-> pipe)) 
-                                             cp
-
-        foldy :: (Show e,Typeable e)  
-              => (BetweenStages e, Stage e) 
-              -> (Producer ByteString IO () -> IO (Either e ()))
-              ->  Producer ByteString IO () -> IO (Either e ())
-        foldy (BetweenStages pipe, Stage cp lpol ecpol) previous producer =
-             -- beware when contructing this siphon
-             blende ecpol <$> executeFallibly (const () <$> (pipeio (useFallibleProducer $ hoist lift producer >-> pipe) 
-                                                                    (Siphon previous)))
-                                              cp
-                                    
-        initial :: (Show e,Typeable e) 
-                =>  Stage e
-                -> (Producer ByteString IO () -> IO (Either e ()))
-                ->  IO (Either e ())
-        initial (Stage cp lpol ecpol) previous = 
-            blende ecpol <$> executeFallibly (pipeo (Siphon previous))
-                                             cp
-            
 
 data Pipeline e = Pipeline (Stage e, NonEmpty (BetweenStages e,Stage e))
 
