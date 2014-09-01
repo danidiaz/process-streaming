@@ -612,16 +612,45 @@ executePipeline :: PipingPolicy Void () -> Pipeline Void -> IO ()
 executePipeline pp pipeline = either absurd id <$> executePipelineFallibly pp pipeline
 
 executePipelineFallibly :: (Show e,Typeable e) => PipingPolicy e () -> Pipeline e -> IO (Either e ())
-executePipelineFallibly policy = case policy of 
+executePipelineFallibly policy pipeline = case policy of 
       PPNone () -> 
            executeDumbPipeline' pipeo 
-                                pipeio
+                                pipeio 
                                 pipei 
-      PPOutput action -> undefined
+                                pipeline
+      PPOutput action -> do
+            (outbox, inbox, seal) <- spawn' Unbounded
+            runConceit $  
+                (Conceit $ action $ fromInput inbox)
+                *>
+                (Conceit $ executeDumbPipeline' pipeo 
+                                                pipeio 
+                                                (fmap snd . flip pipeio (useConsumer . toOutput $ outbox))
+                                                pipeline
+                )
       PPError action -> undefined
       PPOutputError action -> undefined
-      PPInput action -> undefined
-      PPInputOutput action -> undefined
+      PPInput action -> do
+            (outbox, inbox, seal) <- spawn' Unbounded
+            runConceit $  
+                (Conceit $ action (toOutput outbox,atomically seal))
+                *>
+                (Conceit $ executeDumbPipeline' (fmap fst . pipeio (useProducer . fromInput $ inbox))
+                                                pipeio 
+                                                pipei 
+                                                pipeline
+                )
+      PPInputOutput action -> do
+            (ioutbox, iinbox, iseal) <- spawn' Unbounded
+            (ooutbox, oinbox, oseal) <- spawn' Unbounded
+            runConceit $  
+                (Conceit $ action (toOutput ioutbox,atomically iseal,fromInput oinbox))
+                *>
+                (Conceit $ executeDumbPipeline' (fmap fst . pipeio (useProducer . fromInput $ iinbox))
+                                                pipeio 
+                                                (fmap snd . flip pipeio (useConsumer . toOutput $ ooutbox))
+                                                pipeline
+                )
       PPInputError action -> undefined
       PPInputOutputError action -> undefined
 
