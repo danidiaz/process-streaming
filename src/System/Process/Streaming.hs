@@ -662,42 +662,6 @@ executeArborescentFallibly policy pipeline = case policy of
       PPInputError action -> undefined
       PPInputOutputError action -> undefined
 
-executePipelineInternal :: (Show e,Typeable e) 
-                     => (Siphon ByteString e () -> PipingPolicy e ())
-                     -> (Pump ByteString e () -> Siphon ByteString e () -> PipingPolicy e ((),()))
-                     -> (Pump ByteString e () -> PipingPolicy e ())
-                     -> Pipeline e 
-                     -> IO (Either e ())
-executePipelineInternal ppinitial ppmiddle ppend (Pipeline initialStage (liftA2 (,) N.init N.last -> (stages, finalStage))) = 
-        initial initialStage $ Data.Foldable.foldr foldy (final finalStage) stages 
-    where   
---        initial :: (Show e,Typeable e) 
---                =>  Stage e
---                -> (Producer ByteString IO () -> IO (Either e ()))
---                ->  IO (Either e ())
-        initial (Stage cp lpol ecpol) previous = 
-            blende ecpol <$> executeFallibly (ppinitial (Siphon previous)) cp
-
---        foldy :: (Show e,Typeable e)  
---              => (BetweenStages e, Stage e) 
---              -> (Producer ByteString IO () -> IO (Either e ()))
---              ->  Producer ByteString IO () -> IO (Either e ())
-        foldy (SubsequentStage (BetweenStages pipe) (Stage cp lpol ecpol)) previous producer =
-             -- beware when contructing this siphon
-             blende ecpol <$> executeFallibly (fmap (const ()) $ ppmiddle (useFallibleProducer $ hoist lift producer >-> pipe) (Siphon previous)) cp
-
---        final :: (BetweenStages e, Stage e) 
---              -> Producer ByteString IO () 
---              -> IO (Either e ())  
-        final (SubsequentStage (BetweenStages pipe) (Stage cp lpol ecpol)) producer = 
-            blende ecpol <$> executeFallibly (ppend (useFallibleProducer $ hoist lift producer >-> pipe)) cp
-
-blende :: (Int -> Maybe e) -> Either e (ExitCode,()) -> Either e ()
-blende f (Right (ExitFailure i,())) = case f i of
-    Nothing -> Right ()
-    Just e -> Left e
-blende _ (Right (ExitSuccess,())) = Right () 
-blende _ (Left e) = Left e
 
 data Pipeline e = Pipeline (Stage e) (NonEmpty (SubsequentStage e)) deriving (Functor)
 
@@ -738,11 +702,17 @@ executeArborescentInternal ppinitial ppmiddle ppend ppend' (RootedArborescent (S
     blende ecpol <$> executeFallibly (ppinitial (runArborescent ppmiddle ppend ppend' a)) cp
   where 
     runArborescent ppmiddle ppend ppend' a = case a of
-        Branches (b :| bs) -> foo ppend ppend' b <* Prelude.foldr (<*) (pure ()) (foo ppend' ppend' <$> bs) 
+        Branches (b :| bs) -> single ppend ppend' b <* Prelude.foldr (<*) (pure ()) (single ppend' ppend' <$> bs) 
         Tip (SubsequentStage (BetweenStages pipe) (Stage cp lpol ecpol)) -> Siphon $ \producer ->
             blende ecpol <$> executeFallibly (ppend (useFallibleProducer $ hoist lift producer >-> pipe)) cp
-    foo ppend ppend' (SubsequentStage (BetweenStages pipe) (Stage cp lpol ecpol), a) = Siphon $ \producer ->
+    single ppend ppend' (SubsequentStage (BetweenStages pipe) (Stage cp lpol ecpol), a) = Siphon $ \producer ->
          blende ecpol <$> executeFallibly (fmap (const ()) $ ppmiddle (useFallibleProducer $ hoist lift producer >-> pipe) (runArborescent ppmiddle ppend ppend' a)) cp
+    blende :: (Int -> Maybe e) -> Either e (ExitCode,()) -> Either e ()
+    blende f (Right (ExitFailure i,())) = case f i of
+        Nothing -> Right ()
+        Just e -> Left e
+    blende _ (Right (ExitSuccess,())) = Right () 
+    blende _ (Left e) = Left e
 
 {- $reexports
  
