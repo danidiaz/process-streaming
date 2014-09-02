@@ -58,14 +58,14 @@ module System.Process.Streaming (
         , LinePolicy
         , linePolicy
         -- * Pipelines
-        , executePipeline
-        , executePipelineFallibly
-        , Pipeline (..)
+        , executeArborescent
+        , executeArborescentFallibly
+        , RootedArborescent (..)
+        , Arborescent (..)
         , Stage (..)
         , SubsequentStage (..)
         , BetweenStages (..)
-        , RootedArborescent (..)
-        , Arborescent (..)
+        , Pipeline (..)
         , fromPipeline 
         -- * Re-exports
         -- $reexports
@@ -612,14 +612,15 @@ unexpected a = Siphon $ \producer -> do
         Right (b,_) -> Left b
 
 
-executePipeline :: PipingPolicy Void () -> Pipeline Void -> IO ()
-executePipeline pp pipeline = either absurd id <$> executePipelineFallibly pp pipeline
+executeArborescent :: PipingPolicy Void () -> RootedArborescent Void -> IO ()
+executeArborescent pp pipeline = either absurd id <$> executeArborescentFallibly pp pipeline
 
-executePipelineFallibly :: (Show e,Typeable e) => PipingPolicy e () -> Pipeline e -> IO (Either e ())
-executePipelineFallibly policy pipeline = case policy of 
+executeArborescentFallibly :: (Show e,Typeable e) => PipingPolicy e () -> RootedArborescent e -> IO (Either e ())
+executeArborescentFallibly policy pipeline = case policy of 
       PPNone () -> 
-           executePipelineInternal pipeo 
+           executeArborescentInternal pipeo 
                                 pipeio 
+                                pipei 
                                 pipei 
                                 pipeline
       PPOutput action -> do
@@ -627,9 +628,10 @@ executePipelineFallibly policy pipeline = case policy of
             runConceit $  
                 (Conceit $ action $ fromInput inbox)
                 *>
-                (Conceit $ executePipelineInternal pipeo 
+                (Conceit $ executeArborescentInternal pipeo 
                                                 pipeio 
                                                 (fmap snd . flip pipeio (useConsumer . toOutput $ outbox))
+                                                pipei
                                                 pipeline
                 )
       PPError action -> undefined
@@ -639,8 +641,9 @@ executePipelineFallibly policy pipeline = case policy of
             runConceit $  
                 (Conceit $ action (toOutput outbox,atomically seal))
                 *>
-                (Conceit $ executePipelineInternal (fmap fst . pipeio (useProducer . fromInput $ inbox))
+                (Conceit $ executeArborescentInternal (fmap fst . pipeio (useProducer . fromInput $ inbox))
                                                 pipeio 
+                                                pipei 
                                                 pipei 
                                                 pipeline
                 )
@@ -650,9 +653,10 @@ executePipelineFallibly policy pipeline = case policy of
             runConceit $  
                 (Conceit $ action (toOutput ioutbox,atomically iseal,fromInput oinbox))
                 *>
-                (Conceit $ executePipelineInternal (fmap fst . pipeio (useProducer . fromInput $ iinbox))
+                (Conceit $ executeArborescentInternal (fmap fst . pipeio (useProducer . fromInput $ iinbox))
                                                 pipeio 
                                                 (fmap snd . flip pipeio (useConsumer . toOutput $ ooutbox))
+                                                pipei
                                                 pipeline
                 )
       PPInputError action -> undefined
@@ -723,17 +727,20 @@ fromPipeline (Pipeline root (liftA2 (,) N.init N.last -> (stages, finalStage))) 
     (RootedArborescent root arborescent)
         where arborescent = Data.Foldable.foldr (curry $ Branches . pure) (Tip finalStage) stages
 
-runArborescent :: (Show e,Typeable e) 
-               => (Pump ByteString e () -> Siphon ByteString e () -> PipingPolicy e ((),()))
-               -> (Pump ByteString e () -> PipingPolicy e ())
-               -> (Pump ByteString e () -> PipingPolicy e ())
-               -> Arborescent e 
-               -> Siphon ByteString e ()
-runArborescent ppmiddle ppend ppend' a = case a of
-    Branches (b :| bs) -> foo ppend ppend' b <* Prelude.foldr (<*) (pure ()) (foo ppend' ppend' <$> bs) 
-    Tip (SubsequentStage (BetweenStages pipe) (Stage cp lpol ecpol)) -> Siphon $ \producer ->
-        blende ecpol <$> executeFallibly (ppend (useFallibleProducer $ hoist lift producer >-> pipe)) cp
+executeArborescentInternal :: (Show e,Typeable e) 
+                           => (Siphon ByteString e () -> PipingPolicy e ())
+                           -> (Pump ByteString e () -> Siphon ByteString e () -> PipingPolicy e ((),()))
+                           -> (Pump ByteString e () -> PipingPolicy e ())
+                           -> (Pump ByteString e () -> PipingPolicy e ())
+                           -> RootedArborescent e 
+                           -> IO (Either e ())
+executeArborescentInternal ppinitial ppmiddle ppend ppend' (RootedArborescent (Stage cp lpol ecpol) a) =      
+    blende ecpol <$> executeFallibly (ppinitial (runArborescent ppmiddle ppend ppend' a)) cp
   where 
+    runArborescent ppmiddle ppend ppend' a = case a of
+        Branches (b :| bs) -> foo ppend ppend' b <* Prelude.foldr (<*) (pure ()) (foo ppend' ppend' <$> bs) 
+        Tip (SubsequentStage (BetweenStages pipe) (Stage cp lpol ecpol)) -> Siphon $ \producer ->
+            blende ecpol <$> executeFallibly (ppend (useFallibleProducer $ hoist lift producer >-> pipe)) cp
     foo ppend ppend' (SubsequentStage (BetweenStages pipe) (Stage cp lpol ecpol), a) = Siphon $ \producer ->
          blende ecpol <$> executeFallibly (fmap (const ()) $ ppmiddle (useFallibleProducer $ hoist lift producer >-> pipe) (runArborescent ppmiddle ppend ppend' a)) cp
 
