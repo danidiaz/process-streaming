@@ -667,13 +667,6 @@ executePipelineInternal :: (Show e,Typeable e)
 executePipelineInternal ppinitial ppmiddle ppend (Pipeline initialStage (liftA2 (,) N.init N.last -> (stages, finalStage))) = 
         initial initialStage $ Data.Foldable.foldr foldy (final finalStage) stages 
     where   
-        blende :: (Int -> Maybe e) -> Either e (ExitCode,()) -> Either e ()
-        blende f (Right (ExitFailure i,())) = case f i of
-            Nothing -> Right ()
-            Just e -> Left e
-        blende _ (Right (ExitSuccess,())) = Right () 
-        blende _ (Left e) = Left e
-                                    
 --        initial :: (Show e,Typeable e) 
 --                =>  Stage e
 --                -> (Producer ByteString IO () -> IO (Either e ()))
@@ -694,6 +687,13 @@ executePipelineInternal ppinitial ppmiddle ppend (Pipeline initialStage (liftA2 
 --              -> IO (Either e ())  
         final (SubsequentStage (BetweenStages pipe) (Stage cp lpol ecpol)) producer = 
             blende ecpol <$> executeFallibly (ppend (useFallibleProducer $ hoist lift producer >-> pipe)) cp
+
+blende :: (Int -> Maybe e) -> Either e (ExitCode,()) -> Either e ()
+blende f (Right (ExitFailure i,())) = case f i of
+    Nothing -> Right ()
+    Just e -> Left e
+blende _ (Right (ExitSuccess,())) = Right () 
+blende _ (Left e) = Left e
 
 data Pipeline e = Pipeline (Stage e) (NonEmpty (SubsequentStage e)) deriving (Functor)
 
@@ -722,6 +722,20 @@ fromPipeline :: Pipeline e -> RootedArborescent e
 fromPipeline (Pipeline root (liftA2 (,) N.init N.last -> (stages, finalStage))) = 
     (RootedArborescent root arborescent)
         where arborescent = Data.Foldable.foldr (curry $ Branches . pure) (Tip finalStage) stages
+
+runArborescent :: (Show e,Typeable e) 
+               => (Pump ByteString e () -> Siphon ByteString e () -> PipingPolicy e ((),()))
+               -> (Pump ByteString e () -> PipingPolicy e ())
+               -> (Pump ByteString e () -> PipingPolicy e ())
+               -> Arborescent e 
+               -> Siphon ByteString e ()
+runArborescent ppmiddle ppend ppend' a = case a of
+    Branches (b :| bs) -> foo ppend ppend' b <* Prelude.foldr (<*) (pure ()) (foo ppend' ppend' <$> bs) 
+    Tip (SubsequentStage (BetweenStages pipe) (Stage cp lpol ecpol)) -> Siphon $ \producer ->
+        blende ecpol <$> executeFallibly (ppend (useFallibleProducer $ hoist lift producer >-> pipe)) cp
+  where 
+    foo ppend ppend' (SubsequentStage (BetweenStages pipe) (Stage cp lpol ecpol), a) = Siphon $ \producer ->
+         blende ecpol <$> executeFallibly (fmap (const ()) $ ppmiddle (useFallibleProducer $ hoist lift producer >-> pipe) (runArborescent ppmiddle ppend ppend' a)) cp
 
 {- $reexports
  
