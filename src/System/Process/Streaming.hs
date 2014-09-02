@@ -41,16 +41,16 @@ module System.Process.Streaming (
 
         -- * Pumping bytes into stdin
         , Pump (..)
-        , useProducer
-        , useSafeProducer
-        , useFallibleProducer
+        , fromProducer
+        , fromSafeProducer
+        , fromFallibleProducer
         -- * Siphoning bytes out of stdout/stderr
         , Siphon (..)
-        , useConsumer
-        , useSafeConsumer
-        , useFallibleConsumer
-        , useFold
-        , useParser
+        , fromConsumer
+        , fromSafeConsumer
+        , fromFallibleConsumer
+        , fromFold
+        , fromParser
         , unexpected
         , encoded
         -- * Line handling
@@ -375,39 +375,39 @@ manyCombined actions consumer = do
 
     You may need to use 'surely' for the types to fit.
  -}
-useConsumer :: Consumer b IO () -> Siphon b e ()
-useConsumer consumer = Siphon $ \producer -> fmap pure $ runEffect $ producer >-> consumer 
+fromConsumer :: Consumer b IO () -> Siphon b e ()
+fromConsumer consumer = Siphon $ \producer -> fmap pure $ runEffect $ producer >-> consumer 
 
-useSafeConsumer :: Consumer b (SafeT IO) () -> Siphon b e ()
-useSafeConsumer consumer = Siphon $ safely $ \producer -> fmap pure $ runEffect $ producer >-> consumer 
+fromSafeConsumer :: Consumer b (SafeT IO) () -> Siphon b e ()
+fromSafeConsumer consumer = Siphon $ safely $ \producer -> fmap pure $ runEffect $ producer >-> consumer 
 
-useFallibleConsumer :: Consumer b (ExceptT e IO) () -> Siphon b e ()
-useFallibleConsumer consumer = Siphon $ \producer -> runExceptT $ runEffect (hoist lift producer >-> consumer) 
+fromFallibleConsumer :: Consumer b (ExceptT e IO) () -> Siphon b e ()
+fromFallibleConsumer consumer = Siphon $ \producer -> runExceptT $ runEffect (hoist lift producer >-> consumer) 
 
-useFold :: (Producer b IO () -> IO a) -> Siphon b e a 
-useFold aFold = Siphon $ fmap (fmap pure) $ aFold 
+fromFold :: (Producer b IO () -> IO a) -> Siphon b e a 
+fromFold aFold = Siphon $ fmap (fmap pure) $ aFold 
 
-useParser :: Parser b IO (Either e a) -> Siphon b e a 
-useParser parser = Siphon $ Pipes.Parse.evalStateT parser 
+fromParser :: Parser b IO (Either e a) -> Siphon b e a 
+fromParser parser = Siphon $ Pipes.Parse.evalStateT parser 
 
 {-|
     Useful for constructing @stdin@ feeding functions from a 'Producer'.
 
     You may need to use 'surely' for the types to fit.
  -}
-useProducer :: Producer b IO () -> Pump b e ()
-useProducer producer = Pump $ \consumer -> fmap pure $ runEffect (producer >-> consumer) 
+fromProducer :: Producer b IO () -> Pump b e ()
+fromProducer producer = Pump $ \consumer -> fmap pure $ runEffect (producer >-> consumer) 
 
-useSafeProducer :: Producer b (SafeT IO) () -> Pump b e ()
-useSafeProducer producer = Pump $ safely $ \consumer -> fmap pure $ runEffect (producer >-> consumer) 
+fromSafeProducer :: Producer b (SafeT IO) () -> Pump b e ()
+fromSafeProducer producer = Pump $ safely $ \consumer -> fmap pure $ runEffect (producer >-> consumer) 
 
-useFallibleProducer :: Producer b (ExceptT e IO) () -> Pump b e ()
-useFallibleProducer producer = Pump $ \consumer -> runExceptT $ runEffect (producer >-> hoist lift consumer) 
+fromFallibleProducer :: Producer b (ExceptT e IO) () -> Pump b e ()
+fromFallibleProducer producer = Pump $ \consumer -> runExceptT $ runEffect (producer >-> hoist lift consumer) 
 
 {-| 
   Useful when we want to plug in a handler that doesn't return an 'Either'. For
 example folds from "Pipes.Prelude", or functions created from simple
-'Consumer's with 'useConsumer'. 
+'Consumer's with 'fromConsumer'. 
 
   > surely = fmap (fmap Right)
  -}
@@ -630,7 +630,7 @@ executeArborescentFallibly policy pipeline = case policy of
                 *>
                 (Conceit $ executeArborescentInternal pipeo 
                                                 pipeio 
-                                                (fmap snd . flip pipeio (useConsumer . toOutput $ outbox))
+                                                (fmap snd . flip pipeio (fromConsumer . toOutput $ outbox))
                                                 pipei
                                                 pipeline
                 )
@@ -641,7 +641,7 @@ executeArborescentFallibly policy pipeline = case policy of
             runConceit $  
                 (Conceit $ action (toOutput outbox,atomically seal))
                 *>
-                (Conceit $ executeArborescentInternal (fmap fst . pipeio (useProducer . fromInput $ inbox))
+                (Conceit $ executeArborescentInternal (fmap fst . pipeio (fromProducer . fromInput $ inbox))
                                                 pipeio 
                                                 pipei 
                                                 pipei 
@@ -653,9 +653,9 @@ executeArborescentFallibly policy pipeline = case policy of
             runConceit $  
                 (Conceit $ action (toOutput ioutbox,atomically iseal,fromInput oinbox))
                 *>
-                (Conceit $ executeArborescentInternal (fmap fst . pipeio (useProducer . fromInput $ iinbox))
+                (Conceit $ executeArborescentInternal (fmap fst . pipeio (fromProducer . fromInput $ iinbox))
                                                 pipeio 
-                                                (fmap snd . flip pipeio (useConsumer . toOutput $ ooutbox))
+                                                (fmap snd . flip pipeio (fromConsumer . toOutput $ ooutbox))
                                                 pipei
                                                 pipeline
                 )
@@ -704,9 +704,9 @@ executeArborescentInternal ppinitial ppmiddle ppend ppend' (RootedArborescent (S
     runArborescent ppmiddle ppend ppend' a = case a of
         ArbBranches (b :| bs) -> single ppend ppend' b <* Prelude.foldr (<*) (pure ()) (single ppend' ppend' <$> bs) 
         ArbTip (SubsequentStage (BetweenStages pipe) (Stage cp lpol ecpol)) -> Siphon $ \producer ->
-            blende ecpol <$> executeFallibly (ppend (useFallibleProducer $ hoist lift producer >-> pipe)) cp
+            blende ecpol <$> executeFallibly (ppend (fromFallibleProducer $ hoist lift producer >-> pipe)) cp
     single ppend ppend' (SubsequentStage (BetweenStages pipe) (Stage cp lpol ecpol), a) = Siphon $ \producer ->
-         blende ecpol <$> executeFallibly (fmap (const ()) $ ppmiddle (useFallibleProducer $ hoist lift producer >-> pipe) (runArborescent ppmiddle ppend ppend' a)) cp
+         blende ecpol <$> executeFallibly (fmap (const ()) $ ppmiddle (fromFallibleProducer $ hoist lift producer >-> pipe) (runArborescent ppmiddle ppend ppend' a)) cp
     blende :: (Int -> Maybe e) -> Either e (ExitCode,()) -> Either e ()
     blende f (Right (ExitFailure i,())) = case f i of
         Nothing -> Right ()
