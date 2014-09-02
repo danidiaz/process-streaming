@@ -682,14 +682,14 @@ instance Functor BetweenStages where
 data RootedArborescent e =  RootedArborescent (Stage e) (Arborescent e) deriving (Functor)
 
 data Arborescent e =
-        Branches (NonEmpty (SubsequentStage e, Arborescent e))
-      | Tip (SubsequentStage e)
+        ArbBranches (NonEmpty (SubsequentStage e, Arborescent e))
+      | ArbTip (SubsequentStage e)
       deriving (Functor)
 
 fromPipeline :: Pipeline e -> RootedArborescent e
 fromPipeline (Pipeline root (liftA2 (,) N.init N.last -> (stages, finalStage))) = 
     (RootedArborescent root arborescent)
-        where arborescent = Data.Foldable.foldr (curry $ Branches . pure) (Tip finalStage) stages
+        where arborescent = Data.Foldable.foldr (curry $ ArbBranches . pure) (ArbTip finalStage) stages
 
 executeArborescentInternal :: (Show e,Typeable e) 
                            => (Siphon ByteString e () -> PipingPolicy e ())
@@ -702,8 +702,8 @@ executeArborescentInternal ppinitial ppmiddle ppend ppend' (RootedArborescent (S
     blende ecpol <$> executeFallibly (ppinitial (runArborescent ppmiddle ppend ppend' a)) cp
   where 
     runArborescent ppmiddle ppend ppend' a = case a of
-        Branches (b :| bs) -> single ppend ppend' b <* Prelude.foldr (<*) (pure ()) (single ppend' ppend' <$> bs) 
-        Tip (SubsequentStage (BetweenStages pipe) (Stage cp lpol ecpol)) -> Siphon $ \producer ->
+        ArbBranches (b :| bs) -> single ppend ppend' b <* Prelude.foldr (<*) (pure ()) (single ppend' ppend' <$> bs) 
+        ArbTip (SubsequentStage (BetweenStages pipe) (Stage cp lpol ecpol)) -> Siphon $ \producer ->
             blende ecpol <$> executeFallibly (ppend (useFallibleProducer $ hoist lift producer >-> pipe)) cp
     single ppend ppend' (SubsequentStage (BetweenStages pipe) (Stage cp lpol ecpol), a) = Siphon $ \producer ->
          blende ecpol <$> executeFallibly (fmap (const ()) $ ppmiddle (useFallibleProducer $ hoist lift producer >-> pipe) (runArborescent ppmiddle ppend ppend' a)) cp
