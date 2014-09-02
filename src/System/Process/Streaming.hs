@@ -64,7 +64,7 @@ module System.Process.Streaming (
         , Arborescent (..)
         , Stage (..)
         , SubsequentStage (..)
-        , BetweenStages (..)
+        , FalliblePipe (..)
         , Pipeline (..)
         , fromPipeline 
         -- * Re-exports
@@ -672,12 +672,12 @@ data Stage e = Stage
            , exitCodePolicy :: Int -> Maybe e
            } deriving (Functor)
 
-data SubsequentStage e = SubsequentStage (BetweenStages e) (Stage e) deriving (Functor)
+data SubsequentStage e = SubsequentStage (FalliblePipe ByteString ByteString IO e) (Stage e) deriving (Functor)
 
-data BetweenStages e = BetweenStages (forall a.Pipe ByteString ByteString (ExceptT e IO) a)
+data FalliblePipe b b' m e = FalliblePipe (forall a.Pipe b b' (ExceptT e m) a)
 
-instance Functor BetweenStages where
-    fmap f (BetweenStages bs) = BetweenStages $ hoist (mapExceptT $ liftM (bimap f id)) bs
+instance (Monad m) => Functor (FalliblePipe b b' m) where
+    fmap f (FalliblePipe bs) = FalliblePipe $ hoist (mapExceptT $ liftM (bimap f id)) bs
 
 data RootedArborescent e =  RootedArborescent (Stage e) (Arborescent e) deriving (Functor)
 
@@ -703,9 +703,9 @@ executeArborescentInternal ppinitial ppmiddle ppend ppend' (RootedArborescent (S
   where 
     runArborescent ppmiddle ppend ppend' a = case a of
         ArbBranches (b :| bs) -> single ppend ppend' b <* Prelude.foldr (<*) (pure ()) (single ppend' ppend' <$> bs) 
-        ArbTip (SubsequentStage (BetweenStages pipe) (Stage cp lpol ecpol)) -> Siphon $ \producer ->
+        ArbTip (SubsequentStage (FalliblePipe pipe) (Stage cp lpol ecpol)) -> Siphon $ \producer ->
             blende ecpol <$> executeFallibly (ppend (fromFallibleProducer $ hoist lift producer >-> pipe)) cp
-    single ppend ppend' (SubsequentStage (BetweenStages pipe) (Stage cp lpol ecpol), a) = Siphon $ \producer ->
+    single ppend ppend' (SubsequentStage (FalliblePipe pipe) (Stage cp lpol ecpol), a) = Siphon $ \producer ->
          blende ecpol <$> executeFallibly (fmap (const ()) $ ppmiddle (fromFallibleProducer $ hoist lift producer >-> pipe) (runArborescent ppmiddle ppend ppend' a)) cp
     blende :: (Int -> Maybe e) -> Either e (ExitCode,()) -> Either e ()
     blende f (Right (ExitFailure i,())) = case f i of
