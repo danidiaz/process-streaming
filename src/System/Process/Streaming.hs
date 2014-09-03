@@ -81,6 +81,7 @@ import Data.Foldable
 import Data.Traversable
 import Data.Typeable
 import Data.Text 
+import Data.Text.Encoding 
 import Data.Void
 import Data.List.NonEmpty
 import qualified Data.List.NonEmpty as N
@@ -368,6 +369,16 @@ manyCombined actions consumer = do
         -- the P.drain bit was difficult to figure out!!!
         join $ withMVar mvar $ \output -> do
             runEffect $ (textProducer <* P.yield (singleton '\n')) >-> (toOutput output >> P.drain)
+
+errorSiphonUTF8 :: MVar (Output ByteString) -> LinePolicy e -> Siphon ByteString e ()
+errorSiphonUTF8 mvar (LinePolicy fun) = Siphon $ fun (iterTLines mvar) 
+  where     
+    iterTLines mvar = iterT $ \textProducer -> do
+        -- the P.drain bit was difficult to figure out!!!
+        join $ withMVar mvar $ \output -> do
+            runEffect $     (textProducer <* P.yield (singleton '\n')) 
+                        >->  P.map Data.Text.Encoding.encodeUtf8 
+                        >-> (toOutput output >> P.drain)
 
 {-|
     Useful for constructing @stdout@ or @stderr@ consuming functions from a
