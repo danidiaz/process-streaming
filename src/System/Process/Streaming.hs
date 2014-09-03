@@ -45,7 +45,8 @@ module System.Process.Streaming (
         , fromSafeProducer
         , fromFallibleProducer
         -- * Siphoning bytes out of stdout/stderr
-        , Siphon (..)
+        , Siphon (runSiphon)
+        , siphon
         , fromConsumer
         , fromSafeConsumer
         , fromFallibleConsumer
@@ -60,13 +61,14 @@ module System.Process.Streaming (
         -- * Pipelines
         , executeArborescent
         , executeArborescentFallibly
+        , fromPipeline 
+        , simplePipeline 
         , RootedArborescent (..)
         , Arborescent (..)
         , Stage (..)
         , SubsequentStage (..)
         , FalliblePipe (..)
         , Pipeline (..)
-        , fromPipeline 
         -- * Re-exports
         -- $reexports
         , module System.Process
@@ -455,9 +457,14 @@ buffer policy activity producer = do
         Left e -> return $ Left e
         Right (leftovers,a) -> runSiphon (fmap ($a) policy) leftovers
 
+siphon :: (Show e, Typeable e)
+       => (Producer ByteString IO () -> IO (Either e a))
+       -> Siphon ByteString e a 
+siphon = Siphon . buffer_
+
 buffer_ :: (Show e, Typeable e) 
-        => (Producer ByteString IO () -> IO (Either e a))
-        ->  Producer ByteString IO () -> IO (Either e a)
+        => (Producer b IO () -> IO (Either e a))
+        ->  Producer b IO () -> IO (Either e a)
 buffer_ activity producer = do
     (outbox,inbox,seal) <- spawn' Unbounded
     runConceit $
@@ -701,6 +708,16 @@ fromPipeline :: Pipeline e -> RootedArborescent e
 fromPipeline (Pipeline root (liftA2 (,) N.init N.last -> (stages, finalStage))) = 
     (RootedArborescent root arborescent)
         where arborescent = Data.Foldable.foldr (curry $ ArbBranches . pure) (ArbTip finalStage) stages
+
+simplePipeline :: DecodingFunction ByteString Text -> [CreateProcess] -> Pipeline String 
+simplePipeline decoder procs = case procs of
+        p1 : p2 : ps -> Pipeline (simpleStage p1) (simpleSubsequentStage p2 :| fmap simpleSubsequentStage ps)
+        otherwise -> error "Error in function simplePieline: at leas 2 processes required."
+  where
+    simpleStage cp = Stage cp simpleLinePolicy simpleErrorPolicy
+    simpleSubsequentStage = SubsequentStage (FalliblePipe P.cat) . simpleStage
+    simpleLinePolicy = linePolicy decoder (pure ()) id
+    simpleErrorPolicy = Just . show
 
 executeArborescentInternal :: (Show e,Typeable e) 
                            => (Siphon ByteString e () -> PipingPolicy e ())
