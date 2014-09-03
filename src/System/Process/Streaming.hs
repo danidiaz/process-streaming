@@ -371,9 +371,9 @@ manyCombined actions consumer = do
             runEffect $ (textProducer <* P.yield (singleton '\n')) >-> (toOutput output >> P.drain)
 
 errorSiphonUTF8 :: MVar (Output ByteString) -> LinePolicy e -> Siphon ByteString e ()
-errorSiphonUTF8 mvar (LinePolicy fun) = Siphon $ fun (iterTLines mvar) 
+errorSiphonUTF8 mvar (LinePolicy fun) = Siphon $ fun iterTLines 
   where     
-    iterTLines mvar = iterT $ \textProducer -> do
+    iterTLines = iterT $ \textProducer -> do
         -- the P.drain bit was difficult to figure out!!!
         join $ withMVar mvar $ \output -> do
             runEffect $     (textProducer <* P.yield (singleton '\n')) 
