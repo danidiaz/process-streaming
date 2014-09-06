@@ -624,13 +624,12 @@ unexpected a = Siphon $ \producer -> do
         Left () -> Right a
         Right (b,_) -> Left b
 
-
-executePipeline :: PipingPolicy Void () -> BranchingPipeline Void -> IO ()
+executePipeline :: PipingPolicy Void a -> BranchingPipeline Void -> IO a 
 executePipeline pp pipeline = either absurd id <$> executePipelineFallibly pp pipeline
 
-executePipelineFallibly :: (Show e,Typeable e) => PipingPolicy e () -> BranchingPipeline e -> IO (Either e ())
+executePipelineFallibly :: (Show e,Typeable e) => PipingPolicy e a -> BranchingPipeline e -> IO (Either e a)
 executePipelineFallibly policy pipeline = case policy of 
-      PPNone () -> 
+      PPNone a -> fmap (fmap (const a)) $
            executePipelineInternal 
                 (\o _ -> mute $ pipeo o) 
                 (\i o _ -> mute $ pipeio i o) 
@@ -641,7 +640,7 @@ executePipelineFallibly policy pipeline = case policy of
             (outbox, inbox, seal) <- spawn' Single
             runConceit $  
                 (Conceit $ action $ fromInput inbox)
-                *>
+                <* 
                 (Conceit $ executePipelineInternal 
                                 (\o _ -> pipeo o)
                                 (\i o _ -> mute $ pipeio i o) 
@@ -653,20 +652,23 @@ executePipelineFallibly policy pipeline = case policy of
       PPError action -> do
             (eoutbox, einbox, eseal) <- spawn' Single
             errf <- errorSiphonUTF8 <$> newMVar eoutbox
-            executePipelineInternal 
-                (\o l -> mute $ pipeoe o (errf l)) 
-                (\i o l -> mute $ pipeioe i o (errf l)) 
-                (\i l -> mute $ pipeie i (errf l)) 
-                (\i l -> mute $ pipeie i (errf l))
-                pipeline
-                `finally` atomically eseal
+            runConceit $  
+                (Conceit $ action $ fromInput einbox)
+                <*
+                (Conceit $ executePipelineInternal 
+                            (\o l -> mute $ pipeoe o (errf l)) 
+                            (\i o l -> mute $ pipeioe i o (errf l)) 
+                            (\i l -> mute $ pipeie i (errf l)) 
+                            (\i l -> mute $ pipeie i (errf l))
+                            pipeline
+                            `finally` atomically eseal)
       PPOutputError action -> do
             (outbox, inbox, seal) <- spawn' Single
             (eoutbox, einbox, eseal) <- spawn' Single
             errf <- errorSiphonUTF8 <$> newMVar eoutbox
             runConceit $  
                 (Conceit $ action $ (fromInput inbox,fromInput einbox))
-                *>
+                <* 
                 (Conceit $ executePipelineInternal 
                                 (\o l -> mute $ pipeoe o (errf l))
                                 (\i o l -> mute $ pipeioe i o (errf l)) 
@@ -679,7 +681,7 @@ executePipelineFallibly policy pipeline = case policy of
             (outbox, inbox, seal) <- spawn' Single
             runConceit $  
                 (Conceit $ action (toOutput outbox,atomically seal))
-                *>
+                <* 
                 (Conceit $ executePipelineInternal 
                                 (\o _ -> mute $ pipeio (fromProducer . fromInput $ inbox) o)
                                 (\i o _ -> mute $ pipeio i o) 
@@ -693,7 +695,7 @@ executePipelineFallibly policy pipeline = case policy of
             (ooutbox, oinbox, oseal) <- spawn' Single
             runConceit $  
                 (Conceit $ action (toOutput ioutbox,atomically iseal,fromInput oinbox))
-                *>
+                <* 
                 (Conceit $ executePipelineInternal 
                                 (\o _ -> mute $ pipeio (fromProducer . fromInput $ iinbox) o)
                                 (\i o _ -> mute $ pipeio i o) 
@@ -708,7 +710,7 @@ executePipelineFallibly policy pipeline = case policy of
             errf <- errorSiphonUTF8 <$> newMVar eoutbox
             runConceit $  
                 (Conceit $ action (toOutput outbox,atomically seal,fromInput einbox))
-                *>
+                <* 
                 (Conceit $ executePipelineInternal 
                                 (\o l -> mute $ pipeioe (fromProducer . fromInput $ inbox) o (errf l))
                                 (\i o l -> mute $ pipeioe i o (errf l)) 
@@ -724,7 +726,7 @@ executePipelineFallibly policy pipeline = case policy of
             errf <- errorSiphonUTF8 <$> newMVar eoutbox
             runConceit $  
                 (Conceit $ action (toOutput ioutbox,atomically iseal,fromInput oinbox,fromInput einbox))
-                *>
+                <* 
                 (Conceit $ executePipelineInternal 
                                 (\o l -> mute $ pipeioe (fromProducer . fromInput $ iinbox) o (errf l))
                                 (\i o l -> mute $ pipeioe i o (errf l)) 
