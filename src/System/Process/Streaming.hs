@@ -638,21 +638,23 @@ executePipeline pp pipeline = either absurd id <$> executePipelineFallibly pp pi
 executePipelineFallibly :: (Show e,Typeable e) => PipingPolicy e () -> BranchingPipeline e -> IO (Either e ())
 executePipelineFallibly policy pipeline = case policy of 
       PPNone () -> 
-           executeArborescentInternal pipeo 
-                                pipeio 
-                                pipei 
-                                pipei 
-                                pipeline
+           executeArborescentInternal 
+                (\o -> mute $ pipeoe o (pure ())) 
+                (\i o -> mute $ pipeioe i o (pure ())) 
+                (\i -> mute $ pipeie i (pure ())) 
+                (\i -> mute $ pipeie i (pure ())) 
+                pipeline
       PPOutput action -> do
             (outbox, inbox, seal) <- spawn' Unbounded
             runConceit $  
                 (Conceit $ action $ fromInput inbox)
                 *>
-                (Conceit $ executeArborescentInternal pipeo 
-                                                pipeio 
-                                                (fmap snd . flip pipeio (fromConsumer . toOutput $ outbox))
-                                                pipei
-                                                pipeline
+                (Conceit $ executeArborescentInternal 
+                                pipeo 
+                                (\i o -> mute $ pipeioe i o (pure ())) 
+                                (fmap snd . flip pipeio (fromConsumer . toOutput $ outbox))
+                                pipei
+                                pipeline
                 )
       PPError action -> undefined
       PPOutputError action -> undefined
@@ -661,11 +663,12 @@ executePipelineFallibly policy pipeline = case policy of
             runConceit $  
                 (Conceit $ action (toOutput outbox,atomically seal))
                 *>
-                (Conceit $ executeArborescentInternal (fmap fst . pipeio (fromProducer . fromInput $ inbox))
-                                                pipeio 
-                                                pipei 
-                                                pipei 
-                                                pipeline
+                (Conceit $ executeArborescentInternal 
+                                (fmap fst . pipeio (fromProducer . fromInput $ inbox))
+                                (\i o -> mute $ pipeioe i o (pure ())) 
+                                pipei 
+                                pipei 
+                                pipeline
                 )
       PPInputOutput action -> do
             (ioutbox, iinbox, iseal) <- spawn' Unbounded
@@ -673,14 +676,16 @@ executePipelineFallibly policy pipeline = case policy of
             runConceit $  
                 (Conceit $ action (toOutput ioutbox,atomically iseal,fromInput oinbox))
                 *>
-                (Conceit $ executeArborescentInternal (fmap fst . pipeio (fromProducer . fromInput $ iinbox))
-                                                pipeio 
-                                                (fmap snd . flip pipeio (fromConsumer . toOutput $ ooutbox))
-                                                pipei
-                                                pipeline
+                (Conceit $ executeArborescentInternal 
+                                (fmap fst . pipeio (fromProducer . fromInput $ iinbox))
+                                (\i o -> mute $ pipeioe i o (pure ())) 
+                                (fmap snd . flip pipeio (fromConsumer . toOutput $ ooutbox))
+                                pipei
+                                pipeline
                 )
       PPInputError action -> undefined
       PPInputOutputError action -> undefined
+    where mute = fmap (const ())
 
 
 data Pipeline e = Pipeline (Stage e) (NonEmpty (SubsequentStage e)) deriving (Functor)
@@ -727,19 +732,9 @@ verySimplePipeline decoder initial middle end =
     simpleLinePolicy = linePolicy decoder (pure ()) id
     simpleErrorPolicy = Just . ("Exit failure: " ++) . show
 
---simplePipeline :: DecodingFunction ByteString Text -> [CreateProcess] -> Pipeline String 
---simplePipeline decoder procs = case procs of
---        p1 : p2 : ps -> Pipeline (simpleStage p1) (simpleSubsequentStage p2 :| fmap simpleSubsequentStage ps)
---        otherwise -> error "Error in function simplePieline: at leas 2 processes required."
---  where
---    simpleStage cp = Stage cp simpleLinePolicy simpleErrorPolicy
---    simpleSubsequentStage = SubsequentStage (FalliblePipe P.cat) . simpleStage
---    simpleLinePolicy = linePolicy decoder (pure ()) id
---    simpleErrorPolicy = Just . show
-
 executeArborescentInternal :: (Show e,Typeable e) 
                            => (Siphon ByteString e () -> PipingPolicy e ())
-                           -> (Pump ByteString e () -> Siphon ByteString e () -> PipingPolicy e ((),()))
+                           -> (Pump ByteString e () -> Siphon ByteString e () -> PipingPolicy e ())
                            -> (Pump ByteString e () -> PipingPolicy e ())
                            -> (Pump ByteString e () -> PipingPolicy e ())
                            -> BranchingPipeline e 
