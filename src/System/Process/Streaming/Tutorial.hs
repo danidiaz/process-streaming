@@ -8,26 +8,26 @@ module System.Process.Streaming.Tutorial (
     -- * Introduction
     -- $introduction
   
-    -- * Stdin and stderr to different files
-    -- $stdinstderr
-    
-    -- * Missing executable
-    -- $missingexec
-
-    -- * Combining stdout and stderr
-    -- $combinelines
-
-    -- * Running two parsers in parallel 
-    -- $forkProd
-    
-    -- * Aborting an execution
-    -- $fastExit
+    -- * Collecting stdout and stderr as bytestring
+    -- $bscollect
 
     -- * Feeding stdin, collecting stdout as text
     -- $cat
+    
+    -- * Combining stdout and stderr
+    -- $combinelines
+   
+    -- * Stdin and stderr to different files
+    -- $stdinstderr
+    
+    -- * Aborting an execution
+    -- $fastExit
+   
+    -- * Missing executable
+    -- $missingexec
 
-    -- * Collecting stdout and stderr as bytestring
-    -- $bscollect
+    -- * Running two parsers in parallel 
+    -- $forkProd
 
     -- * Counting words
     -- $wordcount
@@ -73,8 +73,8 @@ Some preliminary imports:
 Using 'separated' to consume @stdout@ and @stderr@ concurrently, and functions
 from @pipes-safe@ to write the files.
 
-> example1 :: IO (Either String ((),()))
-> example1 = simpleSafeExecute
+> writeTo2FilesExample :: IO (Either String ((),()))
+> writeTo2FilesExample = simpleSafeExecute
 >          (pipeoe $ separated (consume "stdout.log") (consume "stderr.log"))
 >          (shell "{ echo ooo ; echo eee 1>&2 ; }")
 >      where
@@ -89,8 +89,8 @@ from @pipes-safe@ to write the files.
 Missing executables and other 'IOException's are converted to an error type @e@
 and returned in the 'Left' of an 'Either':
 
-> example2 :: IO (Either String ())
-> example2 = simpleSafeExecute nopiping (proc "fsdfsdf" [])
+> missingExeExample :: IO (Either String ())
+> missingExeExample = simpleSafeExecute nopiping (proc "fsdfsdf" [])
 
 Returns:
 
@@ -108,8 +108,8 @@ function for each stream, and a 'LeftoverPolicy' as well.
 
 We also add a prefix to the lines coming from @stderr@.
 
-> example3 :: IO (Either String ())
-> example3 = simpleSafeExecute
+> combineLinesExample :: IO (Either String ())
+> combineLinesExample = simpleSafeExecute
 >        (pipeoe $ combined
 >            (linePolicy T.decodeIso8859_1 id policy)
 >            (linePolicy T.decodeIso8859_1 annotate policy)
@@ -145,8 +145,8 @@ Stderr is ignored using the 'nop' function.
 >
 > parser2 = parseChars 'a'
 > 
-> example4 ::IO (Either String (([Char], [Char]),()))
-> example4 = simpleSafeExecute
+> twoParsersExample ::IO (Either String (([Char], [Char]),()))
+> twoParsersExample = simpleSafeExecute
 >        (pipeoe $ separated
 >            (encoding T.decodeIso8859_1 (failOnLeftovers $ \_ _->"badbytes") $
 >                forkSiphon (adapt parser1) (adapt parser2))
@@ -172,8 +172,8 @@ If any function consuming a standard stream returns with an error value @e@,
 the external program is terminated and the computation returns immediately with
 @e@.
 
-> example5 ::IO (Either String ((),()))
-> example5 = simpleSafeExecute
+> fastExitExample ::IO (Either String ((),()))
+> fastExitExample = simpleSafeExecute
 >         (pipeoe $ separated (\_ -> return $ Left "fast return!") nop)
 >         (shell "sleep 10s")
 
@@ -201,7 +201,7 @@ return functions that consume 'Producer's.
 Notice that @stdin@ is written concurrently with the reading of @stdout@. It is
 not the case that @sdtin@ is written first and then @stdout@ is read. 
 
-> example6 = simpleSafeExecute
+> inOutExample = simpleSafeExecute
 >         (pipeioe
 >             (surely . useProducer $ yield "aaaaaa\naaaaa")
 >             (separated
@@ -220,7 +220,7 @@ Returns:
 In this example we collect @stdout@ and @stderr@ as lazy bytestrings, using a
 fold defined in @pipes-bytestring@.
 
-> example7 = simpleSafeExecute
+> lbsExample = simpleSafeExecute
 >         (pipeoe $ separated (surely B.toLazyM) (surely B.toLazyM))
 >         (shell "{ echo ooo ; echo eee 1>&2 ; echo ppp ;  echo ffff 1>&2 ; }")
 
@@ -239,7 +239,7 @@ without having to keep whole words in memory.
 fold from @pipes-group@ to create a 'Producer' of 'Int' values. Then we sum the
 ints using a fold from "Pipes.Prelude".
  
-> example8 = simpleSafeExecute
+> wcExample = simpleSafeExecute
 >         (pipeoe $ separated
 >              (encoding T.decodeIso8859_1 ignoreLeftovers $ surely $
 >                   P.sum . G.folds const () (const 1) . view T.words)
