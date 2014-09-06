@@ -5,6 +5,8 @@ import Test.Tasty.HUnit
 
 import Data.Bifunctor
 import Data.Monoid
+import Data.ByteString.Lazy as BL
+import Data.Text.Lazy as TL
 import qualified Data.Attoparsec.Text as A
 import Control.Applicative
 import Control.Monad
@@ -28,6 +30,18 @@ import System.Process.Streaming
 main = defaultMain tests
 
 tests :: TestTree
-tests = testGroup "Tests" []
+tests = testGroup "Tests" [collectStdoutStderrAsByteString]
 --tests = testGroup "Tests" [properties, unitTests]
+
+collectStdoutStderrAsByteString :: TestTree
+collectStdoutStderrAsByteString = testCase "collectStdoutStderrAsByteString" $ do
+    r <- execution
+    case r of
+        (ExitSuccess,("ooo\nppp\n","eee\nffff\n")) -> return ()
+        _ -> assertFailure "oops"
+  where
+    execution :: IO (ExitCode,(BL.ByteString,BL.ByteString))
+    execution = execute
+        (pipeoe (fromFold B.toLazyM) (fromFold B.toLazyM))
+        (shell "{ echo ooo ; echo eee 1>&2 ; echo ppp ;  echo ffff 1>&2 ; }")
 
