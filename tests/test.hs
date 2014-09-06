@@ -1,5 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
+module Main where 
+
 import Test.Tasty
 import Test.Tasty.HUnit
 
@@ -30,18 +32,18 @@ import System.Process.Streaming
 main = defaultMain tests
 
 tests :: TestTree
-tests = testGroup "Tests" [collectStdoutStderrAsByteString]
+tests = testGroup "Tests" [testCollectStdoutStderrAsByteString]
 --tests = testGroup "Tests" [properties, unitTests]
 
-collectStdoutStderrAsByteString :: TestTree
-collectStdoutStderrAsByteString = testCase "collectStdoutStderrAsByteString" $ do
-    r <- execution
+testCollectStdoutStderrAsByteString :: TestTree
+testCollectStdoutStderrAsByteString = testCase "collectStdoutStderrAsByteString" $ do
+    r <- collectStdoutStderrAsByteString
     case r of
         (ExitSuccess,("ooo\nppp\n","eee\nffff\n")) -> return ()
         _ -> assertFailure "oops"
-  where
-    execution :: IO (ExitCode,(BL.ByteString,BL.ByteString))
-    execution = execute
-        (pipeoe (fromFold B.toLazyM) (fromFold B.toLazyM))
-        (shell "{ echo ooo ; echo eee 1>&2 ; echo ppp ;  echo ffff 1>&2 ; }")
+
+collectStdoutStderrAsByteString :: IO (ExitCode,(BL.ByteString,BL.ByteString))
+collectStdoutStderrAsByteString = execute
+    (pipeoe (fromFold B.toLazyM) (fromFold B.toLazyM))
+    (shell "{ echo ooo ; echo eee 1>&2 ; echo ppp ;  echo ffff 1>&2 ; }")
 
