@@ -48,3 +48,9 @@ collectStdoutStderrAsByteString = execute
     (pipeoe (fromFold B.toLazyM) (fromFold B.toLazyM))
     (shell "{ echo ooo ; echo eee 1>&2 ; echo ppp ;  echo ffff 1>&2 ; }")
 
+feedStdinCollectStdoutAsText = execute
+    (pipeio (fromProducer $ yield "aaaaaa\naaaaa")
+            (encoded T.decodeIso8859_1 (pure id) $ fromFold T.toLazyM))
+    (shell "cat")
+
+
