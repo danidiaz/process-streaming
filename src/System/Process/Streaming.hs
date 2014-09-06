@@ -438,11 +438,6 @@ safely :: (MFunctor t, C.MonadMask m, MonadIO m)
        ->  t m         l -> m         x 
 safely activity = runSafeT . activity . hoist lift 
 
--- fallibly :: (MFunctor t, Monad m, Error e) 
---          => (t (ErrorT e m) l -> (ErrorT e m) x) 
---          ->  t m            l -> m (Either e x) 
--- fallibly activity = runErrorT . activity . hoist lift 
-
 buffer :: (Show e, Typeable e)
        =>  Siphon bytes e (a -> b)
        ->  Siphon text e a
@@ -656,8 +651,29 @@ executePipelineFallibly policy pipeline = case policy of
                                 (\i _ -> mute $ pipei i)
                                 pipeline
                 )
-      PPError action -> undefined
-      PPOutputError action -> undefined
+      PPError action -> do
+            (eoutbox, einbox, eseal) <- spawn' Unbounded
+            errf <- errorSiphonUTF8 <$> newMVar eoutbox
+            executeArborescentInternal 
+                (\o l -> mute $ pipeoe o (errf l)) 
+                (\i o l -> mute $ pipeioe i o (errf l)) 
+                (\i l -> mute $ pipeie i (errf l)) 
+                (\i l -> mute $ pipeie i (errf l))
+                pipeline
+      PPOutputError action -> do
+            (outbox, inbox, seal) <- spawn' Unbounded
+            (eoutbox, einbox, eseal) <- spawn' Unbounded
+            errf <- errorSiphonUTF8 <$> newMVar eoutbox
+            runConceit $  
+                (Conceit $ action $ (fromInput inbox,fromInput einbox))
+                *>
+                (Conceit $ executeArborescentInternal 
+                                (\o l -> mute $ pipeoe o (errf l))
+                                (\i o l -> mute $ pipeioe i o (errf l)) 
+                                (\i l -> mute $ pipeioe i (fromConsumer . toOutput $ outbox) (errf l)) 
+                                (\i l -> mute $ pipeie i (errf l))
+                                pipeline
+                )
       PPInput action -> do
             (outbox, inbox, seal) <- spawn' Unbounded
             runConceit $  
@@ -683,8 +699,35 @@ executePipelineFallibly policy pipeline = case policy of
                                 (\i _ -> mute $ pipei i) 
                                 pipeline
                 )
-      PPInputError action -> undefined
-      PPInputOutputError action -> undefined
+      PPInputError action -> do
+            (outbox, inbox, seal) <- spawn' Unbounded
+            (eoutbox, einbox, eseal) <- spawn' Unbounded
+            errf <- errorSiphonUTF8 <$> newMVar eoutbox
+            runConceit $  
+                (Conceit $ action (toOutput outbox,atomically seal,fromInput einbox))
+                *>
+                (Conceit $ executeArborescentInternal 
+                                (\o l -> mute $ pipeioe (fromProducer . fromInput $ inbox) o (errf l))
+                                (\i o l -> mute $ pipeioe i o (errf l)) 
+                                (\i l -> mute $ pipeie i (errf l)) 
+                                (\i l -> mute $ pipeie i (errf l)) 
+                                pipeline
+                )
+      PPInputOutputError action -> do
+            (ioutbox, iinbox, iseal) <- spawn' Unbounded
+            (ooutbox, oinbox, oseal) <- spawn' Unbounded
+            (eoutbox, einbox, eseal) <- spawn' Unbounded
+            errf <- errorSiphonUTF8 <$> newMVar eoutbox
+            runConceit $  
+                (Conceit $ action (toOutput ioutbox,atomically iseal,fromInput oinbox,fromInput einbox))
+                *>
+                (Conceit $ executeArborescentInternal 
+                                (\o l -> mute $ pipeioe (fromProducer . fromInput $ iinbox) o (errf l))
+                                (\i o l -> mute $ pipeioe i o (errf l)) 
+                                (\i l -> mute $ pipeioe i (fromConsumer . toOutput $ ooutbox) (errf l)) 
+                                (\i l -> mute $ pipeie i (errf l))  
+                                pipeline
+                )
     where mute = fmap (const ())
 
 
