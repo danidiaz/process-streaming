@@ -72,7 +72,6 @@ Test-suite test
       , process-streaming
       , tasty >= 0.9
       , tasty-hunit >= 0.9
-      , HUnit >= 1.2.5
       , attoparsec >= 0.11
       , pipes-attoparsec >= 0.5
       , pipes-group >= 1.0.1
