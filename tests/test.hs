@@ -33,8 +33,10 @@ import System.Process.Streaming
 main = defaultMain tests
 
 tests :: TestTree
-tests = testGroup "Tests" [testCollectStdoutStderrAsByteString]
---tests = testGroup "Tests" [properties, unitTests]
+tests = testGroup "Tests" 
+            [testCollectStdoutStderrAsByteString
+            ,testFeedStdinCollectStdoutAsText  
+            ]
 
 testCollectStdoutStderrAsByteString :: TestTree
 testCollectStdoutStderrAsByteString = testCase "collectStdoutStderrAsByteString" $ do
@@ -48,6 +50,14 @@ collectStdoutStderrAsByteString = execute
     (pipeoe (fromFold B.toLazyM) (fromFold B.toLazyM))
     (shell "{ echo ooo ; echo eee 1>&2 ; echo ppp ;  echo ffff 1>&2 ; }")
 
+testFeedStdinCollectStdoutAsText  :: TestTree
+testFeedStdinCollectStdoutAsText = testCase "feedStdinCollectStdoutAsText" $ do
+    r <- feedStdinCollectStdoutAsText
+    case r of
+        (ExitSuccess,((),"aaaaaa\naaaaa")) -> return ()
+        _ -> assertFailure "oops"
+
+feedStdinCollectStdoutAsText :: IO (ExitCode, ((), Text))
 feedStdinCollectStdoutAsText = execute
     (pipeio (fromProducer $ yield "aaaaaa\naaaaa")
             (encoded T.decodeIso8859_1 (pure id) $ fromFold T.toLazyM))
