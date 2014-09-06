@@ -59,16 +59,18 @@ module System.Process.Streaming (
         , LinePolicy
         , linePolicy
         -- * Pipelines
-        , executeArborescent
-        , executeArborescentFallibly
-        , fromPipeline 
+        , executePipeline
+        , executePipelineFallibly
+        -- , fromPipeline 
         , simplePipeline 
-        , RootedArborescent (..)
-        , Arborescent (..)
+        , verySimplePipeline 
+        , BranchingPipeline (..)
+        , PipelineForest (..)
         , Stage (..)
-        , SubsequentStage (..)
-        , FalliblePipe (..)
-        , Pipeline (..)
+        , SubsequentStage ()
+        , subsequent
+--        , FalliblePipe (..)
+--        , Pipeline (..)
         -- * Re-exports
         -- $reexports
         , module System.Process
@@ -630,11 +632,11 @@ unexpected a = Siphon $ \producer -> do
         Right (b,_) -> Left b
 
 
-executeArborescent :: PipingPolicy Void () -> RootedArborescent Void -> IO ()
-executeArborescent pp pipeline = either absurd id <$> executeArborescentFallibly pp pipeline
+executePipeline :: PipingPolicy Void () -> BranchingPipeline Void -> IO ()
+executePipeline pp pipeline = either absurd id <$> executePipelineFallibly pp pipeline
 
-executeArborescentFallibly :: (Show e,Typeable e) => PipingPolicy e () -> RootedArborescent e -> IO (Either e ())
-executeArborescentFallibly policy pipeline = case policy of 
+executePipelineFallibly :: (Show e,Typeable e) => PipingPolicy e () -> BranchingPipeline e -> IO (Either e ())
+executePipelineFallibly policy pipeline = case policy of 
       PPNone () -> 
            executeArborescentInternal pipeo 
                                 pipeio 
@@ -697,41 +699,57 @@ data FalliblePipe b b' m e = FalliblePipe (forall a.Pipe b b' (ExceptT e m) a)
 instance (Monad m) => Functor (FalliblePipe b b' m) where
     fmap f (FalliblePipe bs) = FalliblePipe $ hoist (mapExceptT $ liftM (bimap f id)) bs
 
-data RootedArborescent e =  RootedArborescent (Stage e) (Arborescent e) deriving (Functor)
+subsequent :: (forall a.Pipe ByteString ByteString (ExceptT e IO) a) -> Stage e -> SubsequentStage e
+subsequent fp s = SubsequentStage (FalliblePipe fp) s 
 
-data Arborescent e =
-        ArbBranches (NonEmpty (SubsequentStage e, Arborescent e))
-      | ArbTip (SubsequentStage e)
+data BranchingPipeline e =  BranchingPipeline (Stage e) (PipelineForest e) deriving (Functor)
+
+data PipelineForest e =
+        ParallelStages (NonEmpty (SubsequentStage e, PipelineForest e))
+      | TerminalStage (SubsequentStage e)
       deriving (Functor)
 
-fromPipeline :: Pipeline e -> RootedArborescent e
+fromPipeline :: Pipeline e -> BranchingPipeline e
 fromPipeline (Pipeline root (liftA2 (,) N.init N.last -> (stages, finalStage))) = 
-    (RootedArborescent root arborescent)
-        where arborescent = Data.Foldable.foldr (curry $ ArbBranches . pure) (ArbTip finalStage) stages
+    (BranchingPipeline root arborescent)
+        where arborescent = Data.Foldable.foldr (curry $ ParallelStages . pure) (TerminalStage finalStage) stages
 
-simplePipeline :: DecodingFunction ByteString Text -> [CreateProcess] -> Pipeline String 
-simplePipeline decoder procs = case procs of
-        p1 : p2 : ps -> Pipeline (simpleStage p1) (simpleSubsequentStage p2 :| fmap simpleSubsequentStage ps)
-        otherwise -> error "Error in function simplePieline: at leas 2 processes required."
+simplePipeline :: Stage e -> [SubsequentStage e] -> SubsequentStage e -> BranchingPipeline e 
+simplePipeline initial middle terminal = BranchingPipeline initial $   
+   Prelude.foldr (\s1 s2 -> ParallelStages . pure $ (s1,s2)) (TerminalStage terminal) middle
+
+verySimplePipeline :: DecodingFunction ByteString Text -> CreateProcess -> [CreateProcess] -> CreateProcess -> BranchingPipeline String 
+verySimplePipeline decoder initial middle end = 
+    simplePipeline (simpleStage initial) (Prelude.map simpleSubsequentStage middle) (simpleSubsequentStage end) 
   where
     simpleStage cp = Stage cp simpleLinePolicy simpleErrorPolicy
     simpleSubsequentStage = SubsequentStage (FalliblePipe P.cat) . simpleStage
     simpleLinePolicy = linePolicy decoder (pure ()) id
-    simpleErrorPolicy = Just . show
+    simpleErrorPolicy = Just . ("Exit failure: " ++) . show
+
+--simplePipeline :: DecodingFunction ByteString Text -> [CreateProcess] -> Pipeline String 
+--simplePipeline decoder procs = case procs of
+--        p1 : p2 : ps -> Pipeline (simpleStage p1) (simpleSubsequentStage p2 :| fmap simpleSubsequentStage ps)
+--        otherwise -> error "Error in function simplePieline: at leas 2 processes required."
+--  where
+--    simpleStage cp = Stage cp simpleLinePolicy simpleErrorPolicy
+--    simpleSubsequentStage = SubsequentStage (FalliblePipe P.cat) . simpleStage
+--    simpleLinePolicy = linePolicy decoder (pure ()) id
+--    simpleErrorPolicy = Just . show
 
 executeArborescentInternal :: (Show e,Typeable e) 
                            => (Siphon ByteString e () -> PipingPolicy e ())
                            -> (Pump ByteString e () -> Siphon ByteString e () -> PipingPolicy e ((),()))
                            -> (Pump ByteString e () -> PipingPolicy e ())
                            -> (Pump ByteString e () -> PipingPolicy e ())
-                           -> RootedArborescent e 
+                           -> BranchingPipeline e 
                            -> IO (Either e ())
-executeArborescentInternal ppinitial ppmiddle ppend ppend' (RootedArborescent (Stage cp lpol ecpol) a) =      
+executeArborescentInternal ppinitial ppmiddle ppend ppend' (BranchingPipeline (Stage cp lpol ecpol) a) =      
     blende ecpol <$> executeFallibly (ppinitial (runArborescent ppmiddle ppend ppend' a)) cp
   where 
     runArborescent ppmiddle ppend ppend' a = case a of
-        ArbBranches (b :| bs) -> single ppend ppend' b <* Prelude.foldr (<*) (pure ()) (single ppend' ppend' <$> bs) 
-        ArbTip (SubsequentStage (FalliblePipe pipe) (Stage cp lpol ecpol)) -> Siphon $ \producer ->
+        ParallelStages (b :| bs) -> single ppend ppend' b <* Prelude.foldr (<*) (pure ()) (single ppend' ppend' <$> bs) 
+        TerminalStage (SubsequentStage (FalliblePipe pipe) (Stage cp lpol ecpol)) -> Siphon $ \producer ->
             blende ecpol <$> executeFallibly (ppend (fromFallibleProducer $ hoist lift producer >-> pipe)) cp
     single ppend ppend' (SubsequentStage (FalliblePipe pipe) (Stage cp lpol ecpol), a) = Siphon $ \producer ->
          blende ecpol <$> executeFallibly (fmap (const ()) $ ppmiddle (fromFallibleProducer $ hoist lift producer >-> pipe) (runArborescent ppmiddle ppend ppend' a)) cp
