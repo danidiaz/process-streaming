@@ -633,7 +633,7 @@ executePipeline pp pipeline = either absurd id <$> executePipelineFallibly pp pi
 executePipelineFallibly :: (Show e,Typeable e) => PipingPolicy e () -> BranchingPipeline e -> IO (Either e ())
 executePipelineFallibly policy pipeline = case policy of 
       PPNone () -> 
-           executeArborescentInternal 
+           executePipelineInternal 
                 (\o _ -> mute $ pipeo o) 
                 (\i o _ -> mute $ pipeio i o) 
                 (\i _ -> mute $ pipei i) 
@@ -644,22 +644,24 @@ executePipelineFallibly policy pipeline = case policy of
             runConceit $  
                 (Conceit $ action $ fromInput inbox)
                 *>
-                (Conceit $ executeArborescentInternal 
+                (Conceit $ executePipelineInternal 
                                 (\o _ -> pipeo o)
                                 (\i o _ -> mute $ pipeio i o) 
                                 (\i _ -> mute $ pipeio i (fromConsumer . toOutput $ outbox)) 
                                 (\i _ -> mute $ pipei i)
                                 pipeline
-                )
+                           `finally` atomically seal
+                ) 
       PPError action -> do
             (eoutbox, einbox, eseal) <- spawn' Unbounded
             errf <- errorSiphonUTF8 <$> newMVar eoutbox
-            executeArborescentInternal 
+            executePipelineInternal 
                 (\o l -> mute $ pipeoe o (errf l)) 
                 (\i o l -> mute $ pipeioe i o (errf l)) 
                 (\i l -> mute $ pipeie i (errf l)) 
                 (\i l -> mute $ pipeie i (errf l))
                 pipeline
+                `finally` atomically eseal
       PPOutputError action -> do
             (outbox, inbox, seal) <- spawn' Unbounded
             (eoutbox, einbox, eseal) <- spawn' Unbounded
@@ -667,24 +669,26 @@ executePipelineFallibly policy pipeline = case policy of
             runConceit $  
                 (Conceit $ action $ (fromInput inbox,fromInput einbox))
                 *>
-                (Conceit $ executeArborescentInternal 
+                (Conceit $ executePipelineInternal 
                                 (\o l -> mute $ pipeoe o (errf l))
                                 (\i o l -> mute $ pipeioe i o (errf l)) 
                                 (\i l -> mute $ pipeioe i (fromConsumer . toOutput $ outbox) (errf l)) 
                                 (\i l -> mute $ pipeie i (errf l))
                                 pipeline
+                           `finally` atomically seal `finally` atomically eseal
                 )
       PPInput action -> do
             (outbox, inbox, seal) <- spawn' Unbounded
             runConceit $  
                 (Conceit $ action (toOutput outbox,atomically seal))
                 *>
-                (Conceit $ executeArborescentInternal 
+                (Conceit $ executePipelineInternal 
                                 (\o _ -> mute $ pipeio (fromProducer . fromInput $ inbox) o)
                                 (\i o _ -> mute $ pipeio i o) 
                                 (\i _ -> mute $ pipei i) 
                                 (\i _ -> mute $ pipei i) 
                                 pipeline
+                           `finally` atomically seal
                 )
       PPInputOutput action -> do
             (ioutbox, iinbox, iseal) <- spawn' Unbounded
@@ -692,12 +696,13 @@ executePipelineFallibly policy pipeline = case policy of
             runConceit $  
                 (Conceit $ action (toOutput ioutbox,atomically iseal,fromInput oinbox))
                 *>
-                (Conceit $ executeArborescentInternal 
+                (Conceit $ executePipelineInternal 
                                 (\o _ -> mute $ pipeio (fromProducer . fromInput $ iinbox) o)
                                 (\i o _ -> mute $ pipeio i o) 
                                 (\i _ -> mute $ pipeio i (fromConsumer . toOutput $ ooutbox)) 
                                 (\i _ -> mute $ pipei i) 
                                 pipeline
+                           `finally` atomically iseal `finally` atomically oseal
                 )
       PPInputError action -> do
             (outbox, inbox, seal) <- spawn' Unbounded
@@ -706,12 +711,13 @@ executePipelineFallibly policy pipeline = case policy of
             runConceit $  
                 (Conceit $ action (toOutput outbox,atomically seal,fromInput einbox))
                 *>
-                (Conceit $ executeArborescentInternal 
+                (Conceit $ executePipelineInternal 
                                 (\o l -> mute $ pipeioe (fromProducer . fromInput $ inbox) o (errf l))
                                 (\i o l -> mute $ pipeioe i o (errf l)) 
                                 (\i l -> mute $ pipeie i (errf l)) 
                                 (\i l -> mute $ pipeie i (errf l)) 
                                 pipeline
+                           `finally` atomically seal `finally` atomically eseal
                 )
       PPInputOutputError action -> do
             (ioutbox, iinbox, iseal) <- spawn' Unbounded
@@ -721,12 +727,13 @@ executePipelineFallibly policy pipeline = case policy of
             runConceit $  
                 (Conceit $ action (toOutput ioutbox,atomically iseal,fromInput oinbox,fromInput einbox))
                 *>
-                (Conceit $ executeArborescentInternal 
+                (Conceit $ executePipelineInternal 
                                 (\o l -> mute $ pipeioe (fromProducer . fromInput $ iinbox) o (errf l))
                                 (\i o l -> mute $ pipeioe i o (errf l)) 
                                 (\i l -> mute $ pipeioe i (fromConsumer . toOutput $ ooutbox) (errf l)) 
                                 (\i l -> mute $ pipeie i (errf l))  
                                 pipeline
+                           `finally` atomically iseal `finally` atomically oseal `finally` atomically eseal
                 )
     where mute = fmap (const ())
 
@@ -775,22 +782,24 @@ verySimplePipeline decoder initial middle end =
     simpleLinePolicy = linePolicy decoder (pure ()) id
     simpleErrorPolicy = Just . ("Exit failure: " ++) . show
 
-executeArborescentInternal :: (Show e,Typeable e) 
+executePipelineInternal :: (Show e,Typeable e) 
                            => (Siphon ByteString e () -> LinePolicy e -> PipingPolicy e ())
                            -> (Pump ByteString e () -> Siphon ByteString e () -> LinePolicy e -> PipingPolicy e ())
                            -> (Pump ByteString e () -> LinePolicy e -> PipingPolicy e ())
                            -> (Pump ByteString e () -> LinePolicy e -> PipingPolicy e ())
                            -> BranchingPipeline e 
                            -> IO (Either e ())
-executeArborescentInternal ppinitial ppmiddle ppend ppend' (BranchingPipeline (Stage cp lpol ecpol) a) =      
+executePipelineInternal ppinitial ppmiddle ppend ppend' (BranchingPipeline (Stage cp lpol ecpol) a) =      
     blende ecpol <$> executeFallibly (ppinitial (runArborescent ppmiddle ppend ppend' a) lpol) cp
   where 
     runArborescent ppmiddle ppend ppend' a = case a of
         ParallelStages (b :| bs) -> single ppend ppend' b <* Prelude.foldr (<*) (pure ()) (single ppend' ppend' <$> bs) 
         TerminalStage (SubsequentStage (FalliblePipe pipe) (Stage cp lpol ecpol)) -> Siphon $ \producer ->
             blende ecpol <$> executeFallibly (ppend (fromFallibleProducer $ hoist lift producer >-> pipe) lpol) cp
+
     single ppend ppend' (SubsequentStage (FalliblePipe pipe) (Stage cp lpol ecpol), a) = Siphon $ \producer ->
          blende ecpol <$> executeFallibly (ppmiddle (fromFallibleProducer $ hoist lift producer >-> pipe) (runArborescent ppmiddle ppend ppend' a) lpol) cp
+
     blende :: (Int -> Maybe e) -> Either e (ExitCode,()) -> Either e ()
     blende f (Right (ExitFailure i,())) = case f i of
         Nothing -> Right ()
