@@ -140,7 +140,7 @@ handlesi f quad = case impure quad of
     Left l -> pure l
     Right r -> fmap justify (f r)
     where    
-        impure (Just h1, Just h2, Just h3) = Right h1
+        impure (Just h1, Nothing, Nothing) = Right h1
         impure x = Left x
         justify h1 = (Just h1, Nothing, Nothing)  
 
@@ -149,7 +149,7 @@ handlesio f quad = case impure quad of
     Left l -> pure l
     Right r -> fmap justify (f r)
     where    
-        impure (Just h1, Just h2, Just h3) = Right (h1,h2)
+        impure (Just h1, Just h2, Nothing) = Right (h1,h2)
         impure x = Left x
         justify (h1,h2) = (Just h1, Just h2, Nothing)  
 
