@@ -69,8 +69,6 @@ module System.Process.Streaming (
         , Stage (..)
         , SubsequentStage ()
         , subsequent
---        , FalliblePipe (..)
---        , Pipeline (..)
         -- * Re-exports
         -- $reexports
         , module System.Process
@@ -362,7 +360,7 @@ manyCombined :: (Show e, Typeable e)
         	 -> (Producer T.Text IO () -> IO (Either e a))
         	 -> IO (Either e a) 
 manyCombined actions consumer = do
-    (outbox, inbox, seal) <- spawn' Unbounded
+    (outbox, inbox, seal) <- spawn' Single
     mVar <- newMVar outbox
     runConceit $ 
         Conceit (mapConceit ($ iterTLines mVar) actions `finally` atomically seal)
@@ -443,7 +441,7 @@ buffer :: (Show e, Typeable e)
        ->  Siphon text e a
        ->  Producer text  IO (Producer bytes IO ()) -> IO (Either e b)
 buffer policy activity producer = do
-    (outbox,inbox,seal) <- spawn' Unbounded
+    (outbox,inbox,seal) <- spawn' Single
     r <- conceit 
               (do feeding <- async $ runEffect $ 
                         producer >-> (toOutput outbox >> P.drain)
@@ -463,7 +461,7 @@ buffer_ :: (Show e, Typeable e)
         => (Producer b IO () -> IO (Either e a))
         ->  Producer b IO () -> IO (Either e a)
 buffer_ activity producer = do
-    (outbox,inbox,seal) <- spawn' Unbounded
+    (outbox,inbox,seal) <- spawn' Single
     runConceit $
         Conceit (do feeding <- async $ runEffect $ 
                         producer >-> (toOutput outbox >> P.drain)
@@ -550,8 +548,8 @@ instance (Show e, Typeable e) => Applicative (Pump b e) where
   pure = Pump . pure . pure . pure
   Pump fs <*> Pump as = 
       Pump $ \consumer -> do
-          (outbox1,inbox1,seal1) <- spawn' Unbounded
-          (outbox2,inbox2,seal2) <- spawn' Unbounded
+          (outbox1,inbox1,seal1) <- spawn' Single
+          (outbox2,inbox2,seal2) <- spawn' Single
           runConceit $ 
               Conceit (runExceptT $ do
                            r1 <- ExceptT $ (fs $ toOutput outbox1) 
@@ -595,8 +593,8 @@ instance (Show e, Typeable e) => Applicative (Siphon b e) where
   pure = Siphon . pure . pure . pure
   Siphon fs <*> Siphon as = 
       Siphon $ \producer -> do
-          (outbox1,inbox1,seal1) <- spawn' Unbounded
-          (outbox2,inbox2,seal2) <- spawn' Unbounded
+          (outbox1,inbox1,seal1) <- spawn' Single
+          (outbox2,inbox2,seal2) <- spawn' Single
           runConceit $
               Conceit (do
                          -- mmm who cancels these asyncs ??
@@ -640,7 +638,7 @@ executePipelineFallibly policy pipeline = case policy of
                 (\i _ -> mute $ pipei i) 
                 pipeline
       PPOutput action -> do
-            (outbox, inbox, seal) <- spawn' Unbounded
+            (outbox, inbox, seal) <- spawn' Single
             runConceit $  
                 (Conceit $ action $ fromInput inbox)
                 *>
@@ -653,7 +651,7 @@ executePipelineFallibly policy pipeline = case policy of
                            `finally` atomically seal
                 ) 
       PPError action -> do
-            (eoutbox, einbox, eseal) <- spawn' Unbounded
+            (eoutbox, einbox, eseal) <- spawn' Single
             errf <- errorSiphonUTF8 <$> newMVar eoutbox
             executePipelineInternal 
                 (\o l -> mute $ pipeoe o (errf l)) 
@@ -663,8 +661,8 @@ executePipelineFallibly policy pipeline = case policy of
                 pipeline
                 `finally` atomically eseal
       PPOutputError action -> do
-            (outbox, inbox, seal) <- spawn' Unbounded
-            (eoutbox, einbox, eseal) <- spawn' Unbounded
+            (outbox, inbox, seal) <- spawn' Single
+            (eoutbox, einbox, eseal) <- spawn' Single
             errf <- errorSiphonUTF8 <$> newMVar eoutbox
             runConceit $  
                 (Conceit $ action $ (fromInput inbox,fromInput einbox))
@@ -678,7 +676,7 @@ executePipelineFallibly policy pipeline = case policy of
                            `finally` atomically seal `finally` atomically eseal
                 )
       PPInput action -> do
-            (outbox, inbox, seal) <- spawn' Unbounded
+            (outbox, inbox, seal) <- spawn' Single
             runConceit $  
                 (Conceit $ action (toOutput outbox,atomically seal))
                 *>
@@ -691,8 +689,8 @@ executePipelineFallibly policy pipeline = case policy of
                            `finally` atomically seal
                 )
       PPInputOutput action -> do
-            (ioutbox, iinbox, iseal) <- spawn' Unbounded
-            (ooutbox, oinbox, oseal) <- spawn' Unbounded
+            (ioutbox, iinbox, iseal) <- spawn' Single
+            (ooutbox, oinbox, oseal) <- spawn' Single
             runConceit $  
                 (Conceit $ action (toOutput ioutbox,atomically iseal,fromInput oinbox))
                 *>
@@ -705,8 +703,8 @@ executePipelineFallibly policy pipeline = case policy of
                            `finally` atomically iseal `finally` atomically oseal
                 )
       PPInputError action -> do
-            (outbox, inbox, seal) <- spawn' Unbounded
-            (eoutbox, einbox, eseal) <- spawn' Unbounded
+            (outbox, inbox, seal) <- spawn' Single
+            (eoutbox, einbox, eseal) <- spawn' Single
             errf <- errorSiphonUTF8 <$> newMVar eoutbox
             runConceit $  
                 (Conceit $ action (toOutput outbox,atomically seal,fromInput einbox))
@@ -720,9 +718,9 @@ executePipelineFallibly policy pipeline = case policy of
                            `finally` atomically seal `finally` atomically eseal
                 )
       PPInputOutputError action -> do
-            (ioutbox, iinbox, iseal) <- spawn' Unbounded
-            (ooutbox, oinbox, oseal) <- spawn' Unbounded
-            (eoutbox, einbox, eseal) <- spawn' Unbounded
+            (ioutbox, iinbox, iseal) <- spawn' Single
+            (ooutbox, oinbox, oseal) <- spawn' Single
+            (eoutbox, einbox, eseal) <- spawn' Single
             errf <- errorSiphonUTF8 <$> newMVar eoutbox
             runConceit $  
                 (Conceit $ action (toOutput ioutbox,atomically iseal,fromInput oinbox,fromInput einbox))
