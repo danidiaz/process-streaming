@@ -140,6 +140,11 @@ nohandles f quad = case impure quad of
         justify () = (Nothing, Nothing, Nothing)  
 
 
+{-|
+    A 'Prism' that matches when only @stdin@ has been piped.
+
+    > handlesi :: Prism' (Maybe Handle, Maybe Handle, Maybe Handle) (Handle)
+ -}
 handlesi :: forall m. Applicative m => (Handle -> m Handle) -> (Maybe Handle, Maybe Handle, Maybe Handle) -> m (Maybe Handle, Maybe Handle, Maybe Handle)
 handlesi f quad = case impure quad of
     Left l -> pure l
@@ -195,6 +200,11 @@ handlesoe f quad = case impure quad of
         impure x = Left x
         justify (h2, h3) = (Nothing, Just h2, Just h3)  
 
+{-|
+    A 'Prism' that matches when only @stdout@ has been piped.
+
+    > handleso :: Prism' (Maybe Handle, Maybe Handle, Maybe Handle) (Handle)
+ -}
 handleso :: forall m. Applicative m => (Handle -> m Handle) -> (Maybe Handle, Maybe Handle, Maybe Handle) -> m (Maybe Handle, Maybe Handle, Maybe Handle)
 handleso f quad = case impure quad of
     Left l -> pure l
