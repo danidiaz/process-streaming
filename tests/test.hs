@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ViewPatterns #-}
 
 module Main where 
 
@@ -7,6 +8,7 @@ import Test.Tasty.HUnit
 
 import Data.Bifunctor
 import Data.Monoid
+import Data.Foldable
 import Data.ByteString.Lazy as BL
 import Data.Text.Lazy as TL
 import qualified Data.Attoparsec.Text as A
@@ -36,6 +38,7 @@ tests :: TestTree
 tests = testGroup "Tests" 
             [ testCollectStdoutStderrAsByteString
             , testFeedStdinCollectStdoutAsText  
+            , testCombinedStdoutStderr
             , testBasicPipeline
             ]
 
@@ -68,6 +71,32 @@ feedStdinCollectStdoutAsText = execute
     (shell "cat")
 
 -------------------------------------------------------------------------------
+
+testCombinedStdoutStderr :: TestTree
+testCombinedStdoutStderr = testCase "feedStdinCollectStdoutAsText" $ do
+    r <- combinedStdoutStderr 
+    case r of 
+        (ExitSuccess,TL.lines -> ls) -> do
+            assertEqual "line count" (Prelude.length ls) 4
+            assertBool "expected lines" $ 
+                getAll $ foldMap (All . flip Prelude.elem ls) $
+                    [ "ooo"
+                    , "ppp"
+                    , "errprefix: eee"
+                    , "errprefix: ffff"
+                    ]
+        _ -> assertFailure "oops"
+
+combinedStdoutStderr :: IO (ExitCode,TL.Text)
+combinedStdoutStderr = execute
+    (pipeoec (linePolicy T.decodeIso8859_1 (pure ()) id)
+             (linePolicy T.decodeIso8859_1 (pure ()) annotate)    
+             (fromFold T.toLazyM))
+    (shell "{ echo ooo ; echo eee 1>&2 ; echo ppp ;  echo ffff 1>&2 ; }")
+  where
+    annotate x = P.yield "errprefix: " *> x  
+
+-------------------------------------------------------------------------------
 testBasicPipeline :: TestTree
 testBasicPipeline = testCase "basicPipeline" $ do
     r <- basicPipeline 
@@ -76,11 +105,11 @@ testBasicPipeline = testCase "basicPipeline" $ do
         _ -> assertFailure "oops"
 
 basicPipeline :: IO (Either String ((),BL.ByteString))
-basicPipeline =  executePipelineFallibly (pipeio (fromProducer $ yield "aaabbb\naaaccc\nxxxccc") (fromFold B.toLazyM)) pip
-  where 
-    pip = verySimplePipeline T.decodeUtf8 (shell "grep aaa") [] (shell "grep ccc")
+basicPipeline =  executePipelineFallibly 
+    (pipeio (fromProducer $ yield "aaabbb\naaaccc\nxxxccc") 
+            (fromFold B.toLazyM)) 
+    (verySimplePipeline T.decodeUtf8 (shell "grep aaa") [] (shell "grep ccc"))
 
--------------------------------------------------------------------------------
 
 
 
