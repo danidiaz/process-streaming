@@ -634,10 +634,12 @@ executePipeline pp pipeline = either absurd id <$> executePipelineFallibly pp pi
     Similar to 'executeFallibly', but instead of a single process it executes
     a (possibly branching) pipeline of external processes. 
 
-    The 'PipingPolicy' argument views the pipeline as a "synthetic" process for
+    The 'PipingPolicy' argument views the pipeline as a synthetic process for
     which @stdin@ is the @stdin@ of the first stage, @stdout@ is the @stdout@
     of the topmost-leftmost terminal stage, and @stderr@ is a combination of
     the @stderr@ streams of all the stages.
+
+    The combined @stderr@ stream always has UTF-8 encoding.
 
     This function has a limitation compared to the standard UNIX pipelines.
     If a downstream process terminates early without error, the upstream
@@ -757,6 +759,16 @@ executePipelineFallibly policy pipeline = case policy of
 
 data Pipeline e = Pipeline (Stage e) (NonEmpty (SubsequentStage e)) deriving (Functor)
 
+{-|
+   A individual stage in a process pipeline. 
+   
+   The 'LinePolicy' field defines how to handle @stderr@ when @stderr@ is
+piped. 
+   
+   Also required is a function that determines if the returned exit code
+   represents an error or not. (This is necessary because some program use
+   non-standard exit codes.
+ -}
 data Stage e = Stage 
            {
              processDefinition :: CreateProcess 
@@ -764,6 +776,10 @@ data Stage e = Stage
            , exitCodePolicy :: Int -> Maybe e
            } deriving (Functor)
 
+
+{-|
+   A stage in a process pipeline which is not the first stage. 
+ -}
 data SubsequentStage e = SubsequentStage (FalliblePipe ByteString ByteString IO e) (Stage e) deriving (Functor)
 
 data FalliblePipe b b' m e = FalliblePipe (forall a.Pipe b b' (ExceptT e m) a)
@@ -771,6 +787,13 @@ data FalliblePipe b b' m e = FalliblePipe (forall a.Pipe b b' (ExceptT e m) a)
 instance (Monad m) => Functor (FalliblePipe b b' m) where
     fmap f (FalliblePipe bs) = FalliblePipe $ hoist (mapExceptT $ liftM (bimap f id)) bs
 
+{-|
+   Builds a 'SubsequentStage' from a 'Stage' by prepending a 'Pipe' that is
+   applied to the stream of data that the 'Stage' receives.
+
+   Pass 'cat' (the identity 'Pipe' from 'Pipes') as argument if no
+   pre-processing is required.
+ -}
 subsequent :: (forall a.Pipe ByteString ByteString (ExceptT e IO) a) -> Stage e -> SubsequentStage e
 subsequent fp s = SubsequentStage (FalliblePipe fp) s 
 
@@ -786,10 +809,22 @@ fromPipeline (Pipeline root (liftA2 (,) N.init N.last -> (stages, finalStage))) 
     (BranchingPipeline root arborescent)
         where arborescent = Data.Foldable.foldr (curry $ ParallelStages . pure) (TerminalStage finalStage) stages
 
+
+{-|
+    Build a linear pipeline out of an initial 'Stage', a list of
+    intermediate 'SubsequentStage's, and a terminal 'SubsequentStage'.
+-}
 simplePipeline :: Stage e -> [SubsequentStage e] -> SubsequentStage e -> BranchingPipeline e 
 simplePipeline initial middle terminal = BranchingPipeline initial $   
    Prelude.foldr (\s1 s2 -> ParallelStages . pure $ (s1,s2)) (TerminalStage terminal) middle
 
+{-|
+    Build a linear pipeline out of an initial process, a list of
+    intermediate processes, and one final process. 
+
+    The @stderr@ streams of all the processes in the pipeline are assumed
+    to have the encoding specified by the 'DecodingFunction' parameter.
+-}
 verySimplePipeline :: DecodingFunction ByteString Text -> CreateProcess -> [CreateProcess] -> CreateProcess -> BranchingPipeline String 
 verySimplePipeline decoder initial middle end = 
     simplePipeline (simpleStage initial) (Prelude.map simpleSubsequentStage middle) (simpleSubsequentStage end) 
