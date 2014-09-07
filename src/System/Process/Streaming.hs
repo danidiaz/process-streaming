@@ -6,8 +6,8 @@
 -- They provide concurrent, buffered (to avoid deadlocks) streaming access to
 -- the inputs and outputs of system processes.
 --
--- There's also an emphasis in having error conditions explicit in the types,
--- instead of throwing exceptions.
+-- Error conditions that are not directly related to IO are made explicit
+-- in the types.
 --
 -- Regular 'Consumer's, 'Parser's from @pipes-parse@ and folds from
 -- "Pipes.Prelude" (also folds from @pipes-bytestring@ and @pipes-text@) can be
@@ -572,14 +572,13 @@ instance (Show e, Typeable e, Monoid a) => Monoid (Pump b e a) where
    mappend s1 s2 = (<>) <$> s1 <*> s2
 
 {-| 
-    'Siphon' is a newtype around a function that does something with a
-'Producer'. The applicative instance fuses the functions, so that each one
-receives its own copy of the 'Producer' and runs concurrently with the others.
-Like with 'Conceit', if any of the functions fails with @e@ the others are
-immediately cancelled and the whole computation fails with @e@.   
+    A 'Siphon' represents a computation that either completely drains a
+    producer, or fails early with an error of type @e@. 
 
-    'Siphon' and its accompanying functions are useful to run multiple
-parsers from "Pipes.Parse" in parallel over the same 'Producer'.
+    'pure' creates a 'Siphon' that drains a 'Producer' and returns an arbitrary
+    value. 
+
+    '<*>' executes its arguments concurrently. The 'Producer' is forked so that each argument receives its own copy of the data.
  -}
 newtype Siphon b e a = Siphon { runSiphon :: Producer b IO () -> IO (Either e a) }
 
