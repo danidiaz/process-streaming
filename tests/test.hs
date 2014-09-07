@@ -34,10 +34,12 @@ main = defaultMain tests
 
 tests :: TestTree
 tests = testGroup "Tests" 
-            [testCollectStdoutStderrAsByteString
-            ,testFeedStdinCollectStdoutAsText  
+            [ testCollectStdoutStderrAsByteString
+            , testFeedStdinCollectStdoutAsText  
+            , testBasicPipeline
             ]
 
+-------------------------------------------------------------------------------
 testCollectStdoutStderrAsByteString :: TestTree
 testCollectStdoutStderrAsByteString = testCase "collectStdoutStderrAsByteString" $ do
     r <- collectStdoutStderrAsByteString
@@ -50,6 +52,8 @@ collectStdoutStderrAsByteString = execute
     (pipeoe (fromFold B.toLazyM) (fromFold B.toLazyM))
     (shell "{ echo ooo ; echo eee 1>&2 ; echo ppp ;  echo ffff 1>&2 ; }")
 
+
+-------------------------------------------------------------------------------
 testFeedStdinCollectStdoutAsText  :: TestTree
 testFeedStdinCollectStdoutAsText = testCase "feedStdinCollectStdoutAsText" $ do
     r <- feedStdinCollectStdoutAsText
@@ -62,5 +66,24 @@ feedStdinCollectStdoutAsText = execute
     (pipeio (fromProducer $ yield "aaaaaa\naaaaa")
             (encoded T.decodeIso8859_1 (pure id) $ fromFold T.toLazyM))
     (shell "cat")
+
+-------------------------------------------------------------------------------
+testBasicPipeline :: TestTree
+testBasicPipeline = testCase "basicPipeline" $ do
+    r <- basicPipeline 
+    case r of 
+        Right ((),"aaaccc\n") -> return ()                   
+        _ -> assertFailure "oops"
+
+basicPipeline :: IO (Either String ((),BL.ByteString))
+basicPipeline =  executePipelineFallibly (pipeio (fromProducer $ yield "aaabbb\naaaccc\nxxxccc") (fromFold B.toLazyM)) pip
+  where 
+    pip = verySimplePipeline T.decodeUtf8 (shell "grep aaa") [] (shell "grep ccc")
+
+-------------------------------------------------------------------------------
+
+
+
+
 
 
