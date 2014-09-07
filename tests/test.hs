@@ -42,6 +42,7 @@ tests = testGroup "Tests"
             , testCombinedStdoutStderr
             , testInterruptExecution 
             , testFailIfAnythingShowsInStderr 
+            , testTwoTextParsersInParallel  
             , testBasicPipeline
             ]
 
@@ -76,7 +77,7 @@ feedStdinCollectStdoutAsText = execute
 -------------------------------------------------------------------------------
 
 testCombinedStdoutStderr :: TestTree
-testCombinedStdoutStderr = testCase "feedStdinCollectStdoutAsText" $ do
+testCombinedStdoutStderr = testCase "testCombinedStdoutStderr"  $ do
     r <- combinedStdoutStderr 
     case r of 
         (ExitSuccess,TL.lines -> ls) -> do
@@ -126,6 +127,35 @@ failIfAnythingShowsInStderr :: IO (Either T.ByteString (ExitCode,()))
 failIfAnythingShowsInStderr = executeFallibly
     (pipee (unexpected ()))
     (shell "{ echo morestuff 1>&2 ; sleep 100s ; }")
+
+-------------------------------------------------------------------------------
+
+testTwoTextParsersInParallel  :: TestTree
+testTwoTextParsersInParallel  = testCase "twoTextParsersInParallel" $ do
+    r <- twoTextParsersInParallel
+    case r of 
+        Right (ExitSuccess,("ooooooo","aaaaaa")) -> return ()
+        _ -> assertFailure "oops"
+
+parseChars :: Char -> A.Parser [Char] 
+parseChars c = fmap mconcat $ 
+    many (A.notChar c) *> A.many1 (some (A.char c) <* many (A.notChar c))
+        
+parser1 = parseChars 'o'
+
+parser2 = parseChars 'a'
+
+twoTextParsersInParallel :: IO (Either String (ExitCode,([Char], [Char])))
+twoTextParsersInParallel = executeFallibly
+    (pipeo (encoded T.decodeIso8859_1 (pure id) $ 
+                (,) <$> adapt parser1 <*> adapt parser2))
+    (shell "{ echo ooaaoo ; echo aaooaoa; }")
+  where
+    adapt p = fromParser $ do
+        r <- P.parse p
+        return $ case r of
+            Just (Right r') -> Right r'
+            _ -> Left "parse error"
 
 -------------------------------------------------------------------------------
 testBasicPipeline :: TestTree
