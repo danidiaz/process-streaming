@@ -3,15 +3,18 @@
 -- This module contains helper functions and types built on top of
 -- "System.Process" and "Pipes".
 --
--- They provide concurrent, buffered (to avoid deadlocks) streaming access to
--- the inputs and outputs of system processes.
+-- They provide concurrent, streaming access to the inputs and outputs of
+-- system processes.
+--
+-- Whenever @stdout@ and/or @stderr@ are piped, they are always drained to
+-- completion, to avoid a potential source of deadlocks.
 --
 -- Error conditions that are not directly related to IO are made explicit
 -- in the types.
 --
 -- Regular 'Consumer's, 'Parser's from @pipes-parse@ and folds from
--- "Pipes.Prelude" (also folds from @pipes-bytestring@ and @pipes-text@) can be
--- used to consume the output streams of the external processes.
+-- "Pipes.Prelude" (also folds from @pipes-bytestring@ and @pipes-text@)
+-- can be used to consume the output streams of the external processes.
 --
 -----------------------------------------------------------------------------
 
@@ -626,6 +629,21 @@ unexpected a = siphon $ \producer -> do
 executePipeline :: PipingPolicy Void a -> BranchingPipeline Void -> IO a 
 executePipeline pp pipeline = either absurd id <$> executePipelineFallibly pp pipeline
 
+
+{-|
+    Similar to 'executeFallibly', but instead of a single process it executes
+    a (possibly branching) pipeline of external processes. 
+
+    The 'PipingPolicy' argument views the pipeline as a "synthetic" process for
+    which @stdin@ is the @stdin@ of the first stage, @stdout@ is the @stdout@
+    of the topmost-leftmost terminal stage, and @stderr@ is a combination of
+    the @stderr@ streams of all the stages.
+
+    This function has a limitation compared to the standard UNIX pipelines.
+    If a downstream process terminates early without error, the upstream
+    processes are not notified and keep going. There is no SIGPIPE-like
+    functionality, in other words. 
+ -}
 executePipelineFallibly :: (Show e,Typeable e) => PipingPolicy e a -> BranchingPipeline e -> IO (Either e a)
 executePipelineFallibly policy pipeline = case policy of 
       PPNone a -> fmap (fmap (const a)) $
