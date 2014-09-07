@@ -76,6 +76,7 @@ Test-suite test
       , pipes-group >= 1.0.1
       , bytestring >= 0.10
       , lens >= 4
+      , directory >= 1.2
 
 Source-repository head
     type:     git

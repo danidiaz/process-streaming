@@ -34,6 +34,7 @@ import qualified Pipes.Safe.Prelude as S
 import System.IO
 import System.IO.Error
 import System.Exit
+import System.Directory
 import System.Process.Streaming
 
 main = defaultMain tests
@@ -195,10 +196,18 @@ basicPipeline =  executePipelineFallibly
 
 testBranchingPipeline :: TestTree
 testBranchingPipeline = testCase "branchingPipeline" $ do
+    exists <- doesFileExist branchingPipelineFile
+    when exists $ removeFile branchingPipelineFile
     r <- branchingPipeline 
     case r of 
         ("ppp\v","eee\nffff\n") -> return ()                   
         _ -> assertFailure "oops"
+    fileContents <- withFile branchingPipelineFile ReadMode  $ \hIn -> do
+        B.toLazyM $ B.fromHandle hIn 
+    assertBool "file contexts" $ BL.isPrefixOf "yyy" fileContents 
+
+branchingPipelineFile :: String 
+branchingPipelineFile = "dist/test/process-streaming-pipeline-text.txt"
 
 branchingPipeline :: IO (BL.ByteString, BL.ByteString)
 branchingPipeline = executePipeline
@@ -234,7 +243,7 @@ branchingPipeline = executePipeline
 
     terminalStage2 :: (Show e, Typeable e) => SubsequentStage e
     terminalStage2 = succStage $
-        Stage (shell "cat > dist/test/process-streaming-pipeline-text.txt")
+        Stage (shell $ "cat > " ++ branchingPipelineFile)
               (linePolicy T.decodeIso8859_1 (pure ()) id)                 
               (\_ -> Nothing)
 
