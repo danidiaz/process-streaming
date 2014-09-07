@@ -109,11 +109,12 @@ combinedStdoutStderr = execute
 -------------------------------------------------------------------------------
 
 testInterruptExecution :: TestTree
-testInterruptExecution = testCase "interruptExecution" $ do
-    r <- interruptExecution
-    case r of
-        Left "interrupted" -> return ()
-        _ -> assertFailure "oops"
+testInterruptExecution = localOption (mkTimeout $ 5*(10^6)) $
+    testCase "interruptExecution" $ do
+        r <- interruptExecution
+        case r of
+            Left "interrupted" -> return ()
+            _ -> assertFailure "oops"
 
 interruptExecution :: IO (Either String (ExitCode,()))
 interruptExecution = executeFallibly
@@ -123,11 +124,12 @@ interruptExecution = executeFallibly
 -------------------------------------------------------------------------------
 
 testFailIfAnythingShowsInStderr :: TestTree
-testFailIfAnythingShowsInStderr = testCase "failIfAnythingShowsInStderr" $ do
-    r <- failIfAnythingShowsInStderr 
-    case r of
-        Left "morestuff\n" -> return ()
-        _ -> assertFailure "oops"
+testFailIfAnythingShowsInStderr = localOption (mkTimeout $ 5*(10^6)) $
+    testCase "failIfAnythingShowsInStderr" $ do
+        r <- failIfAnythingShowsInStderr 
+        case r of
+            Left "morestuff\n" -> return ()
+            _ -> assertFailure "oops"
 
 failIfAnythingShowsInStderr :: IO (Either T.ByteString (ExitCode,()))
 failIfAnythingShowsInStderr = executeFallibly
