@@ -389,19 +389,19 @@ errorSiphonUTF8 mvar (LinePolicy fun) = Siphon $ fun iterTLines
     You may need to use 'surely' for the types to fit.
  -}
 fromConsumer :: Consumer b IO () -> Siphon b e ()
-fromConsumer consumer = Siphon $ \producer -> fmap pure $ runEffect $ producer >-> consumer 
+fromConsumer consumer = siphon $ \producer -> fmap pure $ runEffect $ producer >-> consumer 
 
 fromSafeConsumer :: Consumer b (SafeT IO) () -> Siphon b e ()
-fromSafeConsumer consumer = Siphon $ safely $ \producer -> fmap pure $ runEffect $ producer >-> consumer 
+fromSafeConsumer consumer = siphon $ safely $ \producer -> fmap pure $ runEffect $ producer >-> consumer 
 
 fromFallibleConsumer :: Consumer b (ExceptT e IO) () -> Siphon b e ()
-fromFallibleConsumer consumer = Siphon $ \producer -> runExceptT $ runEffect (hoist lift producer >-> consumer) 
+fromFallibleConsumer consumer = siphon $ \producer -> runExceptT $ runEffect (hoist lift producer >-> consumer) 
 
 fromFold :: (Producer b IO () -> IO a) -> Siphon b e a 
-fromFold aFold = Siphon $ fmap (fmap pure) $ aFold 
+fromFold aFold = siphon $ fmap (fmap pure) $ aFold 
 
 fromParser :: Parser b IO (Either e a) -> Siphon b e a 
-fromParser parser = Siphon $ Pipes.Parse.evalStateT parser 
+fromParser parser = siphon $ Pipes.Parse.evalStateT parser 
 
 {-|
     Useful for constructing @stdin@ feeding functions from a 'Producer'.
@@ -618,7 +618,7 @@ instance (Show e, Typeable e, Monoid a) => Monoid (Siphon b e a) where
    mappend s1 s2 = (<>) <$> s1 <*> s2
 
 unexpected :: a -> Siphon b b a
-unexpected a = Siphon $ \producer -> do
+unexpected a = siphon $ \producer -> do
     r <- next producer  
     return $ case r of 
         Left () -> Right a
