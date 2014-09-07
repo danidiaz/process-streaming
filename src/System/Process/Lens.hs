@@ -116,7 +116,7 @@ _delegate_ctlc f c = set_delegate_ctlc c <$> f (delegate_ctlc c)
 {-|
     A 'Lens' for the return value of 'createProcess' that focuses on the handles.
 
-    > handlesioe :: Lens' (Maybe Handle, Maybe Handle, Maybe Handle,ProcessHandle) (Maybe Handle, Maybe Handle, Maybe Handle)
+    > handles :: Lens' (Maybe Handle, Maybe Handle, Maybe Handle,ProcessHandle) (Maybe Handle, Maybe Handle, Maybe Handle)
  -}
 handles :: forall m. Functor m => ((Maybe Handle, Maybe Handle, Maybe Handle) -> m (Maybe Handle, Maybe Handle, Maybe Handle)) -> (Maybe Handle,Maybe Handle ,Maybe Handle,ProcessHandle) -> m (Maybe Handle,Maybe Handle ,Maybe Handle,ProcessHandle) 
 handles f quad = setHandles quad <$> f (getHandles quad)  
@@ -125,6 +125,11 @@ handles f quad = setHandles quad <$> f (getHandles quad)
         getHandles (c1'',c2'',c3'',c4'') = (c1'',c2'',c3'')
     
 
+{-|
+    A 'Prism' that matches when none of the standard streams have been piped.
+
+    > nohandles :: Prism' (Maybe Handle, Maybe Handle, Maybe Handle) ()
+ -}
 nohandles :: forall m. Applicative m => (() -> m ()) -> (Maybe Handle, Maybe Handle, Maybe Handle) -> m (Maybe Handle, Maybe Handle, Maybe Handle)
 nohandles f quad = case impure quad of
     Left l -> pure l
@@ -163,9 +168,9 @@ handlesie f quad = case impure quad of
         justify (h1,h2) = (Just h1, Nothing, Just h2)  
 
 {-|
-    A 'Prism' that removes the 'Maybe's from @stdin@, @stdout@ and @stderr@ or fails to match if any of them is 'Nothing'.
+    A 'Prism' that matches when all three @stdin@, @stdout@ and @stderr@ have been piped.
 
-    > handlesioe :: Prism' (Maybe Handle, Maybe Handle, Maybe Handle) -> (Handle, Handle, Handle)
+    > handlesioe :: Prism' (Maybe Handle, Maybe Handle, Maybe Handle) (Handle, Handle, Handle)
  -}
 handlesioe :: forall m. Applicative m => ((Handle, Handle, Handle) -> m (Handle, Handle, Handle)) -> (Maybe Handle, Maybe Handle, Maybe Handle) -> m (Maybe Handle, Maybe Handle, Maybe Handle)
 handlesioe f quad = case impure quad of
@@ -177,9 +182,9 @@ handlesioe f quad = case impure quad of
         justify (h1, h2, h3) = (Just h1, Just h2, Just h3)  
 
 {-|
-    A 'Prism' that removes the 'Maybe's from @stdout@ and @stderr@ or fails to match if any of them is 'Nothing'.
+    A 'Prism' that matches when only @stdout@ and @stderr@ have been piped.
 
-    > handlesoe :: Prism' (Maybe Handle, Maybe Handle, Maybe Handle) -> (Handle, Handle)
+    > handlesoe :: Prism' (Maybe Handle, Maybe Handle, Maybe Handle) (Handle, Handle)
  -}
 handlesoe :: forall m. Applicative m => ((Handle, Handle) -> m (Handle, Handle)) -> (Maybe Handle, Maybe Handle, Maybe Handle) -> m (Maybe Handle, Maybe Handle, Maybe Handle)
 handlesoe f quad = case impure quad of
@@ -199,6 +204,11 @@ handleso f quad = case impure quad of
         impure x = Left x
         justify h2 = (Nothing, Just h2, Nothing)  
 
+{-|
+    A 'Prism' that matches when only @stderr@ has been piped.
+
+    > handlese :: Prism' (Maybe Handle, Maybe Handle, Maybe Handle) (Handle)
+ -}
 handlese :: forall m. Applicative m => (Handle -> m Handle) -> (Maybe Handle, Maybe Handle, Maybe Handle) -> m (Maybe Handle, Maybe Handle, Maybe Handle)
 handlese f quad = case impure quad of
     Left l -> pure l
