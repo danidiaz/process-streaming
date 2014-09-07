@@ -631,13 +631,14 @@ executePipeline pp pipeline = either absurd id <$> executePipelineFallibly pp pi
 
 
 {-|
-    Similar to 'executeFallibly', but instead of a single process it executes
-    a (possibly branching) pipeline of external processes. 
+    Similar to 'executeFallibly', but instead of a single process it
+    executes a (possibly branching) pipeline of external processes. 
 
-    The 'PipingPolicy' argument views the pipeline as a synthetic process for
-    which @stdin@ is the @stdin@ of the first stage, @stdout@ is the @stdout@
-    of the topmost-leftmost terminal stage, and @stderr@ is a combination of
-    the @stderr@ streams of all the stages.
+    The 'PipingPolicy' argument views the pipeline as a synthetic process
+    for which @stdin@ is the @stdin@ of the first stage, @stdout@ is the
+    @stdout@ of the leftmost terminal stage among those closer to the root,
+    and @stderr@ is a combination of the @stderr@ streams of all the
+    stages.
 
     The combined @stderr@ stream always has UTF-8 encoding.
 
@@ -763,10 +764,10 @@ data Pipeline e = Pipeline (Stage e) (NonEmpty (SubsequentStage e)) deriving (Fu
    A individual stage in a process pipeline. 
    
    The 'LinePolicy' field defines how to handle @stderr@ when @stderr@ is
-piped. 
+   piped. 
    
    Also required is a function that determines if the returned exit code
-   represents an error or not. (This is necessary because some program use
+   represents an error or not. This is necessary because some programs use
    non-standard exit codes.
  -}
 data Stage e = Stage 
