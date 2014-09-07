@@ -9,8 +9,11 @@ import Test.Tasty.HUnit
 import Data.Bifunctor
 import Data.Monoid
 import Data.Foldable
+import Data.List.NonEmpty
+import Data.ByteString
 import Data.ByteString.Lazy as BL
 import Data.Text.Lazy as TL
+import Data.Typeable
 import qualified Data.Attoparsec.Text as A
 import Control.Applicative
 import Control.Monad
@@ -45,6 +48,7 @@ tests = testGroup "Tests"
             , testTwoTextParsersInParallel  
             , testCountWords 
             , testBasicPipeline
+            , testBranchingPipeline 
             ]
 
 -------------------------------------------------------------------------------
@@ -187,7 +191,52 @@ basicPipeline =  executePipelineFallibly
             (fromFold B.toLazyM)) 
     (verySimplePipeline T.decodeUtf8 (shell "grep aaa") [] (shell "grep ccc"))
 
+-------------------------------------------------------------------------------
 
+testBranchingPipeline :: TestTree
+testBranchingPipeline = testCase "branchingPipeline" $ do
+    r <- branchingPipeline 
+    case r of 
+        ("ppp\v","eee\nffff\n") -> return ()                   
+        _ -> assertFailure "oops"
+
+branchingPipeline :: IO (BL.ByteString, BL.ByteString)
+branchingPipeline = executePipeline
+    (pipeoe (fromFold B.toLazyM) (fromFold B.toLazyM)) 
+    (BranchingPipeline rootStage $
+        ParallelStages . fromList $ [ (branch1,TerminalStage terminalStage1)
+                                    , (branch2,TerminalStage terminalStage2) ])
+  where
+    succStage = subsequent (P.map (Data.ByteString.map succ))
+
+    rootStage :: (Show e, Typeable e) => Stage e
+    rootStage = Stage (shell "{ echo oooaaa ; echo eee 1>&2 ; echo xxx ;  echo ffff 1>&2 ; }")
+                      (linePolicy T.decodeIso8859_1 (pure ()) id)                 
+                      (\_ -> Nothing)
+
+    branch1 :: (Show e, Typeable e) => SubsequentStage e
+    branch1 = subsequent cat $
+        Stage (shell "grep ooo")
+              (linePolicy T.decodeIso8859_1 (pure ()) id)                 
+              (\_ -> Nothing)
+
+    branch2 :: (Show e, Typeable e) => SubsequentStage e
+    branch2 = subsequent cat $
+        Stage (shell "grep xxx")
+              (linePolicy T.decodeIso8859_1 (pure ()) id)                 
+              (\_ -> Nothing)
+
+    terminalStage1 :: (Show e, Typeable e) => SubsequentStage e
+    terminalStage1 = succStage $
+        Stage (shell "tr -d b")
+              (linePolicy T.decodeIso8859_1 (pure ()) id)                 
+              (\_ -> Nothing)
+
+    terminalStage2 :: (Show e, Typeable e) => SubsequentStage e
+    terminalStage2 = succStage $
+        Stage (shell "cat > dist/test/process-streaming-pipeline-text.txt")
+              (linePolicy T.decodeIso8859_1 (pure ()) id)                 
+              (\_ -> Nothing)
 
 
 
