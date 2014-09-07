@@ -580,10 +580,11 @@ instance (Show e, Typeable e, Monoid a) => Monoid (Pump b e a) where
     A 'Siphon' represents a computation that either completely drains a
     producer, or fails early with an error of type @e@. 
 
-    'pure' creates a 'Siphon' that drains a 'Producer' and returns an arbitrary
-    value. 
+    'pure' creates a 'Siphon' that drains a 'Producer' and returns the
+    value passed as parameter. 
 
-    '<*>' executes its arguments concurrently. The 'Producer' is forked so that each argument receives its own copy of the data.
+    '<*>' executes its arguments concurrently. The 'Producer' is forked so
+    that each argument receives its own copy of the data.
  -}
 newtype Siphon b e a = Siphon { runSiphon :: Producer b IO () -> IO (Either e a) }
 
