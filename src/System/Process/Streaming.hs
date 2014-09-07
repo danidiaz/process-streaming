@@ -388,19 +388,19 @@ errorSiphonUTF8 mvar (LinePolicy fun) = Siphon $ fun iterTLines
 
     You may need to use 'surely' for the types to fit.
  -}
-fromConsumer :: Consumer b IO () -> Siphon b e ()
+fromConsumer :: (Show e, Typeable e) => Consumer b IO () -> Siphon b e ()
 fromConsumer consumer = siphon $ \producer -> fmap pure $ runEffect $ producer >-> consumer 
 
-fromSafeConsumer :: Consumer b (SafeT IO) () -> Siphon b e ()
+fromSafeConsumer :: (Show e, Typeable e) => Consumer b (SafeT IO) () -> Siphon b e ()
 fromSafeConsumer consumer = siphon $ safely $ \producer -> fmap pure $ runEffect $ producer >-> consumer 
 
-fromFallibleConsumer :: Consumer b (ExceptT e IO) () -> Siphon b e ()
+fromFallibleConsumer :: (Show e, Typeable e) => Consumer b (ExceptT e IO) () -> Siphon b e ()
 fromFallibleConsumer consumer = siphon $ \producer -> runExceptT $ runEffect (hoist lift producer >-> consumer) 
 
-fromFold :: (Producer b IO () -> IO a) -> Siphon b e a 
+fromFold :: (Show e, Typeable e) => (Producer b IO () -> IO a) -> Siphon b e a 
 fromFold aFold = siphon $ fmap (fmap pure) $ aFold 
 
-fromParser :: Parser b IO (Either e a) -> Siphon b e a 
+fromParser :: (Show e, Typeable e) => Parser b IO (Either e a) -> Siphon b e a 
 fromParser parser = siphon $ Pipes.Parse.evalStateT parser 
 
 {-|
@@ -617,7 +617,7 @@ instance (Show e, Typeable e, Monoid a) => Monoid (Siphon b e a) where
    mempty = Siphon . pure . pure . pure $ mempty
    mappend s1 s2 = (<>) <$> s1 <*> s2
 
-unexpected :: a -> Siphon b b a
+unexpected :: (Show b, Typeable b) => a -> Siphon b b a
 unexpected a = siphon $ \producer -> do
     r <- next producer  
     return $ case r of 
