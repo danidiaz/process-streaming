@@ -14,6 +14,7 @@ import Data.Text.Lazy as TL
 import qualified Data.Attoparsec.Text as A
 import Control.Applicative
 import Control.Monad
+import Control.Monad.Trans.Except
 import Control.Lens (view)
 import Control.Concurrent.Async
 import Pipes
@@ -39,6 +40,7 @@ tests = testGroup "Tests"
             [ testCollectStdoutStderrAsByteString
             , testFeedStdinCollectStdoutAsText  
             , testCombinedStdoutStderr
+            , testInterruptExecution 
             , testBasicPipeline
             ]
 
@@ -95,6 +97,20 @@ combinedStdoutStderr = execute
     (shell "{ echo ooo ; echo eee 1>&2 ; echo ppp ;  echo ffff 1>&2 ; }")
   where
     annotate x = P.yield "errprefix: " *> x  
+
+-------------------------------------------------------------------------------
+
+testInterruptExecution :: TestTree
+testInterruptExecution = testCase "interruptExecution" $ do
+    r <- interruptExecution
+    case r of
+        Left "interrupted" -> return ()
+        _ -> assertFailure "oops"
+
+interruptExecution :: IO (Either String (ExitCode,()))
+interruptExecution = executeFallibly
+    (pipeo . siphon $ \_ -> runExceptT . throwE $ "interrupted")
+    (shell "sleep 100s")
 
 -------------------------------------------------------------------------------
 testBasicPipeline :: TestTree
