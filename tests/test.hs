@@ -41,6 +41,7 @@ tests = testGroup "Tests"
             , testFeedStdinCollectStdoutAsText  
             , testCombinedStdoutStderr
             , testInterruptExecution 
+            , testFailIfAnythingShowsInStderr 
             , testBasicPipeline
             ]
 
@@ -111,6 +112,20 @@ interruptExecution :: IO (Either String (ExitCode,()))
 interruptExecution = executeFallibly
     (pipeo . siphon $ \_ -> runExceptT . throwE $ "interrupted")
     (shell "sleep 100s")
+
+-------------------------------------------------------------------------------
+
+testFailIfAnythingShowsInStderr :: TestTree
+testFailIfAnythingShowsInStderr = testCase "failIfAnythingShowsInStderr" $ do
+    r <- failIfAnythingShowsInStderr 
+    case r of
+        Left "morestuff\n" -> return ()
+        _ -> assertFailure "oops"
+
+failIfAnythingShowsInStderr :: IO (Either T.ByteString (ExitCode,()))
+failIfAnythingShowsInStderr = executeFallibly
+    (pipee (unexpected ()))
+    (shell "{ echo morestuff 1>&2 ; sleep 100s ; }")
 
 -------------------------------------------------------------------------------
 testBasicPipeline :: TestTree
