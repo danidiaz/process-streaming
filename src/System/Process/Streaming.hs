@@ -292,7 +292,9 @@ separated outfunc errfunc outprod errprod =
     conceit (buffer_ outfunc outprod) (buffer_ errfunc errprod)
 
 {-|
-   Defines how to decode a stream of bytes into text, manipulate each line of text, and handle leftovers.  
+   Defines how to decode a stream of bytes into text, including what to do
+   in presence of leftovers. Also defines how to manipulate each individual
+   line of text.  
  -}
 data LinePolicy e = LinePolicy ((FreeT (Producer T.Text IO) IO (Producer ByteString IO ()) -> IO (Producer ByteString IO ())) -> Producer ByteString IO () -> IO (Either e ()))
 
@@ -302,22 +304,22 @@ instance Functor LinePolicy where
 {-|
     Constructs a 'LinePolicy'.
 
-    The first argument is a function function that decodes 'ByteString' into
-'T.Text'. See the section /Decoding Functions/ in the documentation for the
-"Pipes.Text" module.  
+    The first argument is a function that decodes 'ByteString' into
+    'T.Text'. See the section /Decoding Functions/ in the documentation for
+    the "Pipes.Text" module.  
 
-    The second argument is a function that modifies each individual line. The
-line is represented as a 'Producer' to avoid having to keep it wholly in
-memory. If you want the lines unmodified, just pass @id@. Line prefixes are
-easy to add using applicative notation:
+    The second argument is a 'Siphon' value that specifies how to handle
+    decoding failures. Passing @pure ()@ will ignore any leftovers.
+
+    The third argument is a function that modifies each individual line.
+    The line is represented as a 'Producer' to avoid having to keep it
+    wholly in memory. If you want the lines unmodified, just pass @id@.
+    Line prefixes are easy to add using applicative notation:
 
   > (\x -> yield "prefix: " *> x)
 
-    The third argument is a 'LeftoverPolicy' value that specifies how to handle
-decoding failures. 
  -}
 
---linePolicy :: (forall r. Producer ByteString IO r -> Producer T.Text IO (Producer ByteString IO r)) 
 linePolicy :: DecodingFunction ByteString Text 
            ->  Siphon ByteString e ()
            -> (forall r. Producer T.Text IO r -> Producer T.Text IO r)
@@ -761,7 +763,7 @@ executePipelineFallibly policy pipeline = case policy of
 data Pipeline e = Pipeline (Stage e) (NonEmpty (SubsequentStage e)) deriving (Functor)
 
 {-|
-   A individual stage in a process pipeline. 
+   An individual stage in a process pipeline. 
    
    The 'LinePolicy' field defines how to handle @stderr@ when @stderr@ is
    piped. 
@@ -779,7 +781,7 @@ data Stage e = Stage
 
 
 {-|
-   A stage in a process pipeline which is not the first stage. 
+   Any stage in a process pipeline which is not the first stage. 
  -}
 data SubsequentStage e = SubsequentStage (FalliblePipe ByteString ByteString IO e) (Stage e) deriving (Functor)
 
