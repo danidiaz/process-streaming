@@ -43,6 +43,7 @@ tests = testGroup "Tests"
             , testInterruptExecution 
             , testFailIfAnythingShowsInStderr 
             , testTwoTextParsersInParallel  
+            , testCountWords 
             , testBasicPipeline
             ]
 
@@ -156,6 +157,21 @@ twoTextParsersInParallel = executeFallibly
         return $ case r of
             Just (Right r') -> Right r'
             _ -> Left "parse error"
+
+-------------------------------------------------------------------------------
+
+testCountWords :: TestTree
+testCountWords = testCase "testCountWords" $ do
+    r <- countWords 
+    case r of 
+        (ExitSuccess,3) -> return ()                   
+        _ -> assertFailure "oops"
+
+countWords :: IO (ExitCode,Int)
+countWords = execute
+    (pipeo (encoded T.decodeIso8859_1 (pure id) $
+                fromFold $ P.sum . G.folds const () (const 1) . view T.words))
+    (shell "{ echo aaa ; echo bbb ; echo ccc ; }")
 
 -------------------------------------------------------------------------------
 testBasicPipeline :: TestTree

@@ -453,8 +453,8 @@ buffer policy activity producer = do
         Right (leftovers,a) -> runSiphon (fmap ($a) policy) leftovers
 
 siphon :: (Show e, Typeable e)
-       => (Producer ByteString IO () -> IO (Either e a))
-       -> Siphon ByteString e a 
+       => (Producer b IO () -> IO (Either e a))
+       -> Siphon b e a 
 siphon = Siphon . buffer_
 
 buffer_ :: (Show e, Typeable e) 
