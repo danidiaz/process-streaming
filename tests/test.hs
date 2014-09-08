@@ -133,7 +133,7 @@ testFailIfAnythingShowsInStderr = localOption (mkTimeout $ 5*(10^6)) $
 
 failIfAnythingShowsInStderr :: IO (Either T.ByteString (ExitCode,()))
 failIfAnythingShowsInStderr = executeFallibly
-    (pipee (unexpected ()))
+    (pipee (unwanted ()))
     (shell "{ echo morestuff 1>&2 ; sleep 100s ; }")
 
 -------------------------------------------------------------------------------

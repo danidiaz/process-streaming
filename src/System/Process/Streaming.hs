@@ -45,14 +45,15 @@ module System.Process.Streaming (
         , fromSafeProducer
         , fromFallibleProducer
         -- * Siphoning bytes out of stdout/stderr
-        , Siphon (runSiphon)
+        , Siphon
         , siphon
+        , runSiphon
         , fromConsumer
         , fromSafeConsumer
         , fromFallibleConsumer
         , fromFold
         , fromParser
-        , unexpected
+        , unwanted
         , DecodingFunction
         , encoded
         -- * Line handling
@@ -152,7 +153,7 @@ executeInternal record somePrism allocator = mask $ \restore -> do
     (min,mout,merr,phandle) <- createProcess record
     case getFirst . getConst . somePrism (Const . First . Just) $ (min,mout,merr) of
         Nothing -> 
-            throwIO (userError "stdin/stdout/stderr handle unexpectedly null")
+            throwIO (userError "stdin/stdout/stderr handle unwantedly null")
             `finally`
             terminateCarefully phandle 
         Just t -> 
@@ -186,8 +187,19 @@ terminateOnError pHandle action = do
             exitCode <- waitForProcess pHandle 
             return $ Right (exitCode,r)  
 
--- Knows that there is a stdin, stdout and stderr,
--- But doesn't know anything about file handles of CreateProcess
+{-|
+    A 'PipingPolicy' determines what standard streams will be piped and what to
+do with them.
+
+    The user doesn't need to manually set the 'std_in', 'std_out' and 'std_err'
+fields of the 'CreateProcess' record to 'CreatePipe', this is done
+automatically. 
+
+    A 'PipingPolicy' is parametrized by the type @e@ of errors that can abort
+the processing of the streams.
+ -}
+-- Knows that there is a stdin, stdout and a stderr,
+-- but doesn't know anything about file handlers or CreateProcess.
 data PipingPolicy e a = 
       PPNone a
     | PPOutput (Producer ByteString IO () -> IO (Either e a))
@@ -216,42 +228,56 @@ instance Bifunctor PipingPolicy where
 nopiping :: PipingPolicy e ()
 nopiping = PPNone ()
 
+{-|
+    Pipe @stdout@.
+-}
 pipeo :: (Show e,Typeable e) => Siphon ByteString e a -> PipingPolicy e a
 pipeo (Siphon siphonout) = PPOutput $ siphonout
 
+{-|
+    Pipe @stderr@.
+-}
 pipee :: (Show e,Typeable e) => Siphon ByteString e a -> PipingPolicy e a
 pipee (Siphon siphonout) = PPError $ siphonout
 
 {-|
-    Pipe stderr and stdout.
-
-    See also the 'separated' and 'combined' functions.
+    Pipe @stdout@ and @stderr@.
 -}
 pipeoe :: (Show e,Typeable e) => Siphon ByteString e a -> Siphon ByteString e b -> PipingPolicy e (a,b)
 pipeoe (Siphon siphonout) (Siphon siphonerr) = 
     PPOutputError $ uncurry $ separated siphonout siphonerr  
 
+{-|
+    Pipe @stdout@ and @stderr@ and consume them combined as 'Text'.  
+-}
 pipeoec :: (Show e,Typeable e) => LinePolicy e -> LinePolicy e -> Siphon Text e a -> PipingPolicy e a
 pipeoec policy1 policy2 (Siphon siphon) = 
     PPOutputError $ uncurry $ combined policy1 policy2 siphon  
 
+{-|
+    Pipe @stdin@.
+-}
 pipei :: (Show e, Typeable e) => Pump ByteString e i -> PipingPolicy e i
 pipei (Pump feeder) = PPInput $ \(consumer,cleanup) -> feeder consumer `finally` cleanup
 
+{-|
+    Pipe @stdin@ and @stdout@.
+-}
 pipeio :: (Show e, Typeable e)
         => Pump ByteString e i -> Siphon ByteString e a -> PipingPolicy e (i,a)
 pipeio (Pump feeder) (Siphon siphonout) = PPInputOutput $ \(consumer,cleanup,producer) ->
         (conceit (feeder consumer `finally` cleanup) (siphonout producer))
 
+{-|
+    Pipe @stdin@ and @stderr@.
+-}
 pipeie :: (Show e, Typeable e)
         => Pump ByteString e i -> Siphon ByteString e a -> PipingPolicy e (i,a)
 pipeie (Pump feeder) (Siphon siphonerr) = PPInputError $ \(consumer,cleanup,producer) ->
         (conceit (feeder consumer `finally` cleanup) (siphonerr producer))
 
 {-|
-    Pipe stdin, stderr and stdout.
-
-    See also the 'separated' and 'combined' functions.
+    Pipe @stdin@, @stdout@ and @stderr@.
 -}
 pipeioe :: (Show e, Typeable e)
         => Pump ByteString e i -> Siphon ByteString e a -> Siphon ByteString e b -> PipingPolicy e (i,a,b)
@@ -262,6 +288,9 @@ pipeioe (Pump feeder) (Siphon siphonout) (Siphon siphonerr) = fmap flattenTuple 
     where
         flattenTuple (i, (a, b)) = (i,a,b)
 
+{-|
+    Pipe @stdin@, @stdout@ and @stderr@, consuming the last two combined as 'Text'.
+-}
 pipeioec :: (Show e, Typeable e)
         => Pump ByteString e i -> LinePolicy e -> LinePolicy e -> Siphon Text e a -> PipingPolicy e (i,a)
 pipeioec (Pump feeder) policy1 policy2 (Siphon siphon) = PPInputOutputError $
@@ -303,7 +332,7 @@ instance Functor LinePolicy where
 
     The second argument is a 'Siphon' value that specifies how to handle
 decoding failures. Passing @pure ()@ will ignore any leftovers. Passing
-@unexpected ()@ will abort the computation if leftovers remain.
+@unwanted ()@ will abort the computation if leftovers remain.
 
     The third argument is a function that modifies each individual line.
     The line is represented as a 'Producer' to avoid having to keep it
@@ -314,8 +343,9 @@ decoding failures. Passing @pure ()@ will ignore any leftovers. Passing
 
  -}
 
-linePolicy :: DecodingFunction ByteString Text 
-           ->  Siphon ByteString e ()
+linePolicy :: (Show e, Typeable e)
+           => DecodingFunction ByteString Text 
+           -> Siphon ByteString e ()
            -> (forall r. Producer T.Text IO r -> Producer T.Text IO r)
            ->  LinePolicy e 
 linePolicy decoder lopo transform = LinePolicy $ \teardown producer -> do
@@ -381,12 +411,6 @@ errorSiphonUTF8 mvar (LinePolicy fun) = Siphon $ fun iterTLines
                         >->  P.map Data.Text.Encoding.encodeUtf8 
                         >-> (toOutput output >> P.drain)
 
-{-|
-    Useful for constructing @stdout@ or @stderr@ consuming functions from a
-'Consumer', to be plugged into 'separated' or 'combined'.
-
-    You may need to use 'surely' for the types to fit.
- -}
 fromConsumer :: (Show e, Typeable e) => Consumer b IO () -> Siphon b e ()
 fromConsumer consumer = siphon $ \producer -> fmap pure $ runEffect $ producer >-> consumer 
 
@@ -402,11 +426,6 @@ fromFold aFold = siphon $ fmap (fmap pure) $ aFold
 fromParser :: (Show e, Typeable e) => Parser b IO (Either e a) -> Siphon b e a 
 fromParser parser = siphon $ Pipes.Parse.evalStateT parser 
 
-{-|
-    Useful for constructing @stdin@ feeding functions from a 'Producer'.
-
-    You may need to use 'surely' for the types to fit.
- -}
 fromProducer :: Producer b IO () -> Pump b e ()
 fromProducer producer = Pump $ \consumer -> fmap pure $ runEffect (producer >-> consumer) 
 
@@ -415,16 +434,6 @@ fromSafeProducer producer = Pump $ safely $ \consumer -> fmap pure $ runEffect (
 
 fromFallibleProducer :: Producer b (ExceptT e IO) () -> Pump b e ()
 fromFallibleProducer producer = Pump $ \consumer -> runExceptT $ runEffect (producer >-> hoist lift consumer) 
-
-{-| 
-  Useful when we want to plug in a handler that doesn't return an 'Either'. For
-example folds from "Pipes.Prelude", or functions created from simple
-'Consumer's with 'fromConsumer'. 
-
-  > surely = fmap (fmap Right)
- -}
-surely :: (Functor f0, Functor f1) => f0 (f1 a) -> f0 (f1 (Either e a))
-surely = fmap (fmap Right)
 
 {-| 
   Useful when we want to plug in a handler that does its work in the 'SafeT'
@@ -451,10 +460,14 @@ buffer policy activity producer = do
         Left e -> return $ Left e
         Right (leftovers,a) -> runSiphon (fmap ($a) policy) leftovers
 
+runSiphon :: (Show e, Typeable e)
+          => Siphon b e a 
+          -> (Producer b IO () -> IO (Either e a))
+runSiphon (Siphon s) = s
 
 {-| 
    Builds a 'Siphon' out of a computation that does something with
-   a 'Producer' and may suddenly fail witn an error of type @e@.
+   a 'Producer' and may suddenly fail with an error of type @e@.
    
    Even if the original computation doesn't completely drain the 'Producer',
    the constructed 'Siphon' will.
@@ -489,7 +502,7 @@ works on decoded values.
    
     The two first arguments are a decoding function and a 'Siphon' that
 determines how to handle leftovers. Pass @pure id@ to ignore leftovers. Pass
-@unexpected id@ to abort the computation if leftovers remain.
+@unwanted id@ to abort the computation if leftovers remain.
  -}
 encoded :: (Show e, Typeable e) 
         => DecodingFunction bytes text
@@ -593,7 +606,7 @@ instance (Show e, Typeable e, Monoid a) => Monoid (Pump b e a) where
     '<*>' executes its arguments concurrently. The 'Producer' is forked so
     that each argument receives its own copy of the data.
  -}
-newtype Siphon b e a = Siphon { runSiphon :: Producer b IO () -> IO (Either e a) }
+newtype Siphon b e a = Siphon (Producer b IO () -> IO (Either e a))
 
 instance Functor (Siphon b e) where
   fmap f (Siphon x) = Siphon $ fmap (fmap (fmap f)) x
@@ -629,8 +642,12 @@ instance (Show e, Typeable e, Monoid a) => Monoid (Siphon b e a) where
    mempty = Siphon . pure . pure . pure $ mempty
    mappend s1 s2 = (<>) <$> s1 <*> s2
 
-unexpected :: (Show b, Typeable b) => a -> Siphon b b a
-unexpected a = siphon $ \producer -> do
+{-|
+  Constructs a 'Siphon' that aborts the computation if the underlying
+'Producer' produces anything.
+ -}
+unwanted :: (Show b, Typeable b) => a -> Siphon b b a
+unwanted a = siphon $ \producer -> do
     r <- next producer  
     return $ case r of 
         Left () -> Right a
