@@ -53,9 +53,9 @@ module System.Process.Streaming (
         , fromFold
         , fromParser
         , unexpected
+        , DecodingFunction
         , encoded
         -- * Line handling
-        , DecodingFunction
         , LinePolicy
         , linePolicy
         -- * Pipelines
@@ -301,12 +301,9 @@ instance Functor LinePolicy where
 {-|
     Constructs a 'LinePolicy'.
 
-    The first argument is a function that decodes 'ByteString' into
-    'T.Text'. See the section /Decoding Functions/ in the documentation for
-    the "Pipes.Text" module.  
-
     The second argument is a 'Siphon' value that specifies how to handle
-    decoding failures. Passing @pure ()@ will ignore any leftovers.
+decoding failures. Passing @pure ()@ will ignore any leftovers. Passing
+@unexpected ()@ will abort the computation if leftovers remain.
 
     The third argument is a function that modifies each individual line.
     The line is represented as a 'Producer' to avoid having to keep it
@@ -480,17 +477,22 @@ buffer_ activity producer = do
         *>
         Conceit (activity (fromInput inbox) `finally` atomically seal)
 
+{-|
+    See the section /Non-lens decoding functions/ in the documentation for the
+@pipes-text@ package.  
+-}
 type DecodingFunction bytes text = forall r. Producer bytes IO r -> Producer text IO (Producer bytes IO r)
 
 {-|
-   Adapts a function that works with 'Producer's of decoded values so that it
-works with 'Producer's of still undecoded values, by supplying a decoding
-function and a 'LeftoverPolicy'.
+    Constructs a 'Siphon' that works on undecoded values out of a 'Siphon' that
+works on decoded values. 
+   
+    The two first arguments are a decoding function and a 'Siphon' that
+determines how to handle leftovers. Pass @pure id@ to ignore leftovers. Pass
+@unexpected id@ to abort the computation if leftovers remain.
  -}
 encoded :: (Show e, Typeable e) 
-        -- => (Producer bytes IO () -> Producer text IO (Producer bytes IO ()))
         => DecodingFunction bytes text
-        -- => (forall r. Producer bytes IO r -> Producer text IO (Producer bytes IO r))
         -> Siphon bytes e (a -> b)
         -> Siphon text  e a 
         -> Siphon bytes e b
@@ -787,7 +789,7 @@ data Stage e = Stage
 
 
 {-|
-   Any stage in a process pipeline which is not the first stage. 
+   Any stage beyond the first in a process pipeline. 
  -}
 data SubsequentStage e = SubsequentStage (FalliblePipe ByteString ByteString IO e) (Stage e) deriving (Functor)
 
