@@ -6,15 +6,13 @@ Exploring how to interact with system processes using a streaming library
 
 The basic goals:
 
-- Concurrent, buffered, streaming access to stdin, stdout and stderr.
+- Concurrent, streaming access to stdin, stdout and stderr.
 
-- Easy integration with parsers pipes-parse package and folds from
-  Pipes.Prelude.
+- Easy integration with regular consumers, parsers from pipes-parse and various
+  folds.
 
-- Avoid launching exceptions: use Either or similar solution to signal error
-  conditions.
-
-- Avoid deadlock scenarios caused by full output buffers.
+- Avoid launching exceptions: use Either or similar solution to signal non-IO
+  related error conditions.
 
 Relevant thread in the Haskell Pipes Google Group:
 

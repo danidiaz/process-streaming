@@ -6,9 +6,6 @@
 -- They provide concurrent, streaming access to the inputs and outputs of
 -- system processes.
 --
--- Whenever @stdout@ and/or @stderr@ are piped, they are always drained to
--- completion, to avoid a potential source of deadlocks.
---
 -- Error conditions that are not directly related to IO are made explicit
 -- in the types.
 --
@@ -457,6 +454,14 @@ buffer policy activity producer = do
         Left e -> return $ Left e
         Right (leftovers,a) -> runSiphon (fmap ($a) policy) leftovers
 
+
+{-| 
+   Builds a 'Siphon' out of a computation that does something with
+   a 'Producer' and may suddenly fail witn an error of type @e@.
+   
+   Even if the original computation doesn't completely drain the 'Producer',
+   the constructed 'Siphon' will.
+-}
 siphon :: (Show e, Typeable e)
        => (Producer b IO () -> IO (Either e a))
        -> Siphon b e a 
@@ -839,12 +844,12 @@ verySimplePipeline decoder initial middle end =
     simpleErrorPolicy = Just . ("Exit failure: " ++) . show
 
 executePipelineInternal :: (Show e,Typeable e) 
-                           => (Siphon ByteString e () -> LinePolicy e -> PipingPolicy e ())
-                           -> (Pump ByteString e () -> Siphon ByteString e () -> LinePolicy e -> PipingPolicy e ())
-                           -> (Pump ByteString e () -> LinePolicy e -> PipingPolicy e ())
-                           -> (Pump ByteString e () -> LinePolicy e -> PipingPolicy e ())
-                           -> BranchingPipeline e 
-                           -> IO (Either e ())
+                        => (Siphon ByteString e () -> LinePolicy e -> PipingPolicy e ())
+                        -> (Pump ByteString e () -> Siphon ByteString e () -> LinePolicy e -> PipingPolicy e ())
+                        -> (Pump ByteString e () -> LinePolicy e -> PipingPolicy e ())
+                        -> (Pump ByteString e () -> LinePolicy e -> PipingPolicy e ())
+                        -> BranchingPipeline e 
+                        -> IO (Either e ())
 executePipelineInternal ppinitial ppmiddle ppend ppend' (BranchingPipeline (Stage cp lpol ecpol) a) =      
     blende ecpol <$> executeFallibly (ppinitial (runArborescent ppmiddle ppend ppend' a) lpol) cp
   where 
