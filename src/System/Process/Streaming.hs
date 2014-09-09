@@ -63,10 +63,12 @@ module System.Process.Streaming (
         , executePipeline
         , executePipelineFallibly
         -- , fromPipeline 
-        , simplePipeline 
-        , verySimplePipeline 
-        , BranchingPipeline (..)
-        , PipelineForest (..)
+--        , simplePipeline 
+--        , verySimplePipeline 
+--        , BranchingPipeline (..)
+--        , PipelineForest (..)
+        , CreatePipeline (..)
+        , simplePipeline
         , Stage (..)
         , SubsequentStage ()
         , subsequent
@@ -83,6 +85,7 @@ import Data.Monoid
 import Data.Foldable
 import Data.Traversable
 import Data.Typeable
+import Data.Tree
 import Data.Text 
 import Data.Text.Encoding 
 import Data.Void
@@ -653,7 +656,7 @@ unwanted a = siphon $ \producer -> do
         Left () -> Right a
         Right (b,_) -> Left b
 
-executePipeline :: PipingPolicy Void a -> BranchingPipeline Void -> IO a 
+executePipeline :: PipingPolicy Void a -> CreatePipeline Void -> IO a 
 executePipeline pp pipeline = either absurd id <$> executePipelineFallibly pp pipeline
 
 
@@ -674,7 +677,7 @@ executePipeline pp pipeline = either absurd id <$> executePipelineFallibly pp pi
     processes are not notified and keep going. There is no SIGPIPE-like
     functionality, in other words. 
  -}
-executePipelineFallibly :: (Show e,Typeable e) => PipingPolicy e a -> BranchingPipeline e -> IO (Either e a)
+executePipelineFallibly :: (Show e,Typeable e) => PipingPolicy e a -> CreatePipeline e -> IO (Either e a)
 executePipelineFallibly policy pipeline = case policy of 
       PPNone a -> fmap (fmap (const a)) $
            executePipelineInternal 
@@ -785,7 +788,7 @@ executePipelineFallibly policy pipeline = case policy of
     where mute = fmap (const ())
 
 
-data Pipeline e = Pipeline (Stage e) (NonEmpty (SubsequentStage e)) deriving (Functor)
+-- data Pipeline e = Pipeline (Stage e) (NonEmpty (SubsequentStage e)) deriving (Functor)
 
 {-|
    An individual stage in a process pipeline. 
@@ -825,26 +828,26 @@ instance (Monad m) => Functor (FalliblePipe b b' m) where
 subsequent :: (forall a.Pipe ByteString ByteString (ExceptT e IO) a) -> Stage e -> SubsequentStage e
 subsequent fp s = SubsequentStage (FalliblePipe fp) s 
 
-data BranchingPipeline e =  BranchingPipeline (Stage e) (PipelineForest e) deriving (Functor)
+data CreatePipeline e =  CreatePipeline (Stage e) (NonEmpty (Tree (SubsequentStage e))) deriving (Functor)
 
-data PipelineForest e =
-        ParallelStages (NonEmpty (SubsequentStage e, PipelineForest e))
-      | TerminalStage (SubsequentStage e)
-      deriving (Functor)
+--data PipelineForest e =
+--        ParallelStages (NonEmpty (SubsequentStage e, PipelineForest e))
+--      | TerminalStage (SubsequentStage e)
+--      deriving (Functor)
 
-fromPipeline :: Pipeline e -> BranchingPipeline e
-fromPipeline (Pipeline root (liftA2 (,) N.init N.last -> (stages, finalStage))) = 
-    (BranchingPipeline root arborescent)
-        where arborescent = Data.Foldable.foldr (curry $ ParallelStages . pure) (TerminalStage finalStage) stages
+-- fromPipeline :: Pipeline e -> BranchingPipeline e
+-- fromPipeline (Pipeline root (liftA2 (,) N.init N.last -> (stages, finalStage))) = 
+--     (BranchingPipeline root arborescent)
+--         where arborescent = Data.Foldable.foldr (curry $ ParallelStages . pure) (TerminalStage finalStage) stages
 
 
 {-|
     Build a linear pipeline out of an initial 'Stage', a list of
     intermediate 'SubsequentStage's, and a terminal 'SubsequentStage'.
 -}
-simplePipeline :: Stage e -> [SubsequentStage e] -> SubsequentStage e -> BranchingPipeline e 
-simplePipeline initial middle terminal = BranchingPipeline initial $   
-   Prelude.foldr (\s1 s2 -> ParallelStages . pure $ (s1,s2)) (TerminalStage terminal) middle
+-- simplePipeline :: Stage e -> [SubsequentStage e] -> SubsequentStage e -> BranchingPipeline e 
+-- simplePipeline initial middle terminal = BranchingPipeline initial $   
+--    Prelude.foldr (\s1 s2 -> ParallelStages . pure $ (s1,s2)) (TerminalStage terminal) middle
 
 {-|
     Build a linear pipeline out of an initial process, a list of
@@ -853,33 +856,42 @@ simplePipeline initial middle terminal = BranchingPipeline initial $
     The @stderr@ streams of all the processes in the pipeline are assumed
     to have the encoding specified by the 'DecodingFunction' parameter.
 -}
-verySimplePipeline :: DecodingFunction ByteString Text -> CreateProcess -> [CreateProcess] -> CreateProcess -> BranchingPipeline String 
-verySimplePipeline decoder initial middle end = 
-    simplePipeline (simpleStage initial) (Prelude.map simpleSubsequentStage middle) (simpleSubsequentStage end) 
-  where
-    simpleStage cp = Stage cp simpleLinePolicy simpleErrorPolicy
-    simpleSubsequentStage = SubsequentStage (FalliblePipe P.cat) . simpleStage
-    simpleLinePolicy = linePolicy decoder (pure ()) id
-    simpleErrorPolicy = Just . ("Exit failure: " ++) . show
+-- verySimplePipeline :: DecodingFunction ByteString Text -> CreateProcess -> [CreateProcess] -> CreateProcess -> BranchingPipeline String 
+-- verySimplePipeline decoder initial middle end = 
+--     simplePipeline (simpleStage initial) (Prelude.map simpleSubsequentStage middle) (simpleSubsequentStage end) 
+--   where
+--     simpleStage cp = Stage cp simpleLinePolicy simpleErrorPolicy
+--     simpleSubsequentStage = SubsequentStage (FalliblePipe P.cat) . simpleStage
+--     simpleLinePolicy = linePolicy decoder (pure ()) id
+--     simpleErrorPolicy = Just . ("Exit failure: " ++) . show
+
+simplePipeline :: DecodingFunction ByteString Text -> CreateProcess -> NonEmpty (Tree (CreateProcess)) -> CreatePipeline String 
+simplePipeline decoder initial forest = CreatePipeline (simpleStage initial) (fmap (fmap simpleSubsequentStage) forest)   
+  where 
+     simpleStage cp = Stage cp simpleLinePolicy simpleErrorPolicy
+     simpleSubsequentStage = SubsequentStage (FalliblePipe P.cat) . simpleStage
+     simpleLinePolicy = linePolicy decoder (pure ()) id
+     simpleErrorPolicy = Just . ("Exit failure: " ++) . show
 
 executePipelineInternal :: (Show e,Typeable e) 
                         => (Siphon ByteString e () -> LinePolicy e -> PipingPolicy e ())
                         -> (Pump ByteString e () -> Siphon ByteString e () -> LinePolicy e -> PipingPolicy e ())
                         -> (Pump ByteString e () -> LinePolicy e -> PipingPolicy e ())
                         -> (Pump ByteString e () -> LinePolicy e -> PipingPolicy e ())
-                        -> BranchingPipeline e 
+                        -> CreatePipeline e 
                         -> IO (Either e ())
-executePipelineInternal ppinitial ppmiddle ppend ppend' (BranchingPipeline (Stage cp lpol ecpol) a) =      
-    blende ecpol <$> executeFallibly (ppinitial (runArborescent ppmiddle ppend ppend' a) lpol) cp
+executePipelineInternal ppinitial ppmiddle ppend ppend' (CreatePipeline (Stage cp lpol ecpol) a) =      
+    blende ecpol <$> executeFallibly (ppinitial (runNonEmpty ppend ppend' a) lpol) cp
   where 
-    runArborescent ppmiddle ppend ppend' a = case a of
-        ParallelStages (b :| bs) -> single ppend ppend' b <* Prelude.foldr (<*) (pure ()) (single ppend' ppend' <$> bs) 
-        TerminalStage (SubsequentStage (FalliblePipe pipe) (Stage cp lpol ecpol)) -> Siphon $ \producer ->
+    runTree ppend ppend' (Node (SubsequentStage (FalliblePipe pipe) (Stage cp lpol ecpol)) forest) = case forest of
+        [] -> Siphon $ \producer ->
             blende ecpol <$> executeFallibly (ppend (fromFallibleProducer $ hoist lift producer >-> pipe) lpol) cp
+        c1 : cs -> Siphon $ \producer ->
+           blende ecpol <$> executeFallibly (ppmiddle (fromFallibleProducer $ hoist lift producer >-> pipe) (runNonEmpty ppend ppend' (c1 :| cs)) lpol) cp
 
-    single ppend ppend' (SubsequentStage (FalliblePipe pipe) (Stage cp lpol ecpol), a) = Siphon $ \producer ->
-         blende ecpol <$> executeFallibly (ppmiddle (fromFallibleProducer $ hoist lift producer >-> pipe) (runArborescent ppmiddle ppend ppend' a) lpol) cp
-
+    runNonEmpty ppend ppend' (b :| bs) = 
+        runTree ppend ppend' b <* Prelude.foldr (<*) (pure ()) (runTree ppend' ppend' <$> bs) 
+    
     blende :: (Int -> Maybe e) -> Either e (ExitCode,()) -> Either e ()
     blende f (Right (ExitFailure i,())) = case f i of
         Nothing -> Right ()
