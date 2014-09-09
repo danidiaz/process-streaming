@@ -446,21 +446,6 @@ safely :: (MFunctor t, C.MonadMask m, MonadIO m)
        ->  t m         l -> m         x 
 safely activity = runSafeT . activity . hoist lift 
 
-buffer :: (Show e, Typeable e)
-       =>  Siphon bytes e (a -> b)
-       ->  Siphon text e a
-       ->  Producer text  IO (Producer bytes IO ()) -> IO (Either e b)
-buffer policy activity producer = do
-    (outbox,inbox,seal) <- spawn' Single
-    r <- conceit 
-              (do feeding <- async $ runEffect $ 
-                        producer >-> (toOutput outbox >> P.drain)
-                  Right <$> wait feeding `finally` atomically seal
-              )
-              (runSiphon activity (fromInput inbox) `finally` atomically seal)
-    case r of 
-        Left e -> return $ Left e
-        Right (leftovers,a) -> runSiphon (fmap ($a) policy) leftovers
 
 runSiphon :: (Show e, Typeable e)
           => Siphon b e a 
@@ -512,7 +497,22 @@ encoded :: (Show e, Typeable e)
         -> Siphon text  e a 
         -> Siphon bytes e b
 encoded decoder policy activity = Siphon $ \producer -> buffer policy activity $ decoder producer 
-
+  where
+    buffer :: (Show e, Typeable e)
+           =>  Siphon bytes e (a -> b)
+           ->  Siphon text e a
+           ->  Producer text  IO (Producer bytes IO ()) -> IO (Either e b)
+    buffer policy activity producer = do
+        (outbox,inbox,seal) <- spawn' Single
+        r <- conceit 
+                  (do feeding <- async $ runEffect $ 
+                            producer >-> (toOutput outbox >> P.drain)
+                      Right <$> wait feeding `finally` atomically seal
+                  )
+                  (runSiphon activity (fromInput inbox) `finally` atomically seal)
+        case r of 
+            Left e -> return $ Left e
+            Right (leftovers,a) -> runSiphon (fmap ($a) policy) leftovers
 
 data WrappedError e = WrappedError e
     deriving (Show, Typeable)
