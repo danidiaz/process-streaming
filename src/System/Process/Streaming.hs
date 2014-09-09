@@ -70,8 +70,7 @@ module System.Process.Streaming (
         , CreatePipeline (..)
         , simplePipeline
         , Stage (..)
-        , SubsequentStage ()
-        , subsequent
+        , SubsequentStage (..)
         -- * Re-exports
         -- $reexports
         , module System.Process
@@ -811,12 +810,10 @@ data Stage e = Stage
 {-|
    Any stage beyond the first in a process pipeline. 
  -}
-data SubsequentStage e = SubsequentStage (FalliblePipe ByteString ByteString IO e) (Stage e) deriving (Functor)
+data SubsequentStage e = SubsequentStage (forall a.Pipe ByteString ByteString (ExceptT e IO) a) (Stage e) 
 
-data FalliblePipe b b' m e = FalliblePipe (forall a.Pipe b b' (ExceptT e m) a)
-
-instance (Monad m) => Functor (FalliblePipe b b' m) where
-    fmap f (FalliblePipe bs) = FalliblePipe $ hoist (mapExceptT $ liftM (bimap f id)) bs
+instance Functor (SubsequentStage) where
+    fmap f (SubsequentStage bs s) = SubsequentStage (hoist (mapExceptT $ liftM (bimap f id)) bs) (fmap f s)
 
 {-|
    Builds a 'SubsequentStage' from a 'Stage' by prepending a 'Pipe' that is
@@ -825,8 +822,8 @@ instance (Monad m) => Functor (FalliblePipe b b' m) where
    Pass 'cat' (the identity 'Pipe' from 'Pipes') as argument if no
    pre-processing is required.
  -}
-subsequent :: (forall a.Pipe ByteString ByteString (ExceptT e IO) a) -> Stage e -> SubsequentStage e
-subsequent fp s = SubsequentStage (FalliblePipe fp) s 
+-- subsequent :: (forall a.Pipe ByteString ByteString (ExceptT e IO) a) -> Stage e -> SubsequentStage e
+-- subsequent fp s = SubsequentStage (FalliblePipe fp) s 
 
 data CreatePipeline e =  CreatePipeline (Stage e) (NonEmpty (Tree (SubsequentStage e))) deriving (Functor)
 
@@ -869,7 +866,7 @@ simplePipeline :: DecodingFunction ByteString Text -> CreateProcess -> NonEmpty 
 simplePipeline decoder initial forest = CreatePipeline (simpleStage initial) (fmap (fmap simpleSubsequentStage) forest)   
   where 
      simpleStage cp = Stage cp simpleLinePolicy simpleErrorPolicy
-     simpleSubsequentStage = SubsequentStage (FalliblePipe P.cat) . simpleStage
+     simpleSubsequentStage = SubsequentStage P.cat . simpleStage
      simpleLinePolicy = linePolicy decoder (pure ()) id
      simpleErrorPolicy = Just . ("Exit failure: " ++) . show
 
@@ -883,7 +880,7 @@ executePipelineInternal :: (Show e,Typeable e)
 executePipelineInternal ppinitial ppmiddle ppend ppend' (CreatePipeline (Stage cp lpol ecpol) a) =      
     blende ecpol <$> executeFallibly (ppinitial (runNonEmpty ppend ppend' a) lpol) cp
   where 
-    runTree ppend ppend' (Node (SubsequentStage (FalliblePipe pipe) (Stage cp lpol ecpol)) forest) = case forest of
+    runTree ppend ppend' (Node (SubsequentStage pipe (Stage cp lpol ecpol)) forest) = case forest of
         [] -> Siphon $ \producer ->
             blende ecpol <$> executeFallibly (ppend (fromFallibleProducer $ hoist lift producer >-> pipe) lpol) cp
         c1 : cs -> Siphon $ \producer ->
