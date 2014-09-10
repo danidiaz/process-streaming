@@ -64,11 +64,6 @@ module System.Process.Streaming (
         -- * Pipelines
         , executePipeline
         , executePipelineFallibly
-        -- , fromPipeline 
---        , simplePipeline 
---        , verySimplePipeline 
---        , BranchingPipeline (..)
---        , PipelineForest (..)
         , CreatePipeline (..)
         , simplePipeline
         , Stage (..)
@@ -302,18 +297,6 @@ pipeioec (Pump feeder) policy1 policy2 (runSiphon -> siphon) = PPInputOutputErro
              (conceit (feeder consumer `finally` cleanup) 
                       (combined policy1 policy2 siphon outprod errprod))
 
-{-|
-    'separate' should be used when we want to consume @stdout@ and @stderr@
-concurrently and independently. It constructs a function that can be plugged
-into functions like 'pipeoe'. 
-
-    If the consuming functions return with @a@ and @b@, the corresponding
-streams keep being drained until the end. The combined value is not returned
-until both @stdout@ and @stderr@ are closed by the external process.
-
-   However, if any of the consuming functions fails with @e@, the whole
-computation fails immediately with @e@.
-  -}
 separated :: (Show e, Typeable e)
           => (Producer ByteString IO () -> IO (Either e a))
           -> (Producer ByteString IO () -> IO (Either e b))
@@ -360,26 +343,7 @@ linePolicy decoder lopo transform = LinePolicy $ \teardown producer -> do
         viewLines = getConst . T.lines Const
     teardown freeLines >>= runSiphon lopo
 
-{-|
-    The bytes from @stdout@ and @stderr@ are decoded into 'Text', splitted into
-lines (maybe applying some transformation to each line) and then combined and
-consumed by the function passed as argument.
-
-    For both @stdout@ and @stderr@, a 'LinePolicy' must be supplied.
-
-    Like with 'separated', the streams are drained to completion if no errors
-happen, but the computation is aborted immediately if any error @e@ is
-returned. 
-
-    'combined' returns a function that can be plugged into funtions like 'pipeioe'.
-
-    /Beware!/ 'combined' avoids situations in which a line emitted
-in @stderr@ cuts a long line emitted in @stdout@, see
-<http://unix.stackexchange.com/questions/114182/can-redirecting-stdout-and-stderr-to-the-same-file-mangle-lines here> for a description of the problem.  To avoid this, the combined text
-stream is locked while writing each individual line. But this means that if the
-external program stops writing to a handle /while in the middle of a line/,
-lines coming from the other handles won't get printed, either!
- -}
+-- http://unix.stackexchange.com/questions/114182/can-redirecting-stdout-and-stderr-to-the-same-file-mangle-lines here
 combined :: (Show e, Typeable e) 
          => LinePolicy e 
          -> LinePolicy e 
@@ -405,16 +369,6 @@ combined (LinePolicy fun1) (LinePolicy fun2) combinedConsumer prod1 prod2 =
             join $ withMVar mvar $ \output -> do
                 runEffect $ (textProducer <* P.yield (singleton '\n')) >-> (toOutput output >> P.drain)
 
-errorSiphonUTF8 :: MVar (Output ByteString) -> LinePolicy e -> Siphon ByteString e ()
-errorSiphonUTF8 mvar (LinePolicy fun) = Halting $ fun iterTLines 
-  where     
-    iterTLines = iterT $ \textProducer -> do
-        -- the P.drain bit was difficult to figure out!!!
-        join $ withMVar mvar $ \output -> do
-            runEffect $     (textProducer <* P.yield (singleton '\n')) 
-                        >->  P.map Data.Text.Encoding.encodeUtf8 
-                        >-> (toOutput output >> P.drain)
-
 fromProducer :: Producer b IO () -> Pump b e ()
 fromProducer producer = Pump $ \consumer -> fmap pure $ runEffect (producer >-> consumer) 
 
@@ -432,8 +386,6 @@ safely :: (MFunctor t, C.MonadMask m, MonadIO m)
        => (t (SafeT m) l -> (SafeT m) x) 
        ->  t m         l -> m         x 
 safely activity = runSafeT . activity . hoist lift 
-
-
 
 {-|
     See the section /Non-lens decoding functions/ in the documentation for the
@@ -557,27 +509,20 @@ instance (Show e, Typeable e, Monoid a) => Monoid (Pump b e a) where
    mappend s1 s2 = (<>) <$> s1 <*> s2
 
 {-| 
-    A 'Siphon' represents a computation that either completely drains a
-    producer, or fails early with an error of type @e@. 
+    A 'Siphon' represents a computation that completely drains a producer, but
+may fail early with an error of type @e@. 
 
-    'pure' creates a 'Siphon' that drains a 'Producer' and returns the
-    value passed as parameter. 
+    'pure' creates a 'Siphon' that does nothing besides draining the
+'Producer'. 
 
     '<*>' executes its arguments concurrently. The 'Producer' is forked so
     that each argument receives its own copy of the data.
  -}
--- newtype Siphon b e a = Siphon (Producer b IO () -> IO (Either e a))
 data Siphon b e a = 
          Trivial a 
        | Unhalting (forall r. Producer b IO r -> IO (Either e (a,r)))
        | Halting (Producer b IO () -> IO (Either e a))
        deriving (Functor)
-
---instance Functor (Siphon b e) where
---  fmap f s = case s of
---      Trivial a -> Trivial $ f a
---      Unhalting u -> Unhalting $ fmap (fmap (fmap (\(t1,t2) -> (f t1, t2)))) u
---      Halting h -> Halting $ fmap (fmap (fmap f)) h
 
 instance Bifunctor (Siphon b) where
   bimap f g s = case s of
@@ -637,6 +582,9 @@ fromSafeConsumer consumer = siphon $ safely $ \producer -> fmap pure $ runEffect
 fromFallibleConsumer :: (Show e, Typeable e) => Consumer b (ExceptT e IO) () -> Siphon b e ()
 fromFallibleConsumer consumer = siphon $ \producer -> runExceptT $ runEffect (hoist lift producer >-> consumer) 
 
+{-| 
+  Turn a 'Parser' from @pipes-parse@ into a 'Sihpon'.
+ -}
 fromParser :: (Show e, Typeable e) => Parser b IO (Either e a) -> Siphon b e a 
 fromParser parser = siphon $ Pipes.Parse.evalStateT parser 
 
@@ -650,7 +598,7 @@ runSiphon s = case s of
 
 {-| 
    Builds a 'Siphon' out of a computation that does something with
-   a 'Producer' and may suddenly fail with an error of type @e@.
+   a 'Producer', but may fail with an error of type @e@.
    
    Even if the original computation doesn't completely drain the 'Producer',
    the constructed 'Siphon' will.
@@ -659,6 +607,11 @@ siphon :: (Producer b IO () -> IO (Either e a))
        -> Siphon b e a 
 siphon = Halting
 
+
+{-| 
+   Builds a 'Siphon' out of a computation that drains a 'Producer' completely,
+but may fail with an error of type @e@.
+-}
 siphon' :: (forall r. Producer b IO r -> IO (Either e (a,r))) -> Siphon b e a 
 siphon' = Unhalting
 
@@ -678,6 +631,9 @@ buffer_ activity producer = do
 fromFold :: (Producer b IO () -> IO a) -> Siphon b e a 
 fromFold aFold = siphon $ fmap (fmap pure) $ aFold 
 
+{-| 
+   Builds a 'Siphon' out of a computation that folds a 'Producer' and drains it completely.
+-}
 fromFold' :: (forall r. Producer b IO r -> IO (a,r)) -> Siphon b e a 
 fromFold' aFold = siphon' $ fmap (fmap pure) aFold
 
@@ -824,10 +780,18 @@ executePipelineFallibly policy pipeline = case policy of
                                 pipeline
                            `finally` atomically iseal `finally` atomically oseal `finally` atomically eseal
                 )
-    where mute = fmap (const ())
+    where 
+      mute = fmap (const ())
 
-
--- data Pipeline e = Pipeline (Stage e) (NonEmpty (SubsequentStage e)) deriving (Functor)
+      errorSiphonUTF8 :: MVar (Output ByteString) -> LinePolicy e -> Siphon ByteString e ()
+      errorSiphonUTF8 mvar (LinePolicy fun) = Halting $ fun iterTLines 
+        where     
+          iterTLines = iterT $ \textProducer -> do
+              -- the P.drain bit was difficult to figure out!!!
+              join $ withMVar mvar $ \output -> do
+                  runEffect $     (textProducer <* P.yield (singleton '\n')) 
+                              >->  P.map Data.Text.Encoding.encodeUtf8 
+                              >-> (toOutput output >> P.drain)
 
 {-|
    An individual stage in a process pipeline. 
@@ -846,62 +810,26 @@ data Stage e = Stage
            , exitCodePolicy :: Int -> Maybe e
            } deriving (Functor)
 
-
 {-|
    Any stage beyond the first in a process pipeline. 
+
+   Incoming data is passed through the 'Pipe' before being fed to the process.
+
+   Use 'cat' (the identity 'Pipe' from 'Pipes') if no pre-processing is required.
  -}
 data SubsequentStage e = SubsequentStage (forall a.Pipe ByteString ByteString (ExceptT e IO) a) (Stage e) 
 
 instance Functor (SubsequentStage) where
     fmap f (SubsequentStage bs s) = SubsequentStage (hoist (mapExceptT $ liftM (bimap f id)) bs) (fmap f s)
 
-{-|
-   Builds a 'SubsequentStage' from a 'Stage' by prepending a 'Pipe' that is
-   applied to the stream of data that the 'Stage' receives.
-
-   Pass 'cat' (the identity 'Pipe' from 'Pipes') as argument if no
-   pre-processing is required.
- -}
--- subsequent :: (forall a.Pipe ByteString ByteString (ExceptT e IO) a) -> Stage e -> SubsequentStage e
--- subsequent fp s = SubsequentStage (FalliblePipe fp) s 
-
 data CreatePipeline e =  CreatePipeline (Stage e) (NonEmpty (Tree (SubsequentStage e))) deriving (Functor)
 
---data PipelineForest e =
---        ParallelStages (NonEmpty (SubsequentStage e, PipelineForest e))
---      | TerminalStage (SubsequentStage e)
---      deriving (Functor)
-
--- fromPipeline :: Pipeline e -> BranchingPipeline e
--- fromPipeline (Pipeline root (liftA2 (,) N.init N.last -> (stages, finalStage))) = 
---     (BranchingPipeline root arborescent)
---         where arborescent = Data.Foldable.foldr (curry $ ParallelStages . pure) (TerminalStage finalStage) stages
-
-
 {-|
-    Build a linear pipeline out of an initial 'Stage', a list of
-    intermediate 'SubsequentStage's, and a terminal 'SubsequentStage'.
--}
--- simplePipeline :: Stage e -> [SubsequentStage e] -> SubsequentStage e -> BranchingPipeline e 
--- simplePipeline initial middle terminal = BranchingPipeline initial $   
---    Prelude.foldr (\s1 s2 -> ParallelStages . pure $ (s1,s2)) (TerminalStage terminal) middle
-
-{-|
-    Build a linear pipeline out of an initial process, a list of
-    intermediate processes, and one final process. 
-
-    The @stderr@ streams of all the processes in the pipeline are assumed
-    to have the encoding specified by the 'DecodingFunction' parameter.
--}
--- verySimplePipeline :: DecodingFunction ByteString Text -> CreateProcess -> [CreateProcess] -> CreateProcess -> BranchingPipeline String 
--- verySimplePipeline decoder initial middle end = 
---     simplePipeline (simpleStage initial) (Prelude.map simpleSubsequentStage middle) (simpleSubsequentStage end) 
---   where
---     simpleStage cp = Stage cp simpleLinePolicy simpleErrorPolicy
---     simpleSubsequentStage = SubsequentStage (FalliblePipe P.cat) . simpleStage
---     simpleLinePolicy = linePolicy decoder (pure ()) id
---     simpleErrorPolicy = Just . ("Exit failure: " ++) . show
-
+    Builds a (possibly branching) pipeline assuming that @stderr@ has the same
+encoding in all the stages, that no computation is perfored between the stages,
+and that any exit code besides 'ExitSuccess' in a stage actually represents an
+error.
+ -}
 simplePipeline :: DecodingFunction ByteString Text -> CreateProcess -> NonEmpty (Tree (CreateProcess)) -> CreatePipeline String 
 simplePipeline decoder initial forest = CreatePipeline (simpleStage initial) (fmap (fmap simpleSubsequentStage) forest)   
   where 

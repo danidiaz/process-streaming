@@ -1,3 +1,19 @@
+0.5.0.0
+-------
+
+- Now the constructors for "PipingPolicy" take "Siphons" directly, instead of
+continuation functions.
+
+- Removed "separated" and "combined" functions, added new "PipingPolicy"
+constructors in their place.
+
+- Removed "LeftoverPolicy", its function is performed by Siphons.
+
+- Removed "surely", "safely", "monoidally" functions with confusing
+signatures.
+
+- Implemented support for branching pipelines of processes.
+
 0.3.0.0
 -------
 
