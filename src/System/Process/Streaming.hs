@@ -387,23 +387,23 @@ combined :: (Show e, Typeable e)
          -> Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e a)
 combined (LinePolicy fun1) (LinePolicy fun2) combinedConsumer prod1 prod2 = 
     manyCombined [fmap ($prod1) fun1, fmap ($prod2) fun2] combinedConsumer 
-    
-manyCombined :: (Show e, Typeable e) 
-             => [(FreeT (Producer T.Text IO) IO (Producer ByteString IO ()) -> IO (Producer ByteString IO ())) -> IO (Either e ())]
-        	 -> (Producer T.Text IO () -> IO (Either e a))
-        	 -> IO (Either e a) 
-manyCombined actions consumer = do
-    (outbox, inbox, seal) <- spawn' Single
-    mVar <- newMVar outbox
-    runConceit $ 
-        Conceit (mapConceit ($ iterTLines mVar) actions `finally` atomically seal)
-        *>
-        Conceit (consumer (fromInput inbox) `finally` atomically seal)
-    where 
-    iterTLines mvar = iterT $ \textProducer -> do
-        -- the P.drain bit was difficult to figure out!!!
-        join $ withMVar mvar $ \output -> do
-            runEffect $ (textProducer <* P.yield (singleton '\n')) >-> (toOutput output >> P.drain)
+  where     
+    manyCombined :: (Show e, Typeable e) 
+                 => [(FreeT (Producer T.Text IO) IO (Producer ByteString IO ()) -> IO (Producer ByteString IO ())) -> IO (Either e ())]
+                 -> (Producer T.Text IO () -> IO (Either e a))
+                 -> IO (Either e a) 
+    manyCombined actions consumer = do
+        (outbox, inbox, seal) <- spawn' Single
+        mVar <- newMVar outbox
+        runConceit $ 
+            Conceit (mapConceit ($ iterTLines mVar) actions `finally` atomically seal)
+            *>
+            Conceit (consumer (fromInput inbox) `finally` atomically seal)
+        where 
+        iterTLines mvar = iterT $ \textProducer -> do
+            -- the P.drain bit was difficult to figure out!!!
+            join $ withMVar mvar $ \output -> do
+                runEffect $ (textProducer <* P.yield (singleton '\n')) >-> (toOutput output >> P.drain)
 
 errorSiphonUTF8 :: MVar (Output ByteString) -> LinePolicy e -> Siphon ByteString e ()
 errorSiphonUTF8 mvar (LinePolicy fun) = Halting $ fun iterTLines 
@@ -588,10 +588,15 @@ instance Bifunctor (Siphon b) where
 instance (Show e, Typeable e) => Applicative (Siphon b e) where
     pure = Trivial
    
-    s1 <*> s2 = case (splat s1, splat s2) of
+    s1 <*> s2 = case (s1,s2) of
         (Trivial f, s2') -> fmap f s2'
         (s1', Trivial a) -> fmap ($ a) s1'
-        (Halting fs, Halting as) -> 
+        (Halting fs, Halting as) ->  fork fs as  
+        (Halting fs, Unhalting as) ->  fork fs (halting as)  
+        (Unhalting fs, Halting as) ->  fork (halting fs) as
+        (Unhalting fs, Unhalting as) ->  fork (halting fs) (halting as)  
+      where 
+        fork fs as =
             Halting $ \producer -> do
                 (outbox1,inbox1,seal1) <- spawn' Single
                 (outbox2,inbox2,seal2) <- spawn' Single
@@ -612,38 +617,12 @@ instance (Show e, Typeable e) => Applicative (Siphon b e) where
                                                             ((as $ fromInput inbox2) 
                                                             `finally` atomically seal2) 
                             )
-        otherwhise -> error "never happens"
-      where 
-        splat (Unhalting u) = Halting $ oops u
-        splat whatever = whatever 
 
 
-oops :: (forall r. Producer b IO r -> IO (Either e (a,r)))
+halting :: (forall r. Producer b IO r -> IO (Either e (a,r)))
      -> (Producer b IO () -> IO (Either e a))
-oops polyfunc = \producer ->
+halting polyfunc = \producer ->
     liftM (fmap fst) $ polyfunc producer
-
---  Siphon fs <*> Siphon as = 
---      Siphon $ \producer -> do
---          (outbox1,inbox1,seal1) <- spawn' Single
---          (outbox2,inbox2,seal2) <- spawn' Single
---          runConceit $
---              Conceit (do
---                         -- mmm who cancels these asyncs ??
---                         feeding <- async $ runEffect $ 
---                             producer >-> P.tee (toOutput outbox1 >> P.drain) 
---                                      >->       (toOutput outbox2 >> P.drain)   
---                         -- is these async neccessary ??
---                         sealing <- async $ wait feeding `finally` atomically seal1 
---                                                         `finally` atomically seal2
---                         return $ pure ()
---                      )
---              *>
---              Conceit (fmap (uncurry ($)) <$> conceit ((fs $ fromInput inbox1) 
---                                                      `finally` atomically seal1) 
---                                                      ((as $ fromInput inbox2) 
---                                                      `finally` atomically seal2) 
---                      )
 
 instance (Show e, Typeable e, Monoid a) => Monoid (Siphon b e a) where
    mempty = pure mempty
@@ -666,7 +645,7 @@ runSiphon :: (Show e, Typeable e)
           -> (Producer b IO () -> IO (Either e a))
 runSiphon s = case s of 
     Trivial a -> \producer -> (runEffect $ producer >-> P.drain) >> (pure . pure $ a)
-    Unhalting u -> oops u 
+    Unhalting u -> halting u -- no need to re-buffer
     Halting h -> buffer_ h 
 
 {-| 
