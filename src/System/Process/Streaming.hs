@@ -404,7 +404,7 @@ manyCombined actions consumer = do
             runEffect $ (textProducer <* P.yield (singleton '\n')) >-> (toOutput output >> P.drain)
 
 errorSiphonUTF8 :: MVar (Output ByteString) -> LinePolicy e -> Siphon ByteString e ()
-errorSiphonUTF8 mvar (LinePolicy fun) = Siphon $ fun iterTLines 
+errorSiphonUTF8 mvar (LinePolicy fun) = Halting $ fun iterTLines 
   where     
     iterTLines = iterT $ \textProducer -> do
         -- the P.drain bit was difficult to figure out!!!
@@ -452,7 +452,7 @@ encoded :: (Show e, Typeable e)
         -> Siphon bytes e (a -> b)
         -> Siphon text  e a 
         -> Siphon bytes e b
-encoded decoder policy activity = Siphon $ \producer -> buffer policy activity $ decoder producer 
+encoded decoder policy activity = Halting $ \producer -> buffer policy activity $ decoder producer 
   where
     buffer :: (Show e, Typeable e)
            =>  Siphon bytes e (a -> b)
@@ -565,17 +565,17 @@ instance (Show e, Typeable e, Monoid a) => Monoid (Pump b e a) where
     that each argument receives its own copy of the data.
  -}
 -- newtype Siphon b e a = Siphon (Producer b IO () -> IO (Either e a))
-newtype Siphon b e a = 
-     Trivial a 
-   | Unhalting (forall r. Producer b IO r -> IO (Either e (a,r)))
-   | Halting (Producer b IO () -> IO (Either e a))
-   deriving (Functor)
+data Siphon b e a = 
+         Trivial a 
+       | Unhalting (forall r. Producer b IO r -> IO (Either e (a,r)))
+       | Halting (Producer b IO () -> IO (Either e a))
+       deriving (Functor)
 
-instance Functor (Siphon b e) where
-  fmap f s = case s of
-      Trivial a -> Trivial $ f a
-      Unhalting u -> Unhalting $ fmap (fmap (fmap (\(t1,t2) -> (f t1, t2)))) u
-      Halting h -> Halting $ fmap (fmap (fmap f)) h
+--instance Functor (Siphon b e) where
+--  fmap f s = case s of
+--      Trivial a -> Trivial $ f a
+--      Unhalting u -> Unhalting $ fmap (fmap (fmap (\(t1,t2) -> (f t1, t2)))) u
+--      Halting h -> Halting $ fmap (fmap (fmap f)) h
 
 instance Bifunctor (Siphon b) where
   bimap f g s = case s of
@@ -590,7 +590,7 @@ instance (Show e, Typeable e) => Applicative (Siphon b e) where
         (Trivial f, s2') -> fmap f s2'
         (s1', Trivial a) -> fmap ($ a) s1'
         (Halting fs, Halting as) -> 
-            Unhalting $ \producer -> do
+            Halting $ \producer -> do
                 (outbox1,inbox1,seal1) <- spawn' Single
                 (outbox2,inbox2,seal2) <- spawn' Single
                 runConceit $
@@ -612,7 +612,7 @@ instance (Show e, Typeable e) => Applicative (Siphon b e) where
                             )
         otherwhise -> error "never happens"
       where 
-        splat (Unhalting u) = Halting . oops $ u
+        splat (Unhalting u) = Halting $ oops u
         splat whatever = whatever 
 
 
@@ -663,8 +663,8 @@ runSiphon :: (Show e, Typeable e)
           => Siphon b e a 
           -> (Producer b IO () -> IO (Either e a))
 runSiphon s = case s of 
-    Trivial a -> \producer -> (runEffect $ producer >-> P.drain) >> return a
-    Unhalting u -> buffer_ . oops $ u 
+    Trivial a -> \producer -> (runEffect $ producer >-> P.drain) >> (pure . pure $ a)
+    Unhalting u -> oops u 
     Halting h -> buffer_ h 
 
 {-| 
@@ -674,13 +674,12 @@ runSiphon s = case s of
    Even if the original computation doesn't completely drain the 'Producer',
    the constructed 'Siphon' will.
 -}
-siphon :: (Show e, Typeable e)
-       => (Producer b IO () -> IO (Either e a))
+siphon :: (Producer b IO () -> IO (Either e a))
        -> Siphon b e a 
 siphon = Halting
 
 siphon' :: (forall r. Producer b IO r -> IO (Either e (a,r))) -> Siphon b e a 
-siphon' = undefined
+siphon' = Unhalting
 
 buffer_ :: (Show e, Typeable e) 
         => (Producer b IO () -> IO (Either e a))
@@ -699,10 +698,10 @@ fromFold :: (Producer b IO () -> IO a) -> Siphon b e a
 fromFold aFold = siphon $ fmap (fmap pure) $ aFold 
 
 fromFold' :: (forall r. Producer b IO r -> IO (a,r)) -> Siphon b e a 
-fromFold' = undefined
+fromFold' aFold = siphon' $ fmap (fmap pure) aFold
 
 fromFold'_ :: (forall r. Producer b IO r -> IO r) -> Siphon b e () 
-fromFold'_ = undefined
+fromFold'_ aFold = fromFold' $ fmap (fmap ((,) ())) aFold
 
 {-|
   Constructs a 'Siphon' that aborts the computation if the underlying
