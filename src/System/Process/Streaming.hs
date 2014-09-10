@@ -573,19 +573,19 @@ instance (Show e, Typeable e, Monoid a) => Monoid (Siphon b e a) where
    mempty = pure mempty
    mappend s1 s2 = (<>) <$> s1 <*> s2
 
-fromConsumer :: (Show e, Typeable e) => Consumer b IO () -> Siphon b e ()
+fromConsumer :: Consumer b IO () -> Siphon b e ()
 fromConsumer consumer = siphon $ \producer -> fmap pure $ runEffect $ producer >-> consumer 
 
-fromSafeConsumer :: (Show e, Typeable e) => Consumer b (SafeT IO) () -> Siphon b e ()
+fromSafeConsumer :: Consumer b (SafeT IO) () -> Siphon b e ()
 fromSafeConsumer consumer = siphon $ safely $ \producer -> fmap pure $ runEffect $ producer >-> consumer 
 
-fromFallibleConsumer :: (Show e, Typeable e) => Consumer b (ExceptT e IO) () -> Siphon b e ()
+fromFallibleConsumer :: Consumer b (ExceptT e IO) () -> Siphon b e ()
 fromFallibleConsumer consumer = siphon $ \producer -> runExceptT $ runEffect (hoist lift producer >-> consumer) 
 
 {-| 
   Turn a 'Parser' from @pipes-parse@ into a 'Sihpon'.
  -}
-fromParser :: (Show e, Typeable e) => Parser b IO (Either e a) -> Siphon b e a 
+fromParser :: Parser b IO (Either e a) -> Siphon b e a 
 fromParser parser = siphon $ Pipes.Parse.evalStateT parser 
 
 runSiphon :: (Show e, Typeable e)
