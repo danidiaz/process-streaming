@@ -47,11 +47,13 @@ module System.Process.Streaming (
         -- * Siphoning bytes out of stdout/stderr
         , Siphon
         , siphon
-        , runSiphon
+        , siphon'
+        , fromFold
+        , fromFold'
+        , fromFold'_
         , fromConsumer
         , fromSafeConsumer
         , fromFallibleConsumer
-        , fromFold
         , fromParser
         , unwanted
         , DecodingFunction

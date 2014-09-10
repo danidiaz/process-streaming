@@ -14,6 +14,7 @@ import Data.ByteString
 import Data.ByteString.Lazy as BL
 import Data.Text.Lazy as TL
 import Data.Typeable
+import Data.Tree
 import qualified Data.Attoparsec.Text as A
 import Control.Applicative
 import Control.Monad
@@ -192,7 +193,7 @@ basicPipeline :: IO (Either String ((),BL.ByteString))
 basicPipeline =  executePipelineFallibly 
     (pipeio (fromProducer $ yield "aaabbb\naaaccc\nxxxccc") 
             (fromFold B.toLazyM)) 
-    (verySimplePipeline T.decodeUtf8 (shell "grep aaa") [] (shell "grep ccc"))
+    (simplePipeline T.decodeUtf8 (shell "grep aaa") (pure . pure $ shell "grep ccc"))
 
 -------------------------------------------------------------------------------
 
@@ -214,11 +215,10 @@ branchingPipelineFile = "dist/test/process-streaming-pipeline-text.txt"
 branchingPipeline :: IO (BL.ByteString, BL.ByteString)
 branchingPipeline = executePipeline
     (pipeoe (fromFold B.toLazyM) (fromFold B.toLazyM)) 
-    (BranchingPipeline rootStage $
-        ParallelStages . fromList $ [ (branch1,TerminalStage terminalStage1)
-                                    , (branch2,TerminalStage terminalStage2) ])
+    (CreatePipeline rootStage . fromList $ 
+        [ Node branch1 [pure terminalStage1] , Node branch2 [pure terminalStage2] ] )
   where
-    succStage = subsequent (P.map (Data.ByteString.map succ))
+    succStage = SubsequentStage (P.map (Data.ByteString.map succ))
 
     rootStage :: (Show e, Typeable e) => Stage e
     rootStage = Stage (shell "{ echo oooaaa ; echo eee 1>&2 ; echo xxx ;  echo ffff 1>&2 ; }")
@@ -226,13 +226,13 @@ branchingPipeline = executePipeline
                       (\_ -> Nothing)
 
     branch1 :: (Show e, Typeable e) => SubsequentStage e
-    branch1 = subsequent cat $
+    branch1 = SubsequentStage cat $
         Stage (shell "grep ooo")
               (linePolicy T.decodeIso8859_1 (pure ()) id)                 
               (\_ -> Nothing)
 
     branch2 :: (Show e, Typeable e) => SubsequentStage e
-    branch2 = subsequent cat $
+    branch2 = SubsequentStage cat $
         Stage (shell "grep xxx")
               (linePolicy T.decodeIso8859_1 (pure ()) id)                 
               (\_ -> Nothing)
