@@ -234,26 +234,26 @@ nopiping = PPNone ()
     Pipe @stdout@.
 -}
 pipeo :: (Show e,Typeable e) => Siphon ByteString e a -> PipingPolicy e a
-pipeo (Siphon siphonout) = PPOutput $ siphonout
+pipeo (runSiphon -> siphonout) = PPOutput $ siphonout
 
 {-|
     Pipe @stderr@.
 -}
 pipee :: (Show e,Typeable e) => Siphon ByteString e a -> PipingPolicy e a
-pipee (Siphon siphonout) = PPError $ siphonout
+pipee (runSiphon -> siphonout) = PPError $ siphonout
 
 {-|
     Pipe @stdout@ and @stderr@.
 -}
 pipeoe :: (Show e,Typeable e) => Siphon ByteString e a -> Siphon ByteString e b -> PipingPolicy e (a,b)
-pipeoe (Siphon siphonout) (Siphon siphonerr) = 
+pipeoe (runSiphon -> siphonout) (runSiphon -> siphonerr) = 
     PPOutputError $ uncurry $ separated siphonout siphonerr  
 
 {-|
     Pipe @stdout@ and @stderr@ and consume them combined as 'Text'.  
 -}
 pipeoec :: (Show e,Typeable e) => LinePolicy e -> LinePolicy e -> Siphon Text e a -> PipingPolicy e a
-pipeoec policy1 policy2 (Siphon siphon) = 
+pipeoec policy1 policy2 (runSiphon -> siphon) = 
     PPOutputError $ uncurry $ combined policy1 policy2 siphon  
 
 {-|
@@ -267,7 +267,7 @@ pipei (Pump feeder) = PPInput $ \(consumer,cleanup) -> feeder consumer `finally`
 -}
 pipeio :: (Show e, Typeable e)
         => Pump ByteString e i -> Siphon ByteString e a -> PipingPolicy e (i,a)
-pipeio (Pump feeder) (Siphon siphonout) = PPInputOutput $ \(consumer,cleanup,producer) ->
+pipeio (Pump feeder) (runSiphon -> siphonout) = PPInputOutput $ \(consumer,cleanup,producer) ->
         (conceit (feeder consumer `finally` cleanup) (siphonout producer))
 
 {-|
@@ -275,7 +275,7 @@ pipeio (Pump feeder) (Siphon siphonout) = PPInputOutput $ \(consumer,cleanup,pro
 -}
 pipeie :: (Show e, Typeable e)
         => Pump ByteString e i -> Siphon ByteString e a -> PipingPolicy e (i,a)
-pipeie (Pump feeder) (Siphon siphonerr) = PPInputError $ \(consumer,cleanup,producer) ->
+pipeie (Pump feeder) (runSiphon -> siphonerr) = PPInputError $ \(consumer,cleanup,producer) ->
         (conceit (feeder consumer `finally` cleanup) (siphonerr producer))
 
 {-|
@@ -283,7 +283,7 @@ pipeie (Pump feeder) (Siphon siphonerr) = PPInputError $ \(consumer,cleanup,prod
 -}
 pipeioe :: (Show e, Typeable e)
         => Pump ByteString e i -> Siphon ByteString e a -> Siphon ByteString e b -> PipingPolicy e (i,a,b)
-pipeioe (Pump feeder) (Siphon siphonout) (Siphon siphonerr) = fmap flattenTuple $ PPInputOutputError $
+pipeioe (Pump feeder) (runSiphon -> siphonout) (runSiphon -> siphonerr) = fmap flattenTuple $ PPInputOutputError $
     \(consumer,cleanup,outprod,errprod) -> 
              (conceit (feeder consumer `finally` cleanup) 
                       (separated siphonout siphonerr outprod errprod))
@@ -295,7 +295,7 @@ pipeioe (Pump feeder) (Siphon siphonout) (Siphon siphonerr) = fmap flattenTuple 
 -}
 pipeioec :: (Show e, Typeable e)
         => Pump ByteString e i -> LinePolicy e -> LinePolicy e -> Siphon Text e a -> PipingPolicy e (i,a)
-pipeioec (Pump feeder) policy1 policy2 (Siphon siphon) = PPInputOutputError $
+pipeioec (Pump feeder) policy1 policy2 (runSiphon -> siphon) = PPInputOutputError $
     \(consumer,cleanup,outprod,errprod) -> 
              (conceit (feeder consumer `finally` cleanup) 
                       (combined policy1 policy2 siphon outprod errprod))
@@ -317,7 +317,7 @@ separated :: (Show e, Typeable e)
           -> (Producer ByteString IO () -> IO (Either e b))
           ->  Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e (a,b))
 separated outfunc errfunc outprod errprod = 
-    conceit (buffer_ outfunc outprod) (buffer_ errfunc errprod)
+    conceit (outfunc outprod) (errfunc errprod)
 
 {-|
    Defines how to decode a stream of bytes into text, including what to do
@@ -413,21 +413,6 @@ errorSiphonUTF8 mvar (LinePolicy fun) = Siphon $ fun iterTLines
                         >->  P.map Data.Text.Encoding.encodeUtf8 
                         >-> (toOutput output >> P.drain)
 
-fromConsumer :: (Show e, Typeable e) => Consumer b IO () -> Siphon b e ()
-fromConsumer consumer = siphon $ \producer -> fmap pure $ runEffect $ producer >-> consumer 
-
-fromSafeConsumer :: (Show e, Typeable e) => Consumer b (SafeT IO) () -> Siphon b e ()
-fromSafeConsumer consumer = siphon $ safely $ \producer -> fmap pure $ runEffect $ producer >-> consumer 
-
-fromFallibleConsumer :: (Show e, Typeable e) => Consumer b (ExceptT e IO) () -> Siphon b e ()
-fromFallibleConsumer consumer = siphon $ \producer -> runExceptT $ runEffect (hoist lift producer >-> consumer) 
-
-fromFold :: (Show e, Typeable e) => (Producer b IO () -> IO a) -> Siphon b e a 
-fromFold aFold = siphon $ fmap (fmap pure) $ aFold 
-
-fromParser :: (Show e, Typeable e) => Parser b IO (Either e a) -> Siphon b e a 
-fromParser parser = siphon $ Pipes.Parse.evalStateT parser 
-
 fromProducer :: Producer b IO () -> Pump b e ()
 fromProducer producer = Pump $ \consumer -> fmap pure $ runEffect (producer >-> consumer) 
 
@@ -447,35 +432,6 @@ safely :: (MFunctor t, C.MonadMask m, MonadIO m)
 safely activity = runSafeT . activity . hoist lift 
 
 
-runSiphon :: (Show e, Typeable e)
-          => Siphon b e a 
-          -> (Producer b IO () -> IO (Either e a))
-runSiphon (Siphon s) = s
-
-{-| 
-   Builds a 'Siphon' out of a computation that does something with
-   a 'Producer' and may suddenly fail with an error of type @e@.
-   
-   Even if the original computation doesn't completely drain the 'Producer',
-   the constructed 'Siphon' will.
--}
-siphon :: (Show e, Typeable e)
-       => (Producer b IO () -> IO (Either e a))
-       -> Siphon b e a 
-siphon = Siphon . buffer_
-
-buffer_ :: (Show e, Typeable e) 
-        => (Producer b IO () -> IO (Either e a))
-        ->  Producer b IO () -> IO (Either e a)
-buffer_ activity producer = do
-    (outbox,inbox,seal) <- spawn' Single
-    runConceit $
-        Conceit (do feeding <- async $ runEffect $ 
-                        producer >-> (toOutput outbox >> P.drain)
-                    Right <$> wait feeding `finally` atomically seal
-                )
-        *>
-        Conceit (activity (fromInput inbox) `finally` atomically seal)
 
 {-|
     See the section /Non-lens decoding functions/ in the documentation for the
@@ -608,41 +564,110 @@ instance (Show e, Typeable e, Monoid a) => Monoid (Pump b e a) where
     '<*>' executes its arguments concurrently. The 'Producer' is forked so
     that each argument receives its own copy of the data.
  -}
-newtype Siphon b e a = Siphon (Producer b IO () -> IO (Either e a))
+-- newtype Siphon b e a = Siphon (Producer b IO () -> IO (Either e a))
+newtype Siphon b e a = 
+     Trivial a 
+   | Unhalting (forall r. Producer b IO r -> IO (Either e (a,r)))
+   | Halting (Producer b IO () -> IO (Either e a))
+   deriving (Functor)
 
 instance Functor (Siphon b e) where
-  fmap f (Siphon x) = Siphon $ fmap (fmap (fmap f)) x
+  fmap f s = case s of
+      Trivial a -> Trivial $ f a
+      Unhalting u -> Unhalting $ fmap (fmap (fmap (\(t1,t2) -> (f t1, t2)))) u
+      Halting h -> Halting $ fmap (fmap (fmap f)) h
 
 instance Bifunctor (Siphon b) where
-  bimap f g (Siphon x) = Siphon $ fmap (liftM  (bimap f g)) x
+  bimap f g s = case s of
+      Trivial a -> Trivial $ g a
+      Unhalting u -> Unhalting $ fmap (liftM  (bimap f (bimap g id))) u
+      Halting h -> Halting $ fmap (liftM  (bimap f g)) h
 
 instance (Show e, Typeable e) => Applicative (Siphon b e) where
-  pure = Siphon . pure . pure . pure
-  Siphon fs <*> Siphon as = 
-      Siphon $ \producer -> do
-          (outbox1,inbox1,seal1) <- spawn' Single
-          (outbox2,inbox2,seal2) <- spawn' Single
-          runConceit $
-              Conceit (do
-                         -- mmm who cancels these asyncs ??
-                         feeding <- async $ runEffect $ 
-                             producer >-> P.tee (toOutput outbox1 >> P.drain) 
-                                      >->       (toOutput outbox2 >> P.drain)   
-                         -- is these async neccessary ??
-                         sealing <- async $ wait feeding `finally` atomically seal1 
-                                                         `finally` atomically seal2
-                         return $ pure ()
-                      )
-              *>
-              Conceit (fmap (uncurry ($)) <$> conceit ((fs $ fromInput inbox1) 
-                                                      `finally` atomically seal1) 
-                                                      ((as $ fromInput inbox2) 
-                                                      `finally` atomically seal2) 
-                      )
+    pure = Trivial
+   
+    s1 <*> s2 = case (s1,s2) of
+        (Trivial f, s2') -> fmap f s2'
+        _ -> undefined
+--  Siphon fs <*> Siphon as = 
+--      Siphon $ \producer -> do
+--          (outbox1,inbox1,seal1) <- spawn' Single
+--          (outbox2,inbox2,seal2) <- spawn' Single
+--          runConceit $
+--              Conceit (do
+--                         -- mmm who cancels these asyncs ??
+--                         feeding <- async $ runEffect $ 
+--                             producer >-> P.tee (toOutput outbox1 >> P.drain) 
+--                                      >->       (toOutput outbox2 >> P.drain)   
+--                         -- is these async neccessary ??
+--                         sealing <- async $ wait feeding `finally` atomically seal1 
+--                                                         `finally` atomically seal2
+--                         return $ pure ()
+--                      )
+--              *>
+--              Conceit (fmap (uncurry ($)) <$> conceit ((fs $ fromInput inbox1) 
+--                                                      `finally` atomically seal1) 
+--                                                      ((as $ fromInput inbox2) 
+--                                                      `finally` atomically seal2) 
+--                      )
 
 instance (Show e, Typeable e, Monoid a) => Monoid (Siphon b e a) where
    mempty = Siphon . pure . pure . pure $ mempty
    mappend s1 s2 = (<>) <$> s1 <*> s2
+
+fromConsumer :: (Show e, Typeable e) => Consumer b IO () -> Siphon b e ()
+fromConsumer consumer = siphon $ \producer -> fmap pure $ runEffect $ producer >-> consumer 
+
+fromSafeConsumer :: (Show e, Typeable e) => Consumer b (SafeT IO) () -> Siphon b e ()
+fromSafeConsumer consumer = siphon $ safely $ \producer -> fmap pure $ runEffect $ producer >-> consumer 
+
+fromFallibleConsumer :: (Show e, Typeable e) => Consumer b (ExceptT e IO) () -> Siphon b e ()
+fromFallibleConsumer consumer = siphon $ \producer -> runExceptT $ runEffect (hoist lift producer >-> consumer) 
+
+fromParser :: (Show e, Typeable e) => Parser b IO (Either e a) -> Siphon b e a 
+fromParser parser = siphon $ Pipes.Parse.evalStateT parser 
+
+runSiphon :: (Show e, Typeable e)
+          => Siphon b e a 
+          -> (Producer b IO () -> IO (Either e a))
+runSiphon (Siphon s) = s
+
+{-| 
+   Builds a 'Siphon' out of a computation that does something with
+   a 'Producer' and may suddenly fail with an error of type @e@.
+   
+   Even if the original computation doesn't completely drain the 'Producer',
+   the constructed 'Siphon' will.
+-}
+siphon :: (Show e, Typeable e)
+       => (Producer b IO () -> IO (Either e a))
+       -> Siphon b e a 
+siphon = Siphon . buffer_
+
+siphon' :: (forall r. Producer b IO r -> IO (Either e (a,r))) -> Siphon b e a 
+siphon' = undefined
+
+buffer_ :: (Show e, Typeable e) 
+        => (Producer b IO () -> IO (Either e a))
+        ->  Producer b IO () -> IO (Either e a)
+buffer_ activity producer = do
+    (outbox,inbox,seal) <- spawn' Single
+    runConceit $
+        Conceit (do feeding <- async $ runEffect $ 
+                        producer >-> (toOutput outbox >> P.drain)
+                    Right <$> wait feeding `finally` atomically seal
+                )
+        *>
+        Conceit (activity (fromInput inbox) `finally` atomically seal)
+
+fromFold :: (Producer b IO () -> IO a) -> Siphon b e a 
+fromFold aFold = siphon $ fmap (fmap pure) $ aFold 
+
+fromFold' :: (forall r. Producer b IO r -> IO (a,r)) -> Siphon b e a 
+fromFold' = undefined
+
+fromFold'_ :: (forall r. Producer b IO r -> IO r) -> Siphon b e () 
+fromFold'_ = undefined
 
 {-|
   Constructs a 'Siphon' that aborts the computation if the underlying
