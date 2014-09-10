@@ -7,10 +7,12 @@ continuation functions.
 - Removed "separated" and "combined" functions, added new "PipingPolicy"
 constructors in their place.
 
-- Removed "LeftoverPolicy", its function is performed by Siphons.
+- Removed "LeftoverPolicy", its function is now performed by Siphons.
 
 - Removed "surely", "safely", "monoidally" functions with confusing
 signatures.
+
+- Removed all occurrences of unbounded buffers in the code.
 
 - Implemented support for branching pipelines of processes.
 
