@@ -384,7 +384,7 @@ combined :: (Show e, Typeable e)
          -> (Producer T.Text IO () -> IO (Either e a))
          -> Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e a)
 combined (LinePolicy fun1) (LinePolicy fun2) combinedConsumer prod1 prod2 = 
-    manyCombined [fmap (($prod1).buffer_) fun1, fmap (($prod2).buffer_) fun2] combinedConsumer 
+    manyCombined [fmap ($prod1) fun1, fmap ($prod2) fun2] combinedConsumer 
     
 manyCombined :: (Show e, Typeable e) 
              => [(FreeT (Producer T.Text IO) IO (Producer ByteString IO ()) -> IO (Producer ByteString IO ())) -> IO (Either e ())]
@@ -586,9 +586,41 @@ instance Bifunctor (Siphon b) where
 instance (Show e, Typeable e) => Applicative (Siphon b e) where
     pure = Trivial
    
-    s1 <*> s2 = case (s1,s2) of
+    s1 <*> s2 = case (splat s1, splat s2) of
         (Trivial f, s2') -> fmap f s2'
-        _ -> undefined
+        (s1', Trivial a) -> fmap ($ a) s1'
+        (Halting fs, Halting as) -> 
+            Unhalting $ \producer -> do
+                (outbox1,inbox1,seal1) <- spawn' Single
+                (outbox2,inbox2,seal2) <- spawn' Single
+                runConceit $
+                    Conceit (do
+                               -- mmm who cancels these asyncs ??
+                               feeding <- async $ runEffect $ 
+                                   producer >-> P.tee (toOutput outbox1 >> P.drain) 
+                                            >->       (toOutput outbox2 >> P.drain)   
+                               -- is these async neccessary ??
+                               sealing <- async $ wait feeding `finally` atomically seal1 
+                                                               `finally` atomically seal2
+                               return $ pure ()
+                            )
+                    *>
+                    Conceit (fmap (uncurry ($)) <$> conceit ((fs $ fromInput inbox1) 
+                                                            `finally` atomically seal1) 
+                                                            ((as $ fromInput inbox2) 
+                                                            `finally` atomically seal2) 
+                            )
+        otherwhise -> error "never happens"
+      where 
+        splat (Unhalting u) = Halting . oops $ u
+        splat whatever = whatever 
+
+
+oops :: (forall r. Producer b IO r -> IO (Either e (a,r)))
+     -> (Producer b IO () -> IO (Either e a))
+oops polyfunc = \producer ->
+    liftM (fmap fst) $ polyfunc producer
+
 --  Siphon fs <*> Siphon as = 
 --      Siphon $ \producer -> do
 --          (outbox1,inbox1,seal1) <- spawn' Single
@@ -612,7 +644,7 @@ instance (Show e, Typeable e) => Applicative (Siphon b e) where
 --                      )
 
 instance (Show e, Typeable e, Monoid a) => Monoid (Siphon b e a) where
-   mempty = Siphon . pure . pure . pure $ mempty
+   mempty = pure mempty
    mappend s1 s2 = (<>) <$> s1 <*> s2
 
 fromConsumer :: (Show e, Typeable e) => Consumer b IO () -> Siphon b e ()
@@ -630,7 +662,10 @@ fromParser parser = siphon $ Pipes.Parse.evalStateT parser
 runSiphon :: (Show e, Typeable e)
           => Siphon b e a 
           -> (Producer b IO () -> IO (Either e a))
-runSiphon (Siphon s) = s
+runSiphon s = case s of 
+    Trivial a -> \producer -> (runEffect $ producer >-> P.drain) >> return a
+    Unhalting u -> buffer_ . oops $ u 
+    Halting h -> buffer_ h 
 
 {-| 
    Builds a 'Siphon' out of a computation that does something with
@@ -642,7 +677,7 @@ runSiphon (Siphon s) = s
 siphon :: (Show e, Typeable e)
        => (Producer b IO () -> IO (Either e a))
        -> Siphon b e a 
-siphon = Siphon . buffer_
+siphon = Halting
 
 siphon' :: (forall r. Producer b IO r -> IO (Either e (a,r))) -> Siphon b e a 
 siphon' = undefined
@@ -673,8 +708,8 @@ fromFold'_ = undefined
   Constructs a 'Siphon' that aborts the computation if the underlying
 'Producer' produces anything.
  -}
-unwanted :: (Show b, Typeable b) => a -> Siphon b b a
-unwanted a = siphon $ \producer -> do
+unwanted :: a -> Siphon b b a
+unwanted a = Halting $ \producer -> do
     r <- next producer  
     return $ case r of 
         Left () -> Right a
@@ -906,9 +941,9 @@ executePipelineInternal ppinitial ppmiddle ppend ppend' (CreatePipeline (Stage c
     blende ecpol <$> executeFallibly (ppinitial (runNonEmpty ppend ppend' a) lpol) cp
   where 
     runTree ppend ppend' (Node (SubsequentStage pipe (Stage cp lpol ecpol)) forest) = case forest of
-        [] -> Siphon $ \producer ->
+        [] -> Halting $ \producer ->
             blende ecpol <$> executeFallibly (ppend (fromFallibleProducer $ hoist lift producer >-> pipe) lpol) cp
-        c1 : cs -> Siphon $ \producer ->
+        c1 : cs -> Halting $ \producer ->
            blende ecpol <$> executeFallibly (ppmiddle (fromFallibleProducer $ hoist lift producer >-> pipe) (runNonEmpty ppend ppend' (c1 :| cs)) lpol) cp
 
     runNonEmpty ppend ppend' (b :| bs) = 
