@@ -534,35 +534,28 @@ instance (Show e, Typeable e) => Applicative (Siphon b e) where
     pure = Trivial
    
     s1 <*> s2 = case (s1,s2) of
-        (Trivial f, s2') -> fmap f s2'
-        (s1', Trivial a) -> fmap ($ a) s1'
-        (Halting fs, Halting as) ->  fork fs as  
-        (Halting fs, Unhalting as) ->  fork fs (halting as)  
-        (Unhalting fs, Halting as) ->  fork (halting fs) as
-        (Unhalting fs, Unhalting as) ->  fork (halting fs) (halting as)  
+        (Trivial f,_) -> fmap f s2
+        (_,Trivial a) -> fmap ($ a) s1
+        (_,_) -> bifurcate (halting s1) (halting s2)  
       where 
-        fork fs as =
-            Halting $ \producer -> do
+        bifurcate fs as =
+            Unhalting $ \producer -> do
                 (outbox1,inbox1,seal1) <- spawn' Single
                 (outbox2,inbox2,seal2) <- spawn' Single
                 runConceit $
-                    Conceit (do
-                               -- mmm who cancels these asyncs ??
-                               feeding <- async $ runEffect $ 
-                                   producer >-> P.tee (toOutput outbox1 >> P.drain) 
-                                            >->       (toOutput outbox2 >> P.drain)   
-                               -- is these async neccessary ??
-                               sealing <- async $ wait feeding `finally` atomically seal1 
-                                                               `finally` atomically seal2
-                               return $ pure ()
-                            )
-                    *>
+                    (,)
+                    <$>
                     Conceit (fmap (uncurry ($)) <$> conceit ((fs $ fromInput inbox1) 
                                                             `finally` atomically seal1) 
                                                             ((as $ fromInput inbox2) 
                                                             `finally` atomically seal2) 
                             )
-
+                    <*>
+                    Conceit ((fmap pure $ runEffect $ 
+                                  producer >-> P.tee (toOutput outbox1 >> P.drain) 
+                                           >->       (toOutput outbox2 >> P.drain))   
+                             `finally` atomically seal1 `finally` atomically seal2
+                            ) 
 
 halting :: (Show e, Typeable e) => Siphon b e a  -> Producer b IO () -> IO (Either e a)
 halting s = case s of 
