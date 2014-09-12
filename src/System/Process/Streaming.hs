@@ -394,7 +394,7 @@ safely activity = runSafeT . activity . hoist lift
 type DecodingFunction bytes text = forall r. Producer bytes IO r -> Producer text IO (Producer bytes IO r)
 
 {-|
-    Constructs a 'Siphon' that works on undecoded values out of a 'Siphon' that
+    Constructs a 'Siphon' that works on encoded values out of a 'Siphon' that
 works on decoded values. 
    
     The two first arguments are a decoding function and a 'Siphon' that
