@@ -576,9 +576,9 @@ unhalting s = case s of
             <$>
             Conceit (activity (fromInput inbox) `finally` atomically seal)
             <*>
-            Conceit (do feeding <- async $ runEffect $ 
-                            producer >-> (toOutput outbox >> P.drain)
-                        Right <$> wait feeding `finally` atomically seal
+            Conceit ((fmap pure $ runEffect $ 
+                            producer >-> (toOutput outbox >> P.drain))
+                     `finally` atomically seal
                     )
 
 instance (Show e, Typeable e, Monoid a) => Monoid (Siphon b e a) where
