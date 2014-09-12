@@ -369,14 +369,14 @@ combined (LinePolicy fun1) (LinePolicy fun2) combinedConsumer prod1 prod2 =
             join $ withMVar mvar $ \output -> do
                 runEffect $ (textProducer <* P.yield (singleton '\n')) >-> (toOutput output >> P.drain)
 
-fromProducer :: Producer b IO () -> Pump b e ()
-fromProducer producer = Pump $ \consumer -> fmap pure $ runEffect (producer >-> consumer) 
+fromProducer :: Producer b IO r -> Pump b e ()
+fromProducer producer = Pump $ \consumer -> fmap pure $ runEffect (mute producer >-> consumer) 
 
-fromSafeProducer :: Producer b (SafeT IO) () -> Pump b e ()
-fromSafeProducer producer = Pump $ safely $ \consumer -> fmap pure $ runEffect (producer >-> consumer) 
+fromSafeProducer :: Producer b (SafeT IO) r -> Pump b e ()
+fromSafeProducer producer = Pump $ safely $ \consumer -> fmap pure $ runEffect (mute producer >-> consumer) 
 
-fromFallibleProducer :: Producer b (ExceptT e IO) () -> Pump b e ()
-fromFallibleProducer producer = Pump $ \consumer -> runExceptT $ runEffect (producer >-> hoist lift consumer) 
+fromFallibleProducer :: Producer b (ExceptT e IO) r -> Pump b e ()
+fromFallibleProducer producer = Pump $ \consumer -> runExceptT $ runEffect (mute producer >-> hoist lift consumer) 
 
 {-| 
   Useful when we want to plug in a handler that does its work in the 'SafeT'
@@ -585,14 +585,14 @@ instance (Show e, Typeable e, Monoid a) => Monoid (Siphon b e a) where
    mempty = pure mempty
    mappend s1 s2 = (<>) <$> s1 <*> s2
 
-fromConsumer :: Consumer b IO () -> Siphon b e ()
-fromConsumer consumer = siphon $ \producer -> fmap pure $ runEffect $ producer >-> consumer 
+fromConsumer :: Consumer b IO r -> Siphon b e ()
+fromConsumer consumer = siphon $ \producer -> fmap pure $ runEffect $ producer >-> mute consumer 
 
-fromSafeConsumer :: Consumer b (SafeT IO) () -> Siphon b e ()
-fromSafeConsumer consumer = siphon $ safely $ \producer -> fmap pure $ runEffect $ producer >-> consumer 
+fromSafeConsumer :: Consumer b (SafeT IO) r -> Siphon b e ()
+fromSafeConsumer consumer = siphon $ safely $ \producer -> fmap pure $ runEffect $ producer >-> mute consumer 
 
-fromFallibleConsumer :: Consumer b (ExceptT e IO) () -> Siphon b e ()
-fromFallibleConsumer consumer = siphon $ \producer -> runExceptT $ runEffect (hoist lift producer >-> consumer) 
+fromFallibleConsumer :: Consumer b (ExceptT e IO) r -> Siphon b e ()
+fromFallibleConsumer consumer = siphon $ \producer -> runExceptT $ runEffect (hoist lift producer >-> mute consumer) 
 
 {-| 
   Turn a 'Parser' from @pipes-parse@ into a 'Sihpon'.
@@ -618,19 +618,6 @@ but may fail with an error of type @e@.
 -}
 siphon' :: (forall r. Producer b IO r -> IO (Either e (a,r))) -> Siphon b e a 
 siphon' = Unhalting
-
-buffer_ :: (Show e, Typeable e) 
-        => (Producer b IO () -> IO (Either e a))
-        ->  Producer b IO () -> IO (Either e a)
-buffer_ activity producer = do
-    (outbox,inbox,seal) <- spawn' Single
-    runConceit $
-        Conceit (do feeding <- async $ runEffect $ 
-                        producer >-> (toOutput outbox >> P.drain)
-                    Right <$> wait feeding `finally` atomically seal
-                )
-        *>
-        Conceit (activity (fromInput inbox) `finally` atomically seal)
 
 fromFold :: (Producer b IO () -> IO a) -> Siphon b e a 
 fromFold aFold = siphon $ fmap (fmap pure) $ aFold 
@@ -785,8 +772,6 @@ executePipelineFallibly policy pipeline = case policy of
                            `finally` atomically iseal `finally` atomically oseal `finally` atomically eseal
                 )
     where 
-      mute = fmap (const ())
-
       errorSiphonUTF8 :: MVar (Output ByteString) -> LinePolicy e -> Siphon ByteString e ()
       errorSiphonUTF8 mvar (LinePolicy fun) = Halting $ fun iterTLines 
         where     
@@ -796,6 +781,9 @@ executePipelineFallibly policy pipeline = case policy of
                   runEffect $     (textProducer <* P.yield (singleton '\n')) 
                               >->  P.map Data.Text.Encoding.encodeUtf8 
                               >-> (toOutput output >> P.drain)
+
+mute :: Functor f => f a -> f ()
+mute = fmap (const ())
 
 {-|
    An individual stage in a process pipeline. 
