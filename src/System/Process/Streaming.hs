@@ -625,10 +625,10 @@ fromFold'_ aFold = fromFold' $ fmap (fmap ((,) ())) aFold
 'Producer' produces anything.
  -}
 unwanted :: a -> Siphon b b a
-unwanted a = Halting $ \producer -> do
-    r <- next producer  
-    return $ case r of 
-        Left () -> Right a
+unwanted a = Unhalting $ \producer -> do
+    n <- next producer  
+    return $ case n of 
+        Left r -> Right (a,r)
         Right (b,_) -> Left b
 
 executePipeline :: PipingPolicy Void a -> CreatePipeline Void -> IO a 
