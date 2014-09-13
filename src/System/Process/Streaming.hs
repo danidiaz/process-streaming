@@ -406,23 +406,16 @@ encoded :: (Show e, Typeable e)
         -> Siphon bytes e (a -> b)
         -> Siphon text  e a 
         -> Siphon bytes e b
-encoded decoder policy activity = Halting $ \producer -> buffer policy activity $ decoder producer 
-  where
-    buffer :: (Show e, Typeable e)
-           =>  Siphon bytes e (a -> b)
-           ->  Siphon text e a
-           ->  Producer text  IO (Producer bytes IO ()) -> IO (Either e b)
-    buffer policy activity producer = do
-        (outbox,inbox,seal) <- spawn' Single
-        r <- conceit 
-                  (do feeding <- async $ runEffect $ 
-                            producer >-> (toOutput outbox >> P.drain)
-                      Right <$> wait feeding `finally` atomically seal
-                  )
-                  (halting activity (fromInput inbox) `finally` atomically seal)
-        case r of 
-            Left e -> return $ Left e
-            Right (leftovers,a) -> halting (fmap ($a) policy) leftovers
+encoded decoder policy activity = 
+    Unhalting $ \producer -> do
+        i <- unhalting activity $ decoder producer 
+        case i of
+           Left e -> pure . Left $ e 
+           Right (a,leftovers) -> do
+               i' <- unhalting policy leftovers 
+               case i' of 
+                   Left e' -> pure . Left $ e'
+                   Right (f,r) -> pure . pure $ (f a,r) 
 
 data WrappedError e = WrappedError e
     deriving (Show, Typeable)
