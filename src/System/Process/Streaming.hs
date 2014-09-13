@@ -231,26 +231,26 @@ nopiping = PPNone ()
     Pipe @stdout@.
 -}
 pipeo :: (Show e,Typeable e) => Siphon ByteString e a -> PipingPolicy e a
-pipeo (halting -> siphonout) = PPOutput $ siphonout
+pipeo (runSiphon -> siphonout) = PPOutput $ siphonout
 
 {-|
     Pipe @stderr@.
 -}
 pipee :: (Show e,Typeable e) => Siphon ByteString e a -> PipingPolicy e a
-pipee (halting -> siphonout) = PPError $ siphonout
+pipee (runSiphon -> siphonout) = PPError $ siphonout
 
 {-|
     Pipe @stdout@ and @stderr@.
 -}
 pipeoe :: (Show e,Typeable e) => Siphon ByteString e a -> Siphon ByteString e b -> PipingPolicy e (a,b)
-pipeoe (halting -> siphonout) (halting -> siphonerr) = 
+pipeoe (runSiphon -> siphonout) (runSiphon -> siphonerr) = 
     PPOutputError $ uncurry $ separated siphonout siphonerr  
 
 {-|
     Pipe @stdout@ and @stderr@ and consume them combined as 'Text'.  
 -}
 pipeoec :: (Show e,Typeable e) => LinePolicy e -> LinePolicy e -> Siphon Text e a -> PipingPolicy e a
-pipeoec policy1 policy2 (halting -> siphon) = 
+pipeoec policy1 policy2 (runSiphon -> siphon) = 
     PPOutputError $ uncurry $ combined policy1 policy2 siphon  
 
 {-|
@@ -264,7 +264,7 @@ pipei (Pump feeder) = PPInput $ \(consumer,cleanup) -> feeder consumer `finally`
 -}
 pipeio :: (Show e, Typeable e)
         => Pump ByteString e i -> Siphon ByteString e a -> PipingPolicy e (i,a)
-pipeio (Pump feeder) (halting -> siphonout) = PPInputOutput $ \(consumer,cleanup,producer) ->
+pipeio (Pump feeder) (runSiphon -> siphonout) = PPInputOutput $ \(consumer,cleanup,producer) ->
         (conceit (feeder consumer `finally` cleanup) (siphonout producer))
 
 {-|
@@ -272,7 +272,7 @@ pipeio (Pump feeder) (halting -> siphonout) = PPInputOutput $ \(consumer,cleanup
 -}
 pipeie :: (Show e, Typeable e)
         => Pump ByteString e i -> Siphon ByteString e a -> PipingPolicy e (i,a)
-pipeie (Pump feeder) (halting -> siphonerr) = PPInputError $ \(consumer,cleanup,producer) ->
+pipeie (Pump feeder) (runSiphon -> siphonerr) = PPInputError $ \(consumer,cleanup,producer) ->
         (conceit (feeder consumer `finally` cleanup) (siphonerr producer))
 
 {-|
@@ -280,7 +280,7 @@ pipeie (Pump feeder) (halting -> siphonerr) = PPInputError $ \(consumer,cleanup,
 -}
 pipeioe :: (Show e, Typeable e)
         => Pump ByteString e i -> Siphon ByteString e a -> Siphon ByteString e b -> PipingPolicy e (i,a,b)
-pipeioe (Pump feeder) (halting -> siphonout) (halting -> siphonerr) = fmap flattenTuple $ PPInputOutputError $
+pipeioe (Pump feeder) (runSiphon -> siphonout) (runSiphon -> siphonerr) = fmap flattenTuple $ PPInputOutputError $
     \(consumer,cleanup,outprod,errprod) -> 
              (conceit (feeder consumer `finally` cleanup) 
                       (separated siphonout siphonerr outprod errprod))
@@ -292,7 +292,7 @@ pipeioe (Pump feeder) (halting -> siphonout) (halting -> siphonerr) = fmap flatt
 -}
 pipeioec :: (Show e, Typeable e)
         => Pump ByteString e i -> LinePolicy e -> LinePolicy e -> Siphon Text e a -> PipingPolicy e (i,a)
-pipeioec (Pump feeder) policy1 policy2 (halting -> siphon) = PPInputOutputError $
+pipeioec (Pump feeder) policy1 policy2 (runSiphon -> siphon) = PPInputOutputError $
     \(consumer,cleanup,outprod,errprod) -> 
              (conceit (feeder consumer `finally` cleanup) 
                       (combined policy1 policy2 siphon outprod errprod))
@@ -341,7 +341,7 @@ linePolicy decoder lopo transform = LinePolicy $ \teardown producer -> do
                   . decoder
                   $ producer
         viewLines = getConst . T.lines Const
-    teardown freeLines >>= halting lopo
+    teardown freeLines >>= runSiphon lopo
 
 -- http://unix.stackexchange.com/questions/114182/can-redirecting-stdout-and-stderr-to-the-same-file-mangle-lines here
 combined :: (Show e, Typeable e) 
@@ -546,6 +546,13 @@ instance (Show e, Typeable e) => Applicative (Siphon b e) where
                              `finally` atomically seal1 `finally` atomically seal2
                             ) 
 
+runSiphon :: (Show e, Typeable e) => Siphon b e a  -> Producer b IO () -> IO (Either e a)
+runSiphon s = case s of 
+    h@(Halting _) -> halting $ Unhalting $ unhalting h 
+    _ -> halting s
+
+-- This might return a computation that *doesn't* completely drain the
+-- Producer.
 halting :: (Show e, Typeable e) => Siphon b e a  -> Producer b IO () -> IO (Either e a)
 halting s = case s of 
     a@(Trivial _) -> halting $ Unhalting $ unhalting a
