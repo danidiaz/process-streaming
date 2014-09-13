@@ -202,12 +202,12 @@ the processing of the streams.
 data PipingPolicy e a = 
       PPNone a
     | PPOutput (Producer ByteString IO () -> IO (Either e a))
-    | PPError  (Producer ByteString IO () -> IO (Either e a))
+    | PPError (Producer ByteString IO () -> IO (Either e a))
     | PPOutputError ((Producer ByteString IO (),Producer ByteString IO ()) -> IO (Either e a))
     | PPInput ((Consumer ByteString IO (), IO ()) -> IO (Either e a))
     | PPInputOutput ((Consumer ByteString IO (), IO (),Producer ByteString IO ()) -> IO (Either e a))
-    | PPInputError  ((Consumer ByteString IO (), IO (), Producer ByteString IO ()) -> IO (Either e a))
-    | PPInputOutputError  ((Consumer ByteString IO (),IO (),Producer ByteString IO (),Producer ByteString IO ()) -> IO (Either e a))
+    | PPInputError ((Consumer ByteString IO (), IO (), Producer ByteString IO ()) -> IO (Either e a))
+    | PPInputOutputError ((Consumer ByteString IO (),IO (),Producer ByteString IO (),Producer ByteString IO ()) -> IO (Either e a))
     deriving (Functor)
 
 instance Bifunctor PipingPolicy where
@@ -407,15 +407,11 @@ encoded :: (Show e, Typeable e)
         -> Siphon text  e a 
         -> Siphon bytes e b
 encoded decoder policy activity = 
-    Unhalting $ \producer -> do
-        i <- unhalting activity $ decoder producer 
-        case i of
-           Left e -> pure . Left $ e 
-           Right (a,leftovers) -> do
-               i' <- unhalting policy leftovers 
-               case i' of 
-                   Left e' -> pure . Left $ e'
-                   Right (f,r) -> pure . pure $ (f a,r) 
+    Unhalting $ \producer ->
+        runExceptT $ do
+            (a,leftovers) <- ExceptT $ unhalting activity $ decoder producer 
+            (f,r) <- ExceptT $ unhalting policy leftovers 
+            pure (f a,r)
 
 data WrappedError e = WrappedError e
     deriving (Show, Typeable)
@@ -494,7 +490,7 @@ instance (Show e, Typeable e) => Applicative (Pump b e) where
                              (fromInput inbox1 >> fromInput inbox2) >-> consumer)
                             `finally` atomically seal1
                             `finally` atomically seal2
-                         return $ pure ()
+                         runExceptT $ pure ()
                       )
 
 instance (Show e, Typeable e, Monoid a) => Monoid (Pump b e a) where
