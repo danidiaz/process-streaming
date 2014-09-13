@@ -425,10 +425,7 @@ revealError :: (Show e, Typeable e) => IO a -> IO (Either e a)
 revealError action = catch (action >>= return . Right)
                            (\(WrappedError e) -> return . Left $ e)   
 
-newtype Conceit e a = Conceit { runConceit :: IO (Either e a) }
-
-instance Functor (Conceit e) where
-  fmap f (Conceit x) = Conceit $ fmap (fmap f) x
+newtype Conceit e a = Conceit { runConceit :: IO (Either e a) } deriving Functor
 
 instance Bifunctor Conceit where
   bimap f g (Conceit x) = Conceit $ liftM (bimap f g) x
@@ -462,10 +459,7 @@ immediately cancelled and the whole computation fails with @e@.
 mapConceit :: (Show e, Typeable e, Traversable t) => (a -> IO (Either e b)) -> t a -> IO (Either e (t b))
 mapConceit f = revealError .  mapConcurrently (elideError . f)
 
-newtype Pump b e a = Pump { runPump :: Consumer b IO () -> IO (Either e a) }
-
-instance Functor (Pump b e) where
-  fmap f (Pump x) = Pump $ fmap (fmap (fmap f)) x
+newtype Pump b e a = Pump { runPump :: Consumer b IO () -> IO (Either e a) } deriving Functor
 
 instance Bifunctor (Pump b) where
   bimap f g (Pump x) = Pump $ fmap (liftM  (bimap f g)) x
