@@ -51,6 +51,7 @@ tests = testGroup "Tests"
             , testCountWords 
             , testBasicPipeline
             , testBranchingPipeline 
+            , testDrainageDeadlock
             ]
 
 -------------------------------------------------------------------------------
@@ -249,7 +250,22 @@ branchingPipeline = executePipeline
               (linePolicy T.decodeIso8859_1 (pure ()) id)                 
               (\_ -> Nothing)
 
+-------------------------------------------------------------------------------
 
+testDrainageDeadlock :: TestTree
+testDrainageDeadlock = localOption (mkTimeout $ 20*(10^6)) $
+    testCase "drainageDeadlock" $ do
+        execute nopiping $ shell "chmod u+x tests/alternating.sh"
+        r <- drainageDeadlock
+        case r of
+            (ExitSuccess,((),())) -> return ()
+            _ -> assertFailure "oops"
 
+-- A bug caused some streams not to be drained, and this caused problems
+-- due to full output buffers.
+drainageDeadlock :: IO (ExitCode,((),()))
+drainageDeadlock = execute
+    (pipeoe (pure ()) (fromFold $ \producer -> next producer >> pure ()))
+    (proc "tests/alternating.sh" [])
 
 
