@@ -52,6 +52,7 @@ tests = testGroup "Tests"
             , testBasicPipeline
             , testBranchingPipeline 
             , testDrainageDeadlock
+            , testAlternatingWithCombined 
             ]
 
 -------------------------------------------------------------------------------
@@ -267,5 +268,38 @@ drainageDeadlock :: IO (ExitCode,((),()))
 drainageDeadlock = execute
     (pipeoe (pure ()) (fromFold $ \producer -> next producer >> pure ()))
     (proc "tests/alternating.sh" [])
+
+
+-------------------------------------------------------------------------------
+
+testAlternatingWithCombined :: TestTree
+testAlternatingWithCombined = localOption (mkTimeout $ 20*(10^6)) $
+    testCase "testAlternatingWithCombined" $ do
+        execute nopiping $ shell "chmod u+x tests/alternating.sh"
+        r <- alternatingWithCombined  
+        case r of 
+            (ExitSuccess,80000) -> return ()
+            _ -> assertFailure "oops"
+        r <- alternatingWithCombined2  
+        case r of 
+            (ExitSuccess,(80000,80000)) -> return ()
+            _ -> assertFailure "oops"
+
+alternatingWithCombined :: IO (ExitCode,Integer)
+alternatingWithCombined = execute
+    (pipeoec lp lp countLines)
+    (proc "tests/alternating.sh" [])
+  where
+    lp = linePolicy T.decodeIso8859_1 (pure ()) id 
+    countLines = fromFold $ P.sum . G.folds const () (const 1) . view T.lines
+
+
+alternatingWithCombined2 :: IO (ExitCode,(Integer,Integer))
+alternatingWithCombined2 = execute
+    (pipeoec lp lp $ (,) <$> countLines <*> countLines)
+    (proc "tests/alternating.sh" [])
+  where
+    lp = linePolicy T.decodeIso8859_1 (pure ()) id 
+    countLines = fromFold $ P.sum . G.folds const () (const 1) . view T.lines
 
 
