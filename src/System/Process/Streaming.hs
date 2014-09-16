@@ -90,9 +90,9 @@ import qualified Data.List.NonEmpty as N
 import Control.Applicative
 import Control.Monad
 import Control.Monad.Trans.Free
-import Control.Monad.Except
-import Control.Monad.State
-import Control.Monad.Writer.Strict
+import Control.Monad.Trans.Except
+import Control.Monad.Trans.State
+import Control.Monad.Trans.Writer.Strict
 import qualified Control.Monad.Catch as C
 import Control.Exception
 import Control.Concurrent
@@ -832,6 +832,27 @@ executePipelineInternal ppinitial ppmiddle ppend ppend' (CreatePipeline (Stage c
   where 
     runTree ppend ppend' (Node (SubsequentStage pipe (Stage cp lpol ecpol)) forest) = case forest of
         [] -> Halting $ \producer ->
+            blende ecpol <$> executeFallibly (ppend (fromFallibleProducer $ hoist lift producer >-> pipe) lpol) cp
+        c1 : cs -> Halting $ \producer ->
+           blende ecpol <$> executeFallibly (ppmiddle (fromFallibleProducer $ hoist lift producer >-> pipe) (runNonEmpty ppend ppend' (c1 :| cs)) lpol) cp
+
+    runNonEmpty ppend ppend' (b :| bs) = 
+        runTree ppend ppend' b <* Prelude.foldr (<*) (pure ()) (runTree ppend' ppend' <$> bs) 
+    
+    blende :: (Int -> Maybe e) -> Either e (ExitCode,()) -> Either e ()
+    blende f (Right (ExitFailure i,())) = case f i of
+        Nothing -> Right ()
+        Just e -> Left e
+    blende _ (Right (ExitSuccess,())) = Right () 
+    blende _ (Left e) = Left e
+
+{- $reexports
+ 
+"System.Process" is re-exported for convenience.
+
+-} 
+
+
             blende ecpol <$> executeFallibly (ppend (fromFallibleProducer $ hoist lift producer >-> pipe) lpol) cp
         c1 : cs -> Halting $ \producer ->
            blende ecpol <$> executeFallibly (ppmiddle (fromFallibleProducer $ hoist lift producer >-> pipe) (runNonEmpty ppend ppend' (c1 :| cs)) lpol) cp
