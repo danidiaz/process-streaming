@@ -24,8 +24,8 @@ Library
     other-modules: 
     build-depends:         
         base >= 4.4 && < 5,
-        transformers >= 0.4 && < 0.5,
-        mtl >= 2.2 && < 2.3,
+        transformers >= 0.2 && < 0.5,
+        transformers-compat == 0.3.*,
         free >= 4.2 && < 5,
         bifunctors >= 4.1 && < 5,
         async >= 2.0.1 && < 2.1,
@@ -41,7 +41,7 @@ Library
         void >= 0.6 && < 0.7,
         containers >= 0.4,
         semigroups >= 0.15 && < 0.16
-        
+
 Test-suite test
     default-language:
       Haskell2010
@@ -53,8 +53,8 @@ Test-suite test
       test.hs
     build-depends:
         base >= 4.4 && < 5
-      , transformers >= 0.4 && < 0.5
-      , mtl >= 2.2 && < 2.3
+      , transformers >= 0.2 && < 0.5
+      , transformers-compat == 0.3.*
       , free >= 4.2 && < 5
       , bifunctors >= 4.1 && < 5
       , async >= 2.0.1 && < 2.1
