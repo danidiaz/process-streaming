@@ -852,24 +852,3 @@ executePipelineInternal ppinitial ppmiddle ppend ppend' (CreatePipeline (Stage c
 
 -} 
 
-
-            blende ecpol <$> executeFallibly (ppend (fromFallibleProducer $ hoist lift producer >-> pipe) lpol) cp
-        c1 : cs -> Halting $ \producer ->
-           blende ecpol <$> executeFallibly (ppmiddle (fromFallibleProducer $ hoist lift producer >-> pipe) (runNonEmpty ppend ppend' (c1 :| cs)) lpol) cp
-
-    runNonEmpty ppend ppend' (b :| bs) = 
-        runTree ppend ppend' b <* Prelude.foldr (<*) (pure ()) (runTree ppend' ppend' <$> bs) 
-    
-    blende :: (Int -> Maybe e) -> Either e (ExitCode,()) -> Either e ()
-    blende f (Right (ExitFailure i,())) = case f i of
-        Nothing -> Right ()
-        Just e -> Left e
-    blende _ (Right (ExitSuccess,())) = Right () 
-    blende _ (Left e) = Left e
-
-{- $reexports
- 
-"System.Process" is re-exported for convenience.
-
--} 
-
