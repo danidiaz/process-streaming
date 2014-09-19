@@ -66,9 +66,12 @@ module System.Process.Streaming (
         , executePipeline
         , executePipelineFallibly
         , CreatePipeline (..)
-        , simplePipeline
-        , Stage (..)
-        , SubsequentStage (..)
+        --, simplePipeline
+        , Stage
+        , stage
+        , inbound
+        , pipefail
+       -- , SubsequentStage (..)
         -- * Re-exports
         -- $reexports
         , module System.Process
@@ -799,56 +802,36 @@ mute = fmap (const ())
  -}
 data Stage e = Stage 
            {
-             processDefinition :: CreateProcess 
-           , stderrLinePolicy :: LinePolicy e
-           , exitCodePolicy :: Int -> Maybe e
-           } deriving (Functor)
-
-data StageX e = StageX 
-           {
              processDefinition' :: CreateProcess 
            , stderrLinePolicy' :: LinePolicy e
            , exitCodePolicy' :: ExitCode -> Either e ()
            , inbound' :: forall r. Producer ByteString IO r -> Producer ByteString (ExceptT e IO) r 
            } 
 
-instance Functor (StageX) where
-    fmap f (StageX a b c d) = StageX a (fmap f b) (bimap f id . c) (hoist (mapExceptT $ liftM (bimap f id)) . d)
+instance Functor (Stage) where
+    fmap f (Stage a b c d) = Stage a (fmap f b) (bimap f id . c) (hoist (mapExceptT $ liftM (bimap f id)) . d)
 
-stage :: LinePolicy e -> (ExitCode -> Either e ()) -> CreateProcess -> StageX e       
-stage lp ec cp = StageX cp lp ec (hoist lift) 
+stage :: LinePolicy e -> (ExitCode -> Either e ()) -> CreateProcess -> Stage e       
+stage lp ec cp = Stage cp lp ec (hoist lift) 
 
 inbound :: (forall r. Producer ByteString (ExceptT e IO) r -> Producer ByteString (ExceptT e IO) r)
-        -> StageX e -> StageX e 
-inbound f (StageX a b c d) = StageX a b c (f . d)
+        -> Stage e -> Stage e 
+inbound f (Stage a b c d) = Stage a b c (f . d)
 
-{-|
-   Any stage beyond the first in a process pipeline. 
+data CreatePipeline e =  CreatePipeline (Stage e) (NonEmpty (Tree (Stage e))) deriving (Functor)
 
-   Incoming data is passed through the 'Pipe' before being fed to the process.
-
-   Use 'cat' (the identity 'Pipe' from 'Pipes') if no pre-processing is required.
- -}
-data SubsequentStage e = SubsequentStage (forall a.Pipe ByteString ByteString (ExceptT e IO) a) (Stage e) 
-
-instance Functor (SubsequentStage) where
-    fmap f (SubsequentStage bs s) = SubsequentStage (hoist (mapExceptT $ liftM (bimap f id)) bs) (fmap f s)
-
-data CreatePipeline e =  CreatePipeline (Stage e) (NonEmpty (Tree (SubsequentStage e))) deriving (Functor)
-
-{-|
-    Builds a (possibly branching) pipeline assuming that @stderr@ has the same
-encoding in all the stages, that no computation is perfored between the stages,
-and that any exit code besides 'ExitSuccess' in a stage actually represents an
-error.
- -}
-simplePipeline :: DecodingFunction ByteString Text -> CreateProcess -> NonEmpty (Tree (CreateProcess)) -> CreatePipeline String 
-simplePipeline decoder initial forest = CreatePipeline (simpleStage initial) (fmap (fmap simpleSubsequentStage) forest)   
-  where 
-     simpleStage cp = Stage cp simpleLinePolicy simpleErrorPolicy
-     simpleSubsequentStage = SubsequentStage P.cat . simpleStage
-     simpleLinePolicy = linePolicy decoder (pure ())
-     simpleErrorPolicy = Just . ("Exit failure: " ++) . show
+-- {-|
+--     Builds a (possibly branching) pipeline assuming that @stderr@ has the same
+-- encoding in all the stages, that no computation is perfored between the stages,
+-- and that any exit code besides 'ExitSuccess' in a stage actually represents an
+-- error.
+--  -}
+-- simplePipeline :: DecodingFunction ByteString Text -> CreateProcess -> NonEmpty (Tree (CreateProcess)) -> CreatePipeline String 
+-- simplePipeline decoder initial forest = CreatePipeline (simpleStage initial) (fmap (fmap simpleStage) forest)   
+--   where 
+--      simpleStage cp = Stage cp simpleLinePolicy simpleErrorPolicy
+--      simpleLinePolicy = linePolicy decoder (pure ())
+--      simpleErrorPolicy = Just . ("Exit failure: " ++) . show
 
 executePipelineInternal :: (Show e,Typeable e) 
                         => (Siphon ByteString e () -> LinePolicy e -> PipingPolicy e ())
@@ -857,24 +840,25 @@ executePipelineInternal :: (Show e,Typeable e)
                         -> (Pump ByteString e () -> LinePolicy e -> PipingPolicy e ())
                         -> CreatePipeline e 
                         -> IO (Either e ())
-executePipelineInternal ppinitial ppmiddle ppend ppend' (CreatePipeline (Stage cp lpol ecpol) a) =      
+executePipelineInternal ppinitial ppmiddle ppend ppend' (CreatePipeline (Stage cp lpol ecpol _) a) =      
     blende ecpol <$> executeFallibly (ppinitial (runNonEmpty ppend ppend' a) lpol) cp
   where 
-    runTree ppend ppend' (Node (SubsequentStage pipe (Stage cp lpol ecpol)) forest) = case forest of
+    runTree ppend ppend' (Node (Stage cp lpol ecpol pipe) forest) = case forest of
         [] -> Halting $ \producer ->
-            blende ecpol <$> executeFallibly (ppend (fromFallibleProducer $ hoist lift producer >-> pipe) lpol) cp
+            blende ecpol <$> executeFallibly (ppend (fromFallibleProducer $ pipe producer) lpol) cp
         c1 : cs -> Halting $ \producer ->
-           blende ecpol <$> executeFallibly (ppmiddle (fromFallibleProducer $ hoist lift producer >-> pipe) (runNonEmpty ppend ppend' (c1 :| cs)) lpol) cp
+           blende ecpol <$> executeFallibly (ppmiddle (fromFallibleProducer $ pipe producer) (runNonEmpty ppend ppend' (c1 :| cs)) lpol) cp
 
     runNonEmpty ppend ppend' (b :| bs) = 
         runTree ppend ppend' b <* Prelude.foldr (<*) (pure ()) (runTree ppend' ppend' <$> bs) 
     
-    blende :: (Int -> Maybe e) -> Either e (ExitCode,()) -> Either e ()
-    blende f (Right (ExitFailure i,())) = case f i of
-        Nothing -> Right ()
-        Just e -> Left e
-    blende _ (Right (ExitSuccess,())) = Right () 
-    blende _ (Left e) = Left e
+    blende :: (ExitCode -> Either e ()) -> Either e (ExitCode,()) -> Either e ()
+    blende f r = f =<< liftM fst r
+
+pipefail :: ExitCode -> Either Int ()
+pipefail ec = case ec of
+    ExitSuccess -> Right ()
+    ExitFailure i -> Left i
 
 {- $reexports
  
