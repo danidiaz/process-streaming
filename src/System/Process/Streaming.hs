@@ -670,12 +670,12 @@ executePipeline pp pipeline = either absurd id <$> executePipelineFallibly pp pi
  -}
 executePipelineFallibly :: (Show e,Typeable e) => PipingPolicy e a -> Tree (Stage e) -> IO (Either e a)
 executePipelineFallibly policy (Node (Stage cp _ ecpol _) []) = case policy of
-          PPNone a -> fmap (const a) <$> blende ecpol <$> executeFallibly policy cp 
-          PPOutput action -> undefined
+          PPNone a -> blende ecpol <$> executeFallibly policy cp 
+          PPOutput action -> blende ecpol <$> executeFallibly policy cp 
           PPError action -> undefined
-          PPOutputError action -> undefined
-          PPInput action -> undefined
-          PPInputOutput action -> undefined
+          PPOutputError action -> undefined 
+          PPInput action -> blende ecpol <$> executeFallibly policy cp
+          PPInputOutput action -> blende ecpol <$> executeFallibly policy cp
           PPInputError action -> undefined
           PPInputOutputError action -> undefined
 executePipelineFallibly policy (Node s (s':ss)) = 
