@@ -69,8 +69,8 @@ module System.Process.Streaming (
         --, simplePipeline
         , Stage
         , stage
-        , inbound
         , pipefail
+        , inbound
        -- , SubsequentStage (..)
         -- * Re-exports
         -- $reexports
@@ -844,13 +844,6 @@ mute = fmap (const ())
 
 {-|
    An individual stage in a process pipeline. 
-   
-   The 'LinePolicy' field defines how to handle @stderr@ when @stderr@ is
-   piped. 
-   
-   Also required is a function that determines if the returned exit code
-   represents an error or not. This is necessary because some programs use
-   non-standard exit codes.
  -}
 data Stage e = Stage 
            {
@@ -863,27 +856,24 @@ data Stage e = Stage
 instance Functor (Stage) where
     fmap f (Stage a b c d) = Stage a (fmap f b) (bimap f id . c) (hoist (mapExceptT $ liftM (bimap f id)) . d)
 
+{-|
+    Builds a 'Stage' out of a 'LinePolicy' that specifies how to handle
+    @stderr@ when piped, and a function that determines if an 'ExitCode'
+    represents an error (some programs return non-standard exit codes). 
+-}
 stage :: LinePolicy e -> (ExitCode -> Either e ()) -> CreateProcess -> Stage e       
 stage lp ec cp = Stage cp lp ec (hoist lift) 
 
+{-|
+   Applies a transformation to the stream of bytes flowing into a stage from previous stages.
+
+   This function is ignored for first stages.
+-}
 inbound :: (forall r. Producer ByteString (ExceptT e IO) r -> Producer ByteString (ExceptT e IO) r)
         -> Stage e -> Stage e 
 inbound f (Stage a b c d) = Stage a b c (f . d)
 
 data CreatePipeline e =  CreatePipeline (Stage e) (NonEmpty (Tree (Stage e))) deriving (Functor)
-
--- {-|
---     Builds a (possibly branching) pipeline assuming that @stderr@ has the same
--- encoding in all the stages, that no computation is perfored between the stages,
--- and that any exit code besides 'ExitSuccess' in a stage actually represents an
--- error.
---  -}
--- simplePipeline :: DecodingFunction ByteString Text -> CreateProcess -> NonEmpty (Tree (CreateProcess)) -> CreatePipeline String 
--- simplePipeline decoder initial forest = CreatePipeline (simpleStage initial) (fmap (fmap simpleStage) forest)   
---   where 
---      simpleStage cp = Stage cp simpleLinePolicy simpleErrorPolicy
---      simpleLinePolicy = linePolicy decoder (pure ())
---      simpleErrorPolicy = Just . ("Exit failure: " ++) . show
 
 executePipelineInternal :: (Show e,Typeable e) 
                         => (Siphon ByteString e () -> LinePolicy e -> PipingPolicy e ())
@@ -907,6 +897,9 @@ executePipelineInternal ppinitial ppmiddle ppend ppend' (CreatePipeline (Stage c
 blende :: (ExitCode -> Either e ()) -> Either e (ExitCode,a) -> Either e a
 blende f r = r >>= \(ec,a) -> f ec *> pure a
 
+{-|
+  Converts any 'ExitFailure' to the left side of an 'Either'. 
+-}
 pipefail :: ExitCode -> Either Int ()
 pipefail ec = case ec of
     ExitSuccess -> Right ()
