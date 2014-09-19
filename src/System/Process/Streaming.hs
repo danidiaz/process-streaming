@@ -804,6 +804,24 @@ data Stage e = Stage
            , exitCodePolicy :: Int -> Maybe e
            } deriving (Functor)
 
+data StageX e = StageX 
+           {
+             processDefinition' :: CreateProcess 
+           , stderrLinePolicy' :: LinePolicy e
+           , exitCodePolicy' :: ExitCode -> Either e ()
+           , inbound' :: forall r. Producer ByteString IO r -> Producer ByteString (ExceptT e IO) r 
+           } 
+
+instance Functor (StageX) where
+    fmap f (StageX a b c d) = StageX a (fmap f b) (bimap f id . c) (hoist (mapExceptT $ liftM (bimap f id)) . d)
+
+stage :: LinePolicy e -> (ExitCode -> Either e ()) -> CreateProcess -> StageX e       
+stage lp ec cp = StageX cp lp ec (hoist lift) 
+
+inbound :: (forall r. Producer ByteString (ExceptT e IO) r -> Producer ByteString (ExceptT e IO) r)
+        -> StageX e -> StageX e 
+inbound f (StageX a b c d) = StageX a b c (f . d)
+
 {-|
    Any stage beyond the first in a process pipeline. 
 
