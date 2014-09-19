@@ -102,8 +102,8 @@ testCombinedStdoutStderr = testCase "testCombinedStdoutStderr"  $ do
 
 combinedStdoutStderr :: IO (ExitCode,TL.Text)
 combinedStdoutStderr = execute
-    (pipeoec (linePolicy T.decodeIso8859_1 (pure ()) id)
-             (linePolicy T.decodeIso8859_1 (pure ()) annotate)    
+    (pipeoec (linePolicy T.decodeIso8859_1 (pure ()))
+             (tweakLines annotate $ linePolicy T.decodeIso8859_1 (pure ()))    
              (fromFold T.toLazyM))
     (shell "{ echo ooo ; echo eee 1>&2 ; echo ppp ;  echo ffff 1>&2 ; }")
   where
@@ -224,31 +224,31 @@ branchingPipeline = executePipeline
 
     rootStage :: (Show e, Typeable e) => Stage e
     rootStage = Stage (shell "{ echo oooaaa ; echo eee 1>&2 ; echo xxx ;  echo ffff 1>&2 ; }")
-                      (linePolicy T.decodeIso8859_1 (pure ()) id)                 
+                      (linePolicy T.decodeIso8859_1 (pure ()))                 
                       (\_ -> Nothing)
 
     branch1 :: (Show e, Typeable e) => SubsequentStage e
     branch1 = SubsequentStage cat $
         Stage (shell "grep ooo")
-              (linePolicy T.decodeIso8859_1 (pure ()) id)                 
+              (linePolicy T.decodeIso8859_1 (pure ()))                 
               (\_ -> Nothing)
 
     branch2 :: (Show e, Typeable e) => SubsequentStage e
     branch2 = SubsequentStage cat $
         Stage (shell "grep xxx")
-              (linePolicy T.decodeIso8859_1 (pure ()) id)                 
+              (linePolicy T.decodeIso8859_1 (pure ()))                 
               (\_ -> Nothing)
 
     terminalStage1 :: (Show e, Typeable e) => SubsequentStage e
     terminalStage1 = succStage $
         Stage (shell "tr -d b")
-              (linePolicy T.decodeIso8859_1 (pure ()) id)                 
+              (linePolicy T.decodeIso8859_1 (pure ()))                 
               (\_ -> Nothing)
 
     terminalStage2 :: (Show e, Typeable e) => SubsequentStage e
     terminalStage2 = succStage $
         Stage (shell $ "cat > " ++ branchingPipelineFile)
-              (linePolicy T.decodeIso8859_1 (pure ()) id)                 
+              (linePolicy T.decodeIso8859_1 (pure ()))                 
               (\_ -> Nothing)
 
 -------------------------------------------------------------------------------
@@ -290,7 +290,7 @@ alternatingWithCombined = execute
     (pipeoec lp lp countLines)
     (proc "tests/alternating.sh" [])
   where
-    lp = linePolicy T.decodeIso8859_1 (pure ()) id 
+    lp = linePolicy T.decodeIso8859_1 (pure ()) 
     countLines = fromFold $ P.sum . G.folds const () (const 1) . view T.lines
 
 
@@ -299,7 +299,7 @@ alternatingWithCombined2 = execute
     (pipeoec lp lp $ (,) <$> countLines <*> countLines)
     (proc "tests/alternating.sh" [])
   where
-    lp = linePolicy T.decodeIso8859_1 (pure ()) id 
+    lp = linePolicy T.decodeIso8859_1 (pure ()) 
     countLines = fromFold $ P.sum . G.folds const () (const 1) . view T.lines
 
 

@@ -61,6 +61,7 @@ module System.Process.Streaming (
         -- * Line handling
         , LinePolicy
         , linePolicy
+        , tweakLines
         -- * Pipelines
         , executePipeline
         , executePipelineFallibly
@@ -309,10 +310,20 @@ separated outfunc errfunc outprod errprod =
    in presence of leftovers. Also defines how to manipulate each individual
    line of text.  
  -}
-data LinePolicy e = LinePolicy ((FreeT (Producer T.Text IO) IO (Producer ByteString IO ()) -> IO (Producer ByteString IO ())) -> Producer ByteString IO () -> IO (Either e ()))
+
+data LinePolicy e = LinePolicy 
+    {
+        teardown :: (forall r. Producer T.Text IO r -> Producer T.Text IO r)
+                 -> (FreeT (Producer T.Text IO) IO (Producer ByteString IO ()) -> IO (Producer ByteString IO ())) 
+                 -> Producer ByteString IO () -> IO (Either e ())
+    ,   lineTweaker :: forall r. Producer T.Text IO r -> Producer T.Text IO r
+    } 
 
 instance Functor LinePolicy where
-  fmap f (LinePolicy func) = LinePolicy $ fmap (fmap (fmap (bimap f id))) func
+  fmap f (LinePolicy func lt) = LinePolicy (\x y z -> fmap (bimap f id) $ func x y z) lt
+
+tweakLines :: (forall r. Producer T.Text IO r -> Producer T.Text IO r) -> LinePolicy e -> LinePolicy e 
+tweakLines lt' (LinePolicy tear lt) = LinePolicy tear (lt' . lt) 
 
 {-|
     Constructs a 'LinePolicy'.
@@ -333,15 +344,16 @@ decoding failures. Passing @pure ()@ will ignore any leftovers. Passing
 linePolicy :: (Show e, Typeable e)
            => DecodingFunction ByteString Text 
            -> Siphon ByteString e ()
-           -> (forall r. Producer T.Text IO r -> Producer T.Text IO r)
-           ->  LinePolicy e 
-linePolicy decoder lopo transform = LinePolicy $ \teardown producer -> do
-    let freeLines = transFreeT transform 
-                  . viewLines 
-                  . decoder
-                  $ producer
-        viewLines = getConst . T.lines Const
-    teardown freeLines >>= runSiphon lopo
+           -> LinePolicy e 
+linePolicy decoder lopo = LinePolicy
+    (\tweaker teardown producer -> do
+        let freeLines = transFreeT tweaker 
+                      . viewLines 
+                      . decoder
+                      $ producer
+            viewLines = getConst . T.lines Const
+        teardown freeLines >>= runSiphon lopo)
+    id 
 
 -- http://unix.stackexchange.com/questions/114182/can-redirecting-stdout-and-stderr-to-the-same-file-mangle-lines here
 combined :: (Show e, Typeable e) 
@@ -349,8 +361,8 @@ combined :: (Show e, Typeable e)
          -> LinePolicy e 
          -> (Producer T.Text IO () -> IO (Either e a))
          -> Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e a)
-combined (LinePolicy fun1) (LinePolicy fun2) combinedConsumer prod1 prod2 = 
-    manyCombined [fmap ($prod1) fun1, fmap ($prod2) fun2] combinedConsumer 
+combined (LinePolicy fun1 twk1) (LinePolicy fun2 twk2) combinedConsumer prod1 prod2 = 
+    manyCombined [fmap ($prod1) (fun1 twk1), fmap ($prod2) (fun2 twk2)] combinedConsumer 
   where     
     manyCombined :: (Show e, Typeable e) 
                  => [(FreeT (Producer T.Text IO) IO (Producer ByteString IO ()) -> IO (Producer ByteString IO ())) -> IO (Either e ())]
@@ -763,7 +775,7 @@ executePipelineFallibly policy pipeline = case policy of
                 )
     where 
       errorSiphonUTF8 :: MVar (Output ByteString) -> LinePolicy e -> Siphon ByteString e ()
-      errorSiphonUTF8 mvar (LinePolicy fun) = Halting $ fun iterTLines 
+      errorSiphonUTF8 mvar (LinePolicy fun twk) = Halting $ fun twk iterTLines 
         where     
           iterTLines = iterT $ \textProducer -> do
               -- the P.drain bit was difficult to figure out!!!
@@ -817,7 +829,7 @@ simplePipeline decoder initial forest = CreatePipeline (simpleStage initial) (fm
   where 
      simpleStage cp = Stage cp simpleLinePolicy simpleErrorPolicy
      simpleSubsequentStage = SubsequentStage P.cat . simpleStage
-     simpleLinePolicy = linePolicy decoder (pure ()) id
+     simpleLinePolicy = linePolicy decoder (pure ())
      simpleErrorPolicy = Just . ("Exit failure: " ++) . show
 
 executePipelineInternal :: (Show e,Typeable e) 
