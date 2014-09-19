@@ -65,7 +65,7 @@ module System.Process.Streaming (
         -- * Pipelines
         , executePipeline
         , executePipelineFallibly
-        , CreatePipeline (..)
+--        , CreatePipeline (..)
         --, simplePipeline
         , Stage
         , stage
@@ -647,7 +647,7 @@ unwanted a = Unhalting $ \producer -> do
         Left r -> Right (a,r)
         Right (b,_) -> Left b
 
-executePipeline :: PipingPolicy Void a -> CreatePipeline Void -> IO a 
+executePipeline :: PipingPolicy Void a -> Tree (Stage Void) -> IO a 
 executePipeline pp pipeline = either absurd id <$> executePipelineFallibly pp pipeline
 
 
@@ -668,124 +668,135 @@ executePipeline pp pipeline = either absurd id <$> executePipelineFallibly pp pi
     processes are not notified and keep going. There is no SIGPIPE-like
     functionality, in other words. 
  -}
-executePipelineFallibly :: (Show e,Typeable e) => PipingPolicy e a -> CreatePipeline e -> IO (Either e a)
-executePipelineFallibly policy pipeline = case policy of 
-      PPNone a -> fmap (fmap (const a)) $
-           executePipelineInternal 
-                (\o _ -> mute $ pipeo o) 
-                (\i o _ -> mute $ pipeio i o) 
-                (\i _ -> mute $ pipei i) 
-                (\i _ -> mute $ pipei i) 
-                pipeline
-      PPOutput action -> do
-            (outbox, inbox, seal) <- spawn' Single
-            runConceit $  
-                (Conceit $ action $ fromInput inbox)
-                <* 
-                (Conceit $ executePipelineInternal 
-                                (\o _ -> pipeo o)
-                                (\i o _ -> mute $ pipeio i o) 
-                                (\i _ -> mute $ pipeio i (fromConsumer . toOutput $ outbox)) 
-                                (\i _ -> mute $ pipei i)
-                                pipeline
-                           `finally` atomically seal
-                ) 
-      PPError action -> do
-            (eoutbox, einbox, eseal) <- spawn' Single
-            errf <- errorSiphonUTF8 <$> newMVar eoutbox
-            runConceit $  
-                (Conceit $ action $ fromInput einbox)
-                <*
-                (Conceit $ executePipelineInternal 
-                            (\o l -> mute $ pipeoe o (errf l)) 
-                            (\i o l -> mute $ pipeioe i o (errf l)) 
-                            (\i l -> mute $ pipeie i (errf l)) 
-                            (\i l -> mute $ pipeie i (errf l))
-                            pipeline
-                            `finally` atomically eseal)
-      PPOutputError action -> do
-            (outbox, inbox, seal) <- spawn' Single
-            (eoutbox, einbox, eseal) <- spawn' Single
-            errf <- errorSiphonUTF8 <$> newMVar eoutbox
-            runConceit $  
-                (Conceit $ action $ (fromInput inbox,fromInput einbox))
-                <* 
-                (Conceit $ executePipelineInternal 
-                                (\o l -> mute $ pipeoe o (errf l))
+executePipelineFallibly :: (Show e,Typeable e) => PipingPolicy e a -> Tree (Stage e) -> IO (Either e a)
+executePipelineFallibly policy (Node (Stage cp _ ecpol _) []) = case policy of
+          PPNone a -> fmap (const a) <$> blende ecpol <$> executeFallibly policy cp 
+          PPOutput action -> undefined
+          PPError action -> undefined
+          PPOutputError action -> undefined
+          PPInput action -> undefined
+          PPInputOutput action -> undefined
+          PPInputError action -> undefined
+          PPInputOutputError action -> undefined
+executePipelineFallibly policy (Node s (s':ss)) = 
+      let pipeline = CreatePipeline s $ s' :| ss 
+      in case policy of 
+          PPNone a -> fmap (fmap (const a)) $
+               executePipelineInternal 
+                    (\o _ -> mute $ pipeo o) 
+                    (\i o _ -> mute $ pipeio i o) 
+                    (\i _ -> mute $ pipei i) 
+                    (\i _ -> mute $ pipei i) 
+                    pipeline
+          PPOutput action -> do
+                (outbox, inbox, seal) <- spawn' Single
+                runConceit $  
+                    (Conceit $ action $ fromInput inbox)
+                    <* 
+                    (Conceit $ executePipelineInternal 
+                                    (\o _ -> pipeo o)
+                                    (\i o _ -> mute $ pipeio i o) 
+                                    (\i _ -> mute $ pipeio i (fromConsumer . toOutput $ outbox)) 
+                                    (\i _ -> mute $ pipei i)
+                                    pipeline
+                               `finally` atomically seal
+                    ) 
+          PPError action -> do
+                (eoutbox, einbox, eseal) <- spawn' Single
+                errf <- errorSiphonUTF8 <$> newMVar eoutbox
+                runConceit $  
+                    (Conceit $ action $ fromInput einbox)
+                    <*
+                    (Conceit $ executePipelineInternal 
+                                (\o l -> mute $ pipeoe o (errf l)) 
                                 (\i o l -> mute $ pipeioe i o (errf l)) 
-                                (\i l -> mute $ pipeioe i (fromConsumer . toOutput $ outbox) (errf l)) 
+                                (\i l -> mute $ pipeie i (errf l)) 
                                 (\i l -> mute $ pipeie i (errf l))
                                 pipeline
-                           `finally` atomically seal `finally` atomically eseal
-                )
-      PPInput action -> do
-            (outbox, inbox, seal) <- spawn' Single
-            runConceit $  
-                (Conceit $ action (toOutput outbox,atomically seal))
-                <* 
-                (Conceit $ executePipelineInternal 
-                                (\o _ -> mute $ pipeio (fromProducer . fromInput $ inbox) o)
-                                (\i o _ -> mute $ pipeio i o) 
-                                (\i _ -> mute $ pipei i) 
-                                (\i _ -> mute $ pipei i) 
-                                pipeline
-                           `finally` atomically seal
-                )
-      PPInputOutput action -> do
-            (ioutbox, iinbox, iseal) <- spawn' Single
-            (ooutbox, oinbox, oseal) <- spawn' Single
-            runConceit $  
-                (Conceit $ action (toOutput ioutbox,atomically iseal,fromInput oinbox))
-                <* 
-                (Conceit $ executePipelineInternal 
-                                (\o _ -> mute $ pipeio (fromProducer . fromInput $ iinbox) o)
-                                (\i o _ -> mute $ pipeio i o) 
-                                (\i _ -> mute $ pipeio i (fromConsumer . toOutput $ ooutbox)) 
-                                (\i _ -> mute $ pipei i) 
-                                pipeline
-                           `finally` atomically iseal `finally` atomically oseal
-                )
-      PPInputError action -> do
-            (outbox, inbox, seal) <- spawn' Single
-            (eoutbox, einbox, eseal) <- spawn' Single
-            errf <- errorSiphonUTF8 <$> newMVar eoutbox
-            runConceit $  
-                (Conceit $ action (toOutput outbox,atomically seal,fromInput einbox))
-                <* 
-                (Conceit $ executePipelineInternal 
-                                (\o l -> mute $ pipeioe (fromProducer . fromInput $ inbox) o (errf l))
-                                (\i o l -> mute $ pipeioe i o (errf l)) 
-                                (\i l -> mute $ pipeie i (errf l)) 
-                                (\i l -> mute $ pipeie i (errf l)) 
-                                pipeline
-                           `finally` atomically seal `finally` atomically eseal
-                )
-      PPInputOutputError action -> do
-            (ioutbox, iinbox, iseal) <- spawn' Single
-            (ooutbox, oinbox, oseal) <- spawn' Single
-            (eoutbox, einbox, eseal) <- spawn' Single
-            errf <- errorSiphonUTF8 <$> newMVar eoutbox
-            runConceit $  
-                (Conceit $ action (toOutput ioutbox,atomically iseal,fromInput oinbox,fromInput einbox))
-                <* 
-                (Conceit $ executePipelineInternal 
-                                (\o l -> mute $ pipeioe (fromProducer . fromInput $ iinbox) o (errf l))
-                                (\i o l -> mute $ pipeioe i o (errf l)) 
-                                (\i l -> mute $ pipeioe i (fromConsumer . toOutput $ ooutbox) (errf l)) 
-                                (\i l -> mute $ pipeie i (errf l))  
-                                pipeline
-                           `finally` atomically iseal `finally` atomically oseal `finally` atomically eseal
-                )
-    where 
-      errorSiphonUTF8 :: MVar (Output ByteString) -> LinePolicy e -> Siphon ByteString e ()
-      errorSiphonUTF8 mvar (LinePolicy fun twk) = Halting $ fun twk iterTLines 
-        where     
-          iterTLines = iterT $ \textProducer -> do
-              -- the P.drain bit was difficult to figure out!!!
-              join $ withMVar mvar $ \output -> do
-                  runEffect $     (textProducer <* P.yield (singleton '\n')) 
-                              >->  P.map Data.Text.Encoding.encodeUtf8 
-                              >-> (toOutput output >> P.drain)
+                                `finally` atomically eseal)
+          PPOutputError action -> do
+                (outbox, inbox, seal) <- spawn' Single
+                (eoutbox, einbox, eseal) <- spawn' Single
+                errf <- errorSiphonUTF8 <$> newMVar eoutbox
+                runConceit $  
+                    (Conceit $ action $ (fromInput inbox,fromInput einbox))
+                    <* 
+                    (Conceit $ executePipelineInternal 
+                                    (\o l -> mute $ pipeoe o (errf l))
+                                    (\i o l -> mute $ pipeioe i o (errf l)) 
+                                    (\i l -> mute $ pipeioe i (fromConsumer . toOutput $ outbox) (errf l)) 
+                                    (\i l -> mute $ pipeie i (errf l))
+                                    pipeline
+                               `finally` atomically seal `finally` atomically eseal
+                    )
+          PPInput action -> do
+                (outbox, inbox, seal) <- spawn' Single
+                runConceit $  
+                    (Conceit $ action (toOutput outbox,atomically seal))
+                    <* 
+                    (Conceit $ executePipelineInternal 
+                                    (\o _ -> mute $ pipeio (fromProducer . fromInput $ inbox) o)
+                                    (\i o _ -> mute $ pipeio i o) 
+                                    (\i _ -> mute $ pipei i) 
+                                    (\i _ -> mute $ pipei i) 
+                                    pipeline
+                               `finally` atomically seal
+                    )
+          PPInputOutput action -> do
+                (ioutbox, iinbox, iseal) <- spawn' Single
+                (ooutbox, oinbox, oseal) <- spawn' Single
+                runConceit $  
+                    (Conceit $ action (toOutput ioutbox,atomically iseal,fromInput oinbox))
+                    <* 
+                    (Conceit $ executePipelineInternal 
+                                    (\o _ -> mute $ pipeio (fromProducer . fromInput $ iinbox) o)
+                                    (\i o _ -> mute $ pipeio i o) 
+                                    (\i _ -> mute $ pipeio i (fromConsumer . toOutput $ ooutbox)) 
+                                    (\i _ -> mute $ pipei i) 
+                                    pipeline
+                               `finally` atomically iseal `finally` atomically oseal
+                    )
+          PPInputError action -> do
+                (outbox, inbox, seal) <- spawn' Single
+                (eoutbox, einbox, eseal) <- spawn' Single
+                errf <- errorSiphonUTF8 <$> newMVar eoutbox
+                runConceit $  
+                    (Conceit $ action (toOutput outbox,atomically seal,fromInput einbox))
+                    <* 
+                    (Conceit $ executePipelineInternal 
+                                    (\o l -> mute $ pipeioe (fromProducer . fromInput $ inbox) o (errf l))
+                                    (\i o l -> mute $ pipeioe i o (errf l)) 
+                                    (\i l -> mute $ pipeie i (errf l)) 
+                                    (\i l -> mute $ pipeie i (errf l)) 
+                                    pipeline
+                               `finally` atomically seal `finally` atomically eseal
+                    )
+          PPInputOutputError action -> do
+                (ioutbox, iinbox, iseal) <- spawn' Single
+                (ooutbox, oinbox, oseal) <- spawn' Single
+                (eoutbox, einbox, eseal) <- spawn' Single
+                errf <- errorSiphonUTF8 <$> newMVar eoutbox
+                runConceit $  
+                    (Conceit $ action (toOutput ioutbox,atomically iseal,fromInput oinbox,fromInput einbox))
+                    <* 
+                    (Conceit $ executePipelineInternal 
+                                    (\o l -> mute $ pipeioe (fromProducer . fromInput $ iinbox) o (errf l))
+                                    (\i o l -> mute $ pipeioe i o (errf l)) 
+                                    (\i l -> mute $ pipeioe i (fromConsumer . toOutput $ ooutbox) (errf l)) 
+                                    (\i l -> mute $ pipeie i (errf l))  
+                                    pipeline
+                               `finally` atomically iseal `finally` atomically oseal `finally` atomically eseal
+                    )
+
+errorSiphonUTF8 :: MVar (Output ByteString) -> LinePolicy e -> Siphon ByteString e ()
+errorSiphonUTF8 mvar (LinePolicy fun twk) = Halting $ fun twk iterTLines 
+  where     
+    iterTLines = iterT $ \textProducer -> do
+        -- the P.drain bit was difficult to figure out!!!
+        join $ withMVar mvar $ \output -> do
+            runEffect $     (textProducer <* P.yield (singleton '\n')) 
+                        >->  P.map Data.Text.Encoding.encodeUtf8 
+                        >-> (toOutput output >> P.drain)
 
 mute :: Functor f => f a -> f ()
 mute = fmap (const ())
@@ -852,8 +863,8 @@ executePipelineInternal ppinitial ppmiddle ppend ppend' (CreatePipeline (Stage c
     runNonEmpty ppend ppend' (b :| bs) = 
         runTree ppend ppend' b <* Prelude.foldr (<*) (pure ()) (runTree ppend' ppend' <$> bs) 
     
-    blende :: (ExitCode -> Either e ()) -> Either e (ExitCode,()) -> Either e ()
-    blende f r = f =<< liftM fst r
+blende :: (ExitCode -> Either e ()) -> Either e (ExitCode,a) -> Either e a
+blende f r = r >>= \(ec,a) -> f ec *> pure a
 
 pipefail :: ExitCode -> Either Int ()
 pipefail ec = case ec of
