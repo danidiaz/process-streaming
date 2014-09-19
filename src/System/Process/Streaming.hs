@@ -669,15 +669,56 @@ executePipeline pp pipeline = either absurd id <$> executePipelineFallibly pp pi
     functionality, in other words. 
  -}
 executePipelineFallibly :: (Show e,Typeable e) => PipingPolicy e a -> Tree (Stage e) -> IO (Either e a)
-executePipelineFallibly policy (Node (Stage cp _ ecpol _) []) = case policy of
+executePipelineFallibly policy (Node (Stage cp lpol ecpol _) []) = case policy of
           PPNone a -> blende ecpol <$> executeFallibly policy cp 
           PPOutput action -> blende ecpol <$> executeFallibly policy cp 
-          PPError action -> undefined
-          PPOutputError action -> undefined 
+          PPError action -> do
+                (eoutbox, einbox, eseal) <- spawn' Single
+                errf <- errorSiphonUTF8 <$> newMVar eoutbox
+                runConceit $  
+                    (Conceit $ action $ fromInput einbox)
+                    <*
+                    (Conceit $ blende ecpol <$> executeFallibly (pipee (errf lpol)) cp `finally` atomically eseal)
+          PPOutputError action -> do 
+                (outbox, inbox, seal) <- spawn' Single
+                (eoutbox, einbox, eseal) <- spawn' Single
+                errf <- errorSiphonUTF8 <$> newMVar eoutbox
+                runConceit $  
+                    (Conceit $ action $ (fromInput inbox,fromInput einbox))
+                    <* 
+                    (Conceit $ blende ecpol <$> executeFallibly
+                                    (pipeoe (fromConsumer.toOutput $ outbox) (errf lpol)) cp
+                               `finally` atomically seal `finally` atomically eseal
+                    )
           PPInput action -> blende ecpol <$> executeFallibly policy cp
           PPInputOutput action -> blende ecpol <$> executeFallibly policy cp
-          PPInputError action -> undefined
-          PPInputOutputError action -> undefined
+          PPInputError action -> do
+                (outbox, inbox, seal) <- spawn' Single
+                (eoutbox, einbox, eseal) <- spawn' Single
+                errf <- errorSiphonUTF8 <$> newMVar eoutbox
+                runConceit $  
+                    (Conceit $ action (toOutput outbox,atomically seal,fromInput einbox))
+                    <* 
+                    (Conceit $ blende ecpol <$> executeFallibly
+                                    (pipeie (fromProducer . fromInput $ inbox) (errf lpol)) cp
+                               `finally` atomically seal `finally` atomically eseal
+                    )
+          PPInputOutputError action -> do
+                (ioutbox, iinbox, iseal) <- spawn' Single
+                (ooutbox, oinbox, oseal) <- spawn' Single
+                (eoutbox, einbox, eseal) <- spawn' Single
+                errf <- errorSiphonUTF8 <$> newMVar eoutbox
+                runConceit $  
+                    (Conceit $ action (toOutput ioutbox,atomically iseal,fromInput oinbox,fromInput einbox))
+                    <* 
+                    (Conceit $ blende ecpol <$> executeFallibly
+                                    (pipeioe (fromProducer . fromInput $ iinbox) 
+                                            (fromConsumer . toOutput $ ooutbox) 
+                                            (errf lpol) 
+                                    )
+                                    cp
+                               `finally` atomically iseal `finally` atomically oseal `finally` atomically eseal
+                    )
 executePipelineFallibly policy (Node s (s':ss)) = 
       let pipeline = CreatePipeline s $ s' :| ss 
       in case policy of 

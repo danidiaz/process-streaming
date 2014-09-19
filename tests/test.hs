@@ -191,11 +191,12 @@ testBasicPipeline = testCase "basicPipeline" $ do
         Right ((),"aaaccc\n") -> return ()                   
         _ -> assertFailure "oops"
 
-basicPipeline :: IO (Either String ((),BL.ByteString))
+basicPipeline :: IO (Either Int ((),BL.ByteString))
 basicPipeline =  executePipelineFallibly 
     (pipeio (fromProducer $ yield "aaabbb\naaaccc\nxxxccc") 
             (fromFold B.toLazyM)) 
-    (simplePipeline T.decodeUtf8 (shell "grep aaa") (pure . pure $ shell "grep ccc"))
+    (fmap (stage (linePolicy T.decodeUtf8 (pure ())) pipefail) $   
+        Node (shell "grep aaa") [Node (shell "grep ccc") []] )
 
 -------------------------------------------------------------------------------
 
@@ -205,7 +206,7 @@ testBranchingPipeline = testCase "branchingPipeline" $ do
     when exists $ removeFile branchingPipelineFile
     r <- branchingPipeline 
     case r of 
-        ("ppp\v","eee\nffff\n") -> return ()                   
+        (Right ("ppp\v","eee\nffff\n")) -> return ()                   
         _ -> assertFailure "oops"
     fileContents <- withFile branchingPipelineFile ReadMode  $ \hIn -> do
         B.toLazyM $ B.fromHandle hIn 
@@ -214,42 +215,42 @@ testBranchingPipeline = testCase "branchingPipeline" $ do
 branchingPipelineFile :: String 
 branchingPipelineFile = "dist/test/process-streaming-pipeline-text.txt"
 
-branchingPipeline :: IO (BL.ByteString, BL.ByteString)
-branchingPipeline = executePipeline
+branchingPipeline :: IO (Either Int (BL.ByteString, BL.ByteString))
+branchingPipeline = executePipelineFallibly
     (pipeoe (fromFold B.toLazyM) (fromFold B.toLazyM)) 
-    (CreatePipeline rootStage . fromList $ 
-        [ Node branch1 [pure terminalStage1] , Node branch2 [pure terminalStage2] ] )
+    (Node rootStage 
+        [ Node branch1 [Node terminalStage1 []]
+        , Node branch2 [Node terminalStage2 []]
+        ] 
+    )
   where
-    succStage = SubsequentStage (P.map (Data.ByteString.map succ))
+    succStage = P.map (Data.ByteString.map succ)
 
-    rootStage :: (Show e, Typeable e) => Stage e
-    rootStage = Stage (shell "{ echo oooaaa ; echo eee 1>&2 ; echo xxx ;  echo ffff 1>&2 ; }")
-                      (linePolicy T.decodeIso8859_1 (pure ()))                 
-                      (\_ -> Nothing)
+    rootStage :: Stage Int 
+    rootStage = stage (linePolicy T.decodeIso8859_1 (pure ()))                 
+                      pipefail
+                      (shell "{ echo oooaaa ; echo eee 1>&2 ; echo xxx ;  echo ffff 1>&2 ; }")
 
-    branch1 :: (Show e, Typeable e) => SubsequentStage e
-    branch1 = SubsequentStage cat $
-        Stage (shell "grep ooo")
-              (linePolicy T.decodeIso8859_1 (pure ()))                 
-              (\_ -> Nothing)
+    branch1 :: Stage Int 
+    branch1 = stage (linePolicy T.decodeIso8859_1 (pure ()))                 
+                    pipefail
+                    (shell "grep ooo")
+    branch2 :: Stage Int 
+    branch2 = stage (linePolicy T.decodeIso8859_1 (pure ()))                 
+                    pipefail
+                    (shell "grep xxx")
 
-    branch2 :: (Show e, Typeable e) => SubsequentStage e
-    branch2 = SubsequentStage cat $
-        Stage (shell "grep xxx")
-              (linePolicy T.decodeIso8859_1 (pure ()))                 
-              (\_ -> Nothing)
+    terminalStage1 :: Stage Int 
+    terminalStage1 = inbound (\p -> p >-> succStage) $
+        stage (linePolicy T.decodeIso8859_1 (pure ()))                 
+              pipefail
+              (shell "tr -d b")
 
-    terminalStage1 :: (Show e, Typeable e) => SubsequentStage e
-    terminalStage1 = succStage $
-        Stage (shell "tr -d b")
-              (linePolicy T.decodeIso8859_1 (pure ()))                 
-              (\_ -> Nothing)
-
-    terminalStage2 :: (Show e, Typeable e) => SubsequentStage e
-    terminalStage2 = succStage $
-        Stage (shell $ "cat > " ++ branchingPipelineFile)
-              (linePolicy T.decodeIso8859_1 (pure ()))                 
-              (\_ -> Nothing)
+    terminalStage2 :: Stage Int
+    terminalStage2 = inbound (\p -> p >-> succStage) $
+        stage (linePolicy T.decodeIso8859_1 (pure ()))                 
+              pipefail
+              (shell $ "cat > " ++ branchingPipelineFile)
 
 -------------------------------------------------------------------------------
 
