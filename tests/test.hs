@@ -49,6 +49,7 @@ tests = testGroup "Tests"
             , testFailIfAnythingShowsInStderr 
             , testTwoTextParsersInParallel  
             , testCountWords 
+            , testSingletonPipeline 
             , testBasicPipeline
             , testBranchingPipeline 
             , testDrainageDeadlock
@@ -182,6 +183,22 @@ countWords = execute
     (pipeo (encoded T.decodeIso8859_1 (pure id) $
                 fromFold $ P.sum . G.folds const () (const 1) . view T.words))
     (shell "{ echo aaa ; echo bbb ; echo ccc ; }")
+
+-------------------------------------------------------------------------------
+testSingletonPipeline :: TestTree
+testSingletonPipeline = testCase "singletonPipeline" $ do
+    r <- singletonPipeline 
+    case r of
+        (Right ("ooo\nppp\n","eee\nffff\n")) -> return ()
+        _ -> assertFailure "oops"
+
+singletonPipeline :: IO (Either Int (BL.ByteString,BL.ByteString))
+singletonPipeline =  executePipelineFallibly 
+    (pipeoe (fromFold B.toLazyM) 
+            (fromFold B.toLazyM)) 
+    (pure $ stage (linePolicy T.decodeUtf8 (pure ())) pipefail $ 
+         shell "{ echo ooo ; echo eee 1>&2 ; echo ppp ;  echo ffff 1>&2 ; }"
+    )     
 
 -------------------------------------------------------------------------------
 testBasicPipeline :: TestTree
