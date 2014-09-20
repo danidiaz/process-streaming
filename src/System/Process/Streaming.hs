@@ -308,7 +308,7 @@ separated outfunc errfunc outprod errprod =
     conceit (outfunc outprod) (errfunc errprod)
 
 {-|
-    A configuration parameter in functions that combine lines from
+    A configuration parameter used in functions that combine lines from
     multiple streams.
  -}
 

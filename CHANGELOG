@@ -1,3 +1,10 @@
+0.6.0.0
+-------
+
+- Now compatible with earlier versions of transformers.
+- Simplified LinePolicy.
+- Simplified pipeline functions and datatypes.
+
 0.5.0.2
 -------
 
