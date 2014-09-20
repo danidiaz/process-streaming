@@ -860,9 +860,9 @@ instance Functor (Stage) where
 
 {-|
     Builds a 'Stage' out of a 'LinePolicy' that specifies how to handle
-    @stderr@ when piped, and a function that determines whether an
+    @stderr@ when piped, a function that determines whether an
     'ExitCode' represents an error (some programs return non-standard exit
-    codes). 
+    codes) and a process definition. 
 -}
 stage :: LinePolicy e -> (ExitCode -> Either e ()) -> CreateProcess -> Stage e       
 stage lp ec cp = Stage cp lp ec (hoist lift) 
