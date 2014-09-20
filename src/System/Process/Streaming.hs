@@ -621,6 +621,11 @@ but may fail with an error of type @e@.
 siphon' :: (forall r. Producer b IO r -> IO (Either e (a,r))) -> Siphon b e a 
 siphon' = Unhalting
 
+{-| 
+    Useful in combination with 'Pipes.Text.toLazyM' from @pipes-text@ and
+    'Pipes.ByteString.toLazyM' from @pipes-bytestring@, when the user
+    wants to collect all the output. 
+-}
 fromFold :: (Producer b IO () -> IO a) -> Siphon b e a 
 fromFold aFold = siphon $ fmap (fmap pure) $ aFold 
 
