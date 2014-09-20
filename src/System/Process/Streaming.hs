@@ -6,12 +6,11 @@
 -- They provide concurrent, streaming access to the inputs and outputs of
 -- system processes.
 --
--- Error conditions that are not directly related to IO are made explicit
+-- Error conditions not directly related to IO are made explicit
 -- in the types.
 --
--- Regular 'Consumer's, 'Parser's from @pipes-parse@ and folds from
--- "Pipes.Prelude" (also folds from @pipes-bytestring@ and @pipes-text@)
--- can be used to consume the output streams of the external processes.
+-- Regular 'Consumer's, 'Parser's from @pipes-parse@ and various folds can
+-- be used to consume the output streams of the external processes.
 --
 -----------------------------------------------------------------------------
 
@@ -123,7 +122,7 @@ execute pp cprocess = either absurd id <$> executeFallibly pp cprocess
    Executes an external process. The standard streams are piped and consumed in
 a way defined by the 'PipingPolicy' argument. 
 
-   This fuction re-throws any 'IOException's it encounters.
+   This function re-throws any 'IOException's it encounters.
 
    If the consumption of the standard streams fails with @e@, the whole
 computation is immediately aborted and @e@ is returned. (An exception is not
@@ -309,9 +308,8 @@ separated outfunc errfunc outprod errprod =
     conceit (outfunc outprod) (errfunc errprod)
 
 {-|
-   Defines how to decode a stream of bytes into text, including what to do
-   in presence of leftovers. Also defines how to manipulate each individual
-   line of text.  
+    A configuration parameter in functions that combine lines from
+    multiple streams.
  -}
 
 data LinePolicy e = LinePolicy 
@@ -325,25 +323,24 @@ data LinePolicy e = LinePolicy
 instance Functor LinePolicy where
   fmap f (LinePolicy func lt) = LinePolicy (\x y z -> fmap (bimap f id) $ func x y z) lt
 
+
+{-|
+    Specifies a transformation that will be applied to each line of text,
+    represented as a 'Producer'.
+
+    Line prefixes are easy to add using applicative notation:
+
+  > (\x -> yield "prefix: " *> x)
+-}
 tweakLines :: (forall r. Producer T.Text IO r -> Producer T.Text IO r) -> LinePolicy e -> LinePolicy e 
 tweakLines lt' (LinePolicy tear lt) = LinePolicy tear (lt' . lt) 
 
 {-|
-    Constructs a 'LinePolicy'.
-
-    The second argument is a 'Siphon' value that specifies how to handle
-decoding failures. Passing @pure ()@ will ignore any leftovers. Passing
-@unwanted ()@ will abort the computation if leftovers remain.
-
-    The third argument is a function that modifies each individual line.
-    The line is represented as a 'Producer' to avoid having to keep it
-    wholly in memory. If you want the lines unmodified, just pass @id@.
-    Line prefixes are easy to add using applicative notation:
-
-  > (\x -> yield "prefix: " *> x)
-
+    Constructs a 'LinePolicy' out of a 'DecodingFunction' and a 'Siphon'
+    that specifies how to handle decoding failures. Passing @pure ()@ as
+    the 'Siphon' will ignore any leftovers. Passing @unwanted ()@ will
+    abort the computation if leftovers remain.
  -}
-
 linePolicy :: (Show e, Typeable e)
            => DecodingFunction ByteString Text 
            -> Siphon ByteString e ()
@@ -858,8 +855,9 @@ instance Functor (Stage) where
 
 {-|
     Builds a 'Stage' out of a 'LinePolicy' that specifies how to handle
-    @stderr@ when piped, and a function that determines if an 'ExitCode'
-    represents an error (some programs return non-standard exit codes). 
+    @stderr@ when piped, and a function that determines whether an
+    'ExitCode' represents an error (some programs return non-standard exit
+    codes). 
 -}
 stage :: LinePolicy e -> (ExitCode -> Either e ()) -> CreateProcess -> Stage e       
 stage lp ec cp = Stage cp lp ec (hoist lift) 
