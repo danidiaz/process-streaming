@@ -1,5 +1,5 @@
 name:          process-streaming
-version:       0.6.0.0
+version:       0.6.1.0
 license:       BSD3
 license-file:  LICENSE
 data-files:    
@@ -40,7 +40,8 @@ Library
         exceptions >= 0.6.0 && < 0.7,
         void >= 0.6 && < 0.7,
         containers >= 0.4,
-        semigroups >= 0.15 && < 0.16
+        semigroups >= 0.15 && < 0.16,
+        conceit >= 0.1.0.0 && < 0.2.0.0
 
 Test-suite test
     default-language:
