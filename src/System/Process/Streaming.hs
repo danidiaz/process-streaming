@@ -95,7 +95,6 @@ import Control.Monad.Trans.Writer.Strict
 import qualified Control.Monad.Catch as C
 import Control.Exception
 import Control.Concurrent
-import Control.Concurrent.Async
 import Control.Concurrent.Conceit
 import Pipes
 import qualified Pipes as P

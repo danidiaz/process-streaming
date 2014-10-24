@@ -20,7 +20,6 @@ import Control.Applicative
 import Control.Monad
 import Control.Monad.Trans.Except
 import Control.Lens (view)
-import Control.Concurrent.Async
 import Pipes
 import qualified Pipes.ByteString as B
 import qualified Pipes.Prelude as P
