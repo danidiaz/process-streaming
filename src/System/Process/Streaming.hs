@@ -14,7 +14,6 @@
 --
 -----------------------------------------------------------------------------
 
-{-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE RankNTypes #-}
@@ -81,7 +80,6 @@ import Data.Either
 import Data.Monoid
 import Data.Foldable
 import Data.Traversable
-import Data.Typeable
 import Data.Tree
 import Data.Text 
 import Data.Text.Encoding 
@@ -232,56 +230,53 @@ nopiping = PPNone ()
 {-|
     Pipe @stdout@.
 -}
-pipeo :: (Show e,Typeable e) => Siphon ByteString e a -> PipingPolicy e a
+pipeo :: Siphon ByteString e a -> PipingPolicy e a
 pipeo (runSiphon -> siphonout) = PPOutput $ siphonout
 
 {-|
     Pipe @stderr@.
 -}
-pipee :: (Show e,Typeable e) => Siphon ByteString e a -> PipingPolicy e a
+pipee :: Siphon ByteString e a -> PipingPolicy e a
 pipee (runSiphon -> siphonout) = PPError $ siphonout
 
 {-|
     Pipe @stdout@ and @stderr@.
 -}
-pipeoe :: (Show e,Typeable e) => Siphon ByteString e a -> Siphon ByteString e b -> PipingPolicy e (a,b)
+pipeoe :: Siphon ByteString e a -> Siphon ByteString e b -> PipingPolicy e (a,b)
 pipeoe (runSiphon -> siphonout) (runSiphon -> siphonerr) = 
     PPOutputError $ uncurry $ separated siphonout siphonerr  
 
 {-|
     Pipe @stdout@ and @stderr@ and consume them combined as 'Text'.  
 -}
-pipeoec :: (Show e,Typeable e) => LinePolicy e -> LinePolicy e -> Siphon Text e a -> PipingPolicy e a
+pipeoec :: LinePolicy e -> LinePolicy e -> Siphon Text e a -> PipingPolicy e a
 pipeoec policy1 policy2 (runSiphon -> siphon) = 
     PPOutputError $ uncurry $ combined policy1 policy2 siphon  
 
 {-|
     Pipe @stdin@.
 -}
-pipei :: (Show e, Typeable e) => Pump ByteString e i -> PipingPolicy e i
+pipei :: Pump ByteString e i -> PipingPolicy e i
 pipei (Pump feeder) = PPInput $ \(consumer,cleanup) -> feeder consumer `finally` cleanup
 
 {-|
     Pipe @stdin@ and @stdout@.
 -}
-pipeio :: (Show e, Typeable e)
-        => Pump ByteString e i -> Siphon ByteString e a -> PipingPolicy e (i,a)
+pipeio :: Pump ByteString e i -> Siphon ByteString e a -> PipingPolicy e (i,a)
 pipeio (Pump feeder) (runSiphon -> siphonout) = PPInputOutput $ \(consumer,cleanup,producer) ->
         (conceit (feeder consumer `finally` cleanup) (siphonout producer))
 
 {-|
     Pipe @stdin@ and @stderr@.
 -}
-pipeie :: (Show e, Typeable e)
-        => Pump ByteString e i -> Siphon ByteString e a -> PipingPolicy e (i,a)
+pipeie :: Pump ByteString e i -> Siphon ByteString e a -> PipingPolicy e (i,a)
 pipeie (Pump feeder) (runSiphon -> siphonerr) = PPInputError $ \(consumer,cleanup,producer) ->
         (conceit (feeder consumer `finally` cleanup) (siphonerr producer))
 
 {-|
     Pipe @stdin@, @stdout@ and @stderr@.
 -}
-pipeioe :: (Show e, Typeable e)
-        => Pump ByteString e i -> Siphon ByteString e a -> Siphon ByteString e b -> PipingPolicy e (i,a,b)
+pipeioe :: Pump ByteString e i -> Siphon ByteString e a -> Siphon ByteString e b -> PipingPolicy e (i,a,b)
 pipeioe (Pump feeder) (runSiphon -> siphonout) (runSiphon -> siphonerr) = fmap flattenTuple $ PPInputOutputError $
     \(consumer,cleanup,outprod,errprod) -> 
              (conceit (feeder consumer `finally` cleanup) 
@@ -292,15 +287,13 @@ pipeioe (Pump feeder) (runSiphon -> siphonout) (runSiphon -> siphonerr) = fmap f
 {-|
     Pipe @stdin@, @stdout@ and @stderr@, consuming the last two combined as 'Text'.
 -}
-pipeioec :: (Show e, Typeable e)
-        => Pump ByteString e i -> LinePolicy e -> LinePolicy e -> Siphon Text e a -> PipingPolicy e (i,a)
+pipeioec :: Pump ByteString e i -> LinePolicy e -> LinePolicy e -> Siphon Text e a -> PipingPolicy e (i,a)
 pipeioec (Pump feeder) policy1 policy2 (runSiphon -> siphon) = PPInputOutputError $
     \(consumer,cleanup,outprod,errprod) -> 
              (conceit (feeder consumer `finally` cleanup) 
                       (combined policy1 policy2 siphon outprod errprod))
 
-separated :: (Show e, Typeable e)
-          => (Producer ByteString IO () -> IO (Either e a))
+separated :: (Producer ByteString IO () -> IO (Either e a))
           -> (Producer ByteString IO () -> IO (Either e b))
           ->  Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e (a,b))
 separated outfunc errfunc outprod errprod = 
@@ -340,8 +333,7 @@ tweakLines lt' (LinePolicy tear lt) = LinePolicy tear (lt' . lt)
     the 'Siphon' will ignore any leftovers. Passing @unwanted ()@ will
     abort the computation if leftovers remain.
  -}
-linePolicy :: (Show e, Typeable e)
-           => DecodingFunction ByteString Text 
+linePolicy :: DecodingFunction ByteString Text 
            -> Siphon ByteString e ()
            -> LinePolicy e 
 linePolicy decoder lopo = LinePolicy
@@ -355,16 +347,14 @@ linePolicy decoder lopo = LinePolicy
     id 
 
 -- http://unix.stackexchange.com/questions/114182/can-redirecting-stdout-and-stderr-to-the-same-file-mangle-lines here
-combined :: (Show e, Typeable e) 
-         => LinePolicy e 
+combined :: LinePolicy e 
          -> LinePolicy e 
          -> (Producer T.Text IO () -> IO (Either e a))
          -> Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e a)
 combined (LinePolicy fun1 twk1) (LinePolicy fun2 twk2) combinedConsumer prod1 prod2 = 
     manyCombined [fmap ($prod1) (fun1 twk1), fmap ($prod2) (fun2 twk2)] combinedConsumer 
   where     
-    manyCombined :: (Show e, Typeable e) 
-                 => [(FreeT (Producer T.Text IO) IO (Producer ByteString IO ()) -> IO (Producer ByteString IO ())) -> IO (Either e ())]
+    manyCombined :: [(FreeT (Producer T.Text IO) IO (Producer ByteString IO ()) -> IO (Producer ByteString IO ())) -> IO (Either e ())]
                  -> (Producer T.Text IO () -> IO (Either e a))
                  -> IO (Either e a) 
     manyCombined actions consumer = do
@@ -412,8 +402,7 @@ works on decoded values.
 determines how to handle leftovers. Pass @pure id@ to ignore leftovers. Pass
 @unwanted id@ to abort the computation if leftovers remain.
  -}
-encoded :: (Show e, Typeable e) 
-        => DecodingFunction bytes text
+encoded :: DecodingFunction bytes text
         -> Siphon bytes e (a -> b)
         -> Siphon text  e a 
         -> Siphon bytes e b
@@ -429,7 +418,7 @@ newtype Pump b e a = Pump { runPump :: Consumer b IO () -> IO (Either e a) } der
 instance Bifunctor (Pump b) where
   bimap f g (Pump x) = Pump $ fmap (liftM  (bimap f g)) x
 
-instance (Show e, Typeable e) => Applicative (Pump b e) where
+instance Applicative (Pump b e) where
   pure = Pump . pure . pure . pure
   Pump fs <*> Pump as = 
       Pump $ \consumer -> do
@@ -452,7 +441,7 @@ instance (Show e, Typeable e) => Applicative (Pump b e) where
                          runExceptT $ pure ()
                       )
 
-instance (Show e, Typeable e, Monoid a) => Monoid (Pump b e a) where
+instance (Monoid a) => Monoid (Pump b e a) where
    mempty = Pump . pure . pure . pure $ mempty
    mappend s1 s2 = (<>) <$> s1 <*> s2
 
@@ -478,7 +467,7 @@ instance Bifunctor (Siphon b) where
       Unhalting u -> Unhalting $ fmap (liftM  (bimap f (bimap g id))) u
       Halting h -> Halting $ fmap (liftM  (bimap f g)) h
 
-instance (Show e, Typeable e) => Applicative (Siphon b e) where
+instance Applicative (Siphon b e) where
     pure = Trivial
    
     s1 <*> s2 = case (s1,s2) of
@@ -505,20 +494,20 @@ instance (Show e, Typeable e) => Applicative (Siphon b e) where
                              `finally` atomically seal1 `finally` atomically seal2
                             ) 
 
-runSiphon :: (Show e, Typeable e) => Siphon b e a  -> Producer b IO () -> IO (Either e a)
+runSiphon :: Siphon b e a  -> Producer b IO () -> IO (Either e a)
 runSiphon s = case s of 
     h@(Halting _) -> halting $ Unhalting $ unhalting h 
     _ -> halting s
 
 -- This might return a computation that *doesn't* completely drain the
 -- Producer.
-halting :: (Show e, Typeable e) => Siphon b e a  -> Producer b IO () -> IO (Either e a)
+halting :: Siphon b e a  -> Producer b IO () -> IO (Either e a)
 halting s = case s of 
     a@(Trivial _) -> halting $ Unhalting $ unhalting a
     Unhalting u -> \producer -> liftM (fmap fst) $ u producer
     Halting h -> h 
 
-unhalting :: (Show e, Typeable e) => Siphon b e a -> Producer b IO r -> IO (Either e (a,r))
+unhalting :: Siphon b e a -> Producer b IO r -> IO (Either e (a,r))
 unhalting s = case s of 
     Trivial a -> \producer -> do
         r <- (runEffect $ producer >-> P.drain)
@@ -536,7 +525,7 @@ unhalting s = case s of
                      `finally` atomically seal
                     )
 
-instance (Show e, Typeable e, Monoid a) => Monoid (Siphon b e a) where
+instance (Monoid a) => Monoid (Siphon b e a) where
    mempty = pure mempty
    mappend s1 s2 = (<>) <$> s1 <*> s2
 
@@ -623,7 +612,7 @@ executePipeline pp pipeline = either absurd id <$> executePipelineFallibly pp pi
     processes are not notified and keep going. There is no SIGPIPE-like
     functionality, in other words. 
  -}
-executePipelineFallibly :: (Show e,Typeable e) => PipingPolicy e a -> Tree (Stage e) -> IO (Either e a)
+executePipelineFallibly :: PipingPolicy e a -> Tree (Stage e) -> IO (Either e a)
 executePipelineFallibly policy (Node (Stage cp lpol ecpol _) []) = case policy of
           PPNone a -> blende ecpol <$> executeFallibly policy cp 
           PPOutput action -> blende ecpol <$> executeFallibly policy cp 
@@ -831,8 +820,7 @@ inbound f (Stage a b c d) = Stage a b c (f . d)
 
 data CreatePipeline e =  CreatePipeline (Stage e) (NonEmpty (Tree (Stage e))) deriving (Functor)
 
-executePipelineInternal :: (Show e,Typeable e) 
-                        => (Siphon ByteString e () -> LinePolicy e -> PipingPolicy e ())
+executePipelineInternal :: (Siphon ByteString e () -> LinePolicy e -> PipingPolicy e ())
                         -> (Pump ByteString e () -> Siphon ByteString e () -> LinePolicy e -> PipingPolicy e ())
                         -> (Pump ByteString e () -> LinePolicy e -> PipingPolicy e ())
                         -> (Pump ByteString e () -> LinePolicy e -> PipingPolicy e ())

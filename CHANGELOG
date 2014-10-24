@@ -1,3 +1,9 @@
+0.6.2.0
+-------
+
+- Removed ugly (Show e,Typeable) constraints on the error type from many
+  functions. 
+
 0.6.1.0
 -------
 
