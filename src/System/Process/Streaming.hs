@@ -407,19 +407,13 @@ encoded :: DecodingFunction bytes text
         -> Siphon bytes e (a -> b)
         -> Siphon text  e a 
         -> Siphon bytes e b
-encoded decoder (Siphon policy) (Siphon activity) = 
-    Siphon (Other (encodedI decoder (unLift policy) (unLift activity)))
-
-encodedI :: DecodingFunction bytes text
-         -> SiphonI bytes e (a -> b)
-         -> SiphonI text  e a 
-         -> SiphonI bytes e b
-encodedI decoder policy activity = 
-    Exhaustive $ \producer ->
-        runExceptT $ do
-            (a,leftovers) <- ExceptT $ exhaustive activity $ decoder producer 
-            (f,r) <- ExceptT $ exhaustive policy leftovers 
-            pure (f a,r)
+encoded decoder (Siphon (unLift -> policy)) (Siphon (unLift -> activity)) = 
+    Siphon (Other internal)
+  where
+    internal = Exhaustive $ \producer -> runExceptT $ do
+        (a,leftovers) <- ExceptT $ exhaustive activity $ decoder producer 
+        (f,r) <- ExceptT $ exhaustive policy leftovers 
+        pure (f a,r)
 
 newtype Pump b e a = Pump { runPump :: Consumer b IO () -> IO (Either e a) } deriving Functor
 
@@ -463,14 +457,14 @@ may fail early with an error of type @e@.
     '<*>' executes its arguments concurrently. The 'Producer' is forked so
     that each argument receives its own copy of the data.
  -}
-newtype Siphon b e a = Siphon (Lift (SiphonI b e) a) deriving (Functor,Applicative)
+newtype Siphon b e a = Siphon (Lift (Siphon_ b e) a) deriving (Functor,Applicative)
 
-data SiphonI b e a = 
+data Siphon_ b e a = 
          Exhaustive (forall r. Producer b IO r -> IO (Either e (a,r)))
        | Nonexhaustive (Producer b IO () -> IO (Either e a))
        deriving (Functor)
 
-instance Applicative (SiphonI b e) where
+instance Applicative (Siphon_ b e) where
     pure a = Exhaustive $ \producer -> do
         r <- runEffect (producer >-> P.drain)
         pure (pure (a,r))
@@ -494,11 +488,11 @@ instance Applicative (SiphonI b e) where
                          `finally` atomically seal1 `finally` atomically seal2
                         ) 
 
-nonexhaustive :: SiphonI b e a -> Producer b IO () -> IO (Either e a)
+nonexhaustive :: Siphon_ b e a -> Producer b IO () -> IO (Either e a)
 nonexhaustive (Exhaustive e) = \producer -> liftM (fmap fst) (e producer)
 nonexhaustive (Nonexhaustive u) = u
 
-exhaustive :: SiphonI b e a -> Producer b IO r -> IO (Either e (a,r))
+exhaustive :: Siphon_ b e a -> Producer b IO r -> IO (Either e (a,r))
 exhaustive s = case s of 
     Exhaustive e -> e
     Nonexhaustive activity -> \producer -> do 
@@ -513,15 +507,12 @@ exhaustive s = case s of
                      `finally` atomically seal
                     )
 
-runSiphonI :: SiphonI b e a -> Producer b IO () -> IO (Either e a)
-runSiphonI s = nonexhaustive $ case s of 
+runSiphon :: Siphon b e a -> Producer b IO () -> IO (Either e a)
+runSiphon (Siphon (unLift -> s)) = nonexhaustive $ case s of 
     Exhaustive _ -> s
     Nonexhaustive _ -> Exhaustive (exhaustive s)
 
-runSiphon :: Siphon b e a -> Producer b IO () -> IO (Either e a)
-runSiphon (Siphon l) = runSiphonI (unLift l)
-
-instance Bifunctor (SiphonI b) where
+instance Bifunctor (Siphon_ b) where
   bimap f g s = case s of
       Exhaustive u -> Exhaustive $ fmap (liftM  (bimap f (bimap g id))) u
       Nonexhaustive h -> Nonexhaustive $ fmap (liftM  (bimap f g)) h
@@ -559,7 +550,7 @@ fromParser parser = siphon $ Pipes.Parse.evalStateT parser
 -}
 siphon :: (Producer b IO () -> IO (Either e a))
        -> Siphon b e a 
-siphon = Siphon . Other . Nonexhaustive
+siphon f = Siphon (Other (Nonexhaustive f))
 
 
 {-| 
