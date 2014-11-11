@@ -407,12 +407,8 @@ encoded :: DecodingFunction bytes text
         -> Siphon bytes e (a -> b)
         -> Siphon text  e a 
         -> Siphon bytes e b
-encoded decoder policy activity = 
-    Unhalting $ \producer ->
-        runExceptT $ do
-            (a,leftovers) <- ExceptT $ unhalting activity $ decoder producer 
-            (f,r) <- ExceptT $ unhalting policy leftovers 
-            pure (f a,r)
+encoded decoder (Siphon policy) (Siphon activity) = 
+    Siphon (Other (encodedI decoder (unLift policy) (unLift activity)))
 
 encodedI :: DecodingFunction bytes text
          -> SiphonI bytes e (a -> b)
@@ -423,17 +419,6 @@ encodedI decoder policy activity =
         runExceptT $ do
             (a,leftovers) <- ExceptT $ exhaustive activity $ decoder producer 
             (f,r) <- ExceptT $ exhaustive policy leftovers 
-            pure (f a,r)
-
-encodedX :: DecodingFunction bytes text
-         -> SiphonX bytes e (a -> b)
-         -> SiphonX text  e a 
-         -> SiphonX bytes e b
-encodedX decoder (SiphonX policy) (SiphonX activity) = SiphonX . Other $ 
-    Exhaustive $ \producer ->
-        runExceptT $ do
-            (a,leftovers) <- ExceptT $ exhaustive (unLift activity) $ decoder producer 
-            (f,r) <- ExceptT $ exhaustive (unLift policy) leftovers 
             pure (f a,r)
 
 newtype Pump b e a = Pump { runPump :: Consumer b IO () -> IO (Either e a) } deriving Functor
@@ -478,19 +463,12 @@ may fail early with an error of type @e@.
     '<*>' executes its arguments concurrently. The 'Producer' is forked so
     that each argument receives its own copy of the data.
  -}
-data Siphon b e a = 
-         Trivial a 
-       | Unhalting (forall r. Producer b IO r -> IO (Either e (a,r)))
-       | Halting (Producer b IO () -> IO (Either e a))
-       deriving (Functor)
-
+newtype Siphon b e a = Siphon (Lift (SiphonI b e) a) deriving (Functor,Applicative)
 
 data SiphonI b e a = 
          Exhaustive (forall r. Producer b IO r -> IO (Either e (a,r)))
        | Nonexhaustive (Producer b IO () -> IO (Either e a))
        deriving (Functor)
-
-newtype SiphonX b e a = SiphonX (Lift (SiphonI b e) a) deriving (Functor,Applicative)
 
 instance Applicative (SiphonI b e) where
     pure a = Exhaustive $ \producer -> do
@@ -540,82 +518,18 @@ runSiphonI s = nonexhaustive $ case s of
     Exhaustive _ -> s
     Nonexhaustive _ -> Exhaustive (exhaustive s)
 
-runSiphonX :: SiphonX b e a -> Producer b IO () -> IO (Either e a)
-runSiphonX (SiphonX l) = runSiphonI (unLift l)
+runSiphon :: Siphon b e a -> Producer b IO () -> IO (Either e a)
+runSiphon (Siphon l) = runSiphonI (unLift l)
 
 instance Bifunctor (SiphonI b) where
   bimap f g s = case s of
       Exhaustive u -> Exhaustive $ fmap (liftM  (bimap f (bimap g id))) u
       Nonexhaustive h -> Nonexhaustive $ fmap (liftM  (bimap f g)) h
 
-instance Bifunctor (SiphonX b) where
-  bimap f g (SiphonX s) = SiphonX $ case s of
+instance Bifunctor (Siphon b) where
+  bimap f g (Siphon s) = Siphon $ case s of
       Pure a -> Pure (g a)
       Other o -> Other (bimap f g o)
-
-instance Bifunctor (Siphon b) where
-  bimap f g s = case s of
-      Trivial a -> Trivial $ g a
-      Unhalting u -> Unhalting $ fmap (liftM  (bimap f (bimap g id))) u
-      Halting h -> Halting $ fmap (liftM  (bimap f g)) h
-
-instance Applicative (Siphon b e) where
-    pure = Trivial
-   
-    s1 <*> s2 = case (s1,s2) of
-        (Trivial f,_) -> fmap f s2
-        (_,Trivial a) -> fmap ($ a) s1
-        (_,_) -> bifurcate (halting s1) (halting s2)  
-      where 
-        bifurcate fs as =
-            Unhalting $ \producer -> do
-                (outbox1,inbox1,seal1) <- spawn' Single
-                (outbox2,inbox2,seal2) <- spawn' Single
-                runConceit $
-                    (,)
-                    <$>
-                    Conceit (fmap (uncurry ($)) <$> conceit ((fs $ fromInput inbox1) 
-                                                            `finally` atomically seal1) 
-                                                            ((as $ fromInput inbox2) 
-                                                            `finally` atomically seal2) 
-                            )
-                    <*>
-                    Conceit ((fmap pure $ runEffect $ 
-                                  producer >-> P.tee (toOutput outbox1 >> P.drain) 
-                                           >->       (toOutput outbox2 >> P.drain))   
-                             `finally` atomically seal1 `finally` atomically seal2
-                            ) 
-
-runSiphon :: Siphon b e a  -> Producer b IO () -> IO (Either e a)
-runSiphon s = case s of 
-    h@(Halting _) -> halting $ Unhalting $ unhalting h 
-    _ -> halting s
-
--- This might return a computation that *doesn't* completely drain the
--- Producer.
-halting :: Siphon b e a  -> Producer b IO () -> IO (Either e a)
-halting s = case s of 
-    a@(Trivial _) -> halting $ Unhalting $ unhalting a
-    Unhalting u -> \producer -> liftM (fmap fst) $ u producer
-    Halting h -> h 
-
-unhalting :: Siphon b e a -> Producer b IO r -> IO (Either e (a,r))
-unhalting s = case s of 
-    Trivial a -> \producer -> do
-        r <- (runEffect $ producer >-> P.drain)
-        pure . pure $ (a,r)
-    Unhalting u -> u
-    Halting activity -> \producer -> do 
-        (outbox,inbox,seal) <- spawn' Single
-        runConceit $ 
-            (,) 
-            <$>
-            Conceit (activity (fromInput inbox) `finally` atomically seal)
-            <*>
-            Conceit ((fmap pure $ runEffect $ 
-                            producer >-> (toOutput outbox >> P.drain))
-                     `finally` atomically seal
-                    )
 
 instance (Monoid a) => Monoid (Siphon b e a) where
    mempty = pure mempty
@@ -645,7 +559,7 @@ fromParser parser = siphon $ Pipes.Parse.evalStateT parser
 -}
 siphon :: (Producer b IO () -> IO (Either e a))
        -> Siphon b e a 
-siphon = Halting
+siphon = Siphon . Other . Nonexhaustive
 
 
 {-| 
@@ -653,7 +567,7 @@ siphon = Halting
 but may fail with an error of type @e@.
 -}
 siphon' :: (forall r. Producer b IO r -> IO (Either e (a,r))) -> Siphon b e a 
-siphon' = Unhalting
+siphon' f = Siphon (Other (Exhaustive f))
 
 {-| 
     Useful in combination with 'Pipes.Text.toLazyM' from @pipes-text@ and
@@ -677,7 +591,7 @@ fromFold'_ aFold = fromFold' $ fmap (fmap ((,) ())) aFold
 'Producer' produces anything.
  -}
 unwanted :: a -> Siphon b b a
-unwanted a = Unhalting $ \producer -> do
+unwanted a = siphon' $ \producer -> do
     n <- next producer  
     return $ case n of 
         Left r -> Right (a,r)
@@ -866,7 +780,7 @@ executePipelineFallibly policy (Node s (s':ss)) =
                     )
 
 errorSiphonUTF8 :: MVar (Output ByteString) -> LinePolicy e -> Siphon ByteString e ()
-errorSiphonUTF8 mvar (LinePolicy fun twk) = Halting $ fun twk iterTLines 
+errorSiphonUTF8 mvar (LinePolicy fun twk) = siphon (fun twk iterTLines)
   where     
     iterTLines = iterT $ \textProducer -> do
         -- the P.drain bit was difficult to figure out!!!
@@ -922,9 +836,9 @@ executePipelineInternal ppinitial ppmiddle ppend ppend' (CreatePipeline (Stage c
     blende ecpol <$> executeFallibly (ppinitial (runNonEmpty ppend ppend' a) lpol) cp
   where 
     runTree ppend ppend' (Node (Stage cp lpol ecpol pipe) forest) = case forest of
-        [] -> Halting $ \producer ->
+        [] -> siphon $ \producer ->
             blende ecpol <$> executeFallibly (ppend (fromFallibleProducer $ pipe producer) lpol) cp
-        c1 : cs -> Halting $ \producer ->
+        c1 : cs -> siphon $ \producer ->
            blende ecpol <$> executeFallibly (ppmiddle (fromFallibleProducer $ pipe producer) (runNonEmpty ppend ppend' (c1 :| cs)) lpol) cp
 
     runNonEmpty ppend ppend' (b :| bs) = 
