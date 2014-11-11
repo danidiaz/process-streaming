@@ -19,6 +19,7 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 module System.Process.Streaming ( 
         -- * Execution
@@ -87,8 +88,9 @@ import Data.Void
 import Data.List.NonEmpty
 import qualified Data.List.NonEmpty as N
 import Control.Applicative
+import Control.Applicative.Lift
 import Control.Monad
-import Control.Monad.Trans.Free
+import Control.Monad.Trans.Free hiding (Pure)
 import Control.Monad.Trans.Except
 import Control.Monad.Trans.State
 import Control.Monad.Trans.Writer.Strict
@@ -412,6 +414,28 @@ encoded decoder policy activity =
             (f,r) <- ExceptT $ unhalting policy leftovers 
             pure (f a,r)
 
+encodedI :: DecodingFunction bytes text
+         -> SiphonI bytes e (a -> b)
+         -> SiphonI text  e a 
+         -> SiphonI bytes e b
+encodedI decoder policy activity = 
+    Exhaustive $ \producer ->
+        runExceptT $ do
+            (a,leftovers) <- ExceptT $ exhaustive activity $ decoder producer 
+            (f,r) <- ExceptT $ exhaustive policy leftovers 
+            pure (f a,r)
+
+encodedX :: DecodingFunction bytes text
+         -> SiphonX bytes e (a -> b)
+         -> SiphonX text  e a 
+         -> SiphonX bytes e b
+encodedX decoder (SiphonX policy) (SiphonX activity) = SiphonX . Other $ 
+    Exhaustive $ \producer ->
+        runExceptT $ do
+            (a,leftovers) <- ExceptT $ exhaustive (unLift activity) $ decoder producer 
+            (f,r) <- ExceptT $ exhaustive (unLift policy) leftovers 
+            pure (f a,r)
+
 newtype Pump b e a = Pump { runPump :: Consumer b IO () -> IO (Either e a) } deriving Functor
 
 instance Bifunctor (Pump b) where
@@ -459,6 +483,75 @@ data Siphon b e a =
        | Unhalting (forall r. Producer b IO r -> IO (Either e (a,r)))
        | Halting (Producer b IO () -> IO (Either e a))
        deriving (Functor)
+
+
+data SiphonI b e a = 
+         Exhaustive (forall r. Producer b IO r -> IO (Either e (a,r)))
+       | Nonexhaustive (Producer b IO () -> IO (Either e a))
+       deriving (Functor)
+
+newtype SiphonX b e a = SiphonX (Lift (SiphonI b e) a) deriving (Functor,Applicative)
+
+instance Applicative (SiphonI b e) where
+    pure a = Exhaustive $ \producer -> do
+        r <- runEffect (producer >-> P.drain)
+        pure (pure (a,r))
+    s1 <*> s2 = bifurcate (nonexhaustive s1) (nonexhaustive s2)  
+      where 
+        bifurcate fs as = Exhaustive $ \producer -> do
+            (outbox1,inbox1,seal1) <- spawn' Single
+            (outbox2,inbox2,seal2) <- spawn' Single
+            runConceit $
+                (,)
+                <$>
+                Conceit (fmap (uncurry ($)) <$> conceit ((fs $ fromInput inbox1) 
+                                                        `finally` atomically seal1) 
+                                                        ((as $ fromInput inbox2) 
+                                                        `finally` atomically seal2) 
+                        )
+                <*>
+                Conceit ((fmap pure $ runEffect $ 
+                              producer >-> P.tee (toOutput outbox1 >> P.drain) 
+                                       >->       (toOutput outbox2 >> P.drain))   
+                         `finally` atomically seal1 `finally` atomically seal2
+                        ) 
+
+nonexhaustive :: SiphonI b e a -> Producer b IO () -> IO (Either e a)
+nonexhaustive (Exhaustive e) = \producer -> liftM (fmap fst) (e producer)
+nonexhaustive (Nonexhaustive u) = u
+
+exhaustive :: SiphonI b e a -> Producer b IO r -> IO (Either e (a,r))
+exhaustive s = case s of 
+    Exhaustive e -> e
+    Nonexhaustive activity -> \producer -> do 
+        (outbox,inbox,seal) <- spawn' Single
+        runConceit $ 
+            (,) 
+            <$>
+            Conceit (activity (fromInput inbox) `finally` atomically seal)
+            <*>
+            Conceit ((fmap pure $ runEffect $ 
+                            producer >-> (toOutput outbox >> P.drain))
+                     `finally` atomically seal
+                    )
+
+runSiphonI :: SiphonI b e a -> Producer b IO () -> IO (Either e a)
+runSiphonI s = nonexhaustive $ case s of 
+    Exhaustive _ -> s
+    Nonexhaustive _ -> Exhaustive (exhaustive s)
+
+runSiphonX :: SiphonX b e a -> Producer b IO () -> IO (Either e a)
+runSiphonX (SiphonX l) = runSiphonI (unLift l)
+
+instance Bifunctor (SiphonI b) where
+  bimap f g s = case s of
+      Exhaustive u -> Exhaustive $ fmap (liftM  (bimap f (bimap g id))) u
+      Nonexhaustive h -> Nonexhaustive $ fmap (liftM  (bimap f g)) h
+
+instance Bifunctor (SiphonX b) where
+  bimap f g (SiphonX s) = SiphonX $ case s of
+      Pure a -> Pure (g a)
+      Other o -> Other (bimap f g o)
 
 instance Bifunctor (Siphon b) where
   bimap f g s = case s of
