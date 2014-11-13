@@ -79,6 +79,7 @@ import Data.Maybe
 import Data.Bifunctor
 import Data.Functor.Identity
 import Data.Functor.Contravariant
+import Data.Functor.Contravariant.Divisible
 import Data.Either
 import Data.Monoid
 import Data.Foldable
@@ -471,6 +472,66 @@ instance Contravariant (SiphonOp e a) where
                 e $ producer >-> P.map f
             Nonexhaustive ne -> Nonexhaustive $ \producer ->
                 ne $ producer >-> P.map f
+
+instance Monoid a => Divisible (SiphonOp e a) where
+    divide divider siphonOp1 siphonOp2 = contramap divider . SiphonOp $ 
+        (getSiphonOp (contramap fst siphonOp1)) 
+        `mappend`
+        (getSiphonOp (contramap snd siphonOp2))
+    conquer = SiphonOp (pure mempty)
+
+instance Monoid a => Decidable (SiphonOp e a) where
+    choose chooser (SiphonOp s1) (SiphonOp s2) = 
+        contramap chooser . SiphonOp $ 
+            (contraPipeMapL s1) 
+            `mappend`
+            (contraPipeMapR s2)
+      where
+        contraPipeMapL (Siphon s) = Siphon $ case s of
+            Pure p -> Pure p
+            Other o -> Other $ case o of
+                Exhaustive e -> Exhaustive $ \producer ->
+                    e $ producer >-> allowLefts
+                Nonexhaustive ne -> Nonexhaustive $ \producer ->
+                    ne $ producer >-> allowLefts
+        contraPipeMapR (Siphon s) = Siphon $ case s of
+            Pure p -> Pure p
+            Other o -> Other $ case o of
+                Exhaustive e -> Exhaustive $ \producer ->
+                    e $ producer >-> allowRights
+                Nonexhaustive ne -> Nonexhaustive $ \producer ->
+                    ne $ producer >-> allowRights
+        allowLefts = do
+            e <- await
+            case e of 
+                Left l -> Pipes.yield l >> allowLefts
+                Right _ -> allowLefts
+        allowRights = do
+            e <- await
+            case e of 
+                Right r -> Pipes.yield r >> allowRights
+                Left _ -> allowRights
+    lose f = SiphonOp . Siphon . Other . Nonexhaustive $ \producer -> do
+        n <- next producer  
+        return $ case n of 
+            Left () -> Right mempty
+            Right (b,_) -> Right (absurd (f b))
+
+
+allowLefts :: Monad m => Pipe (Either b a) b m r
+allowLefts = do
+    e <- await
+    case e of 
+        Left l -> Pipes.yield l >> allowLefts
+        Right _ -> allowLefts
+                                           
+allowRights :: Monad m => Pipe (Either b a) a m r
+allowRights = do
+    e <- await
+    case e of 
+        Right r -> Pipes.yield r >> allowRights
+        Left _ -> allowRights
+                                           
 
 data Siphon_ b e a = 
          Exhaustive (forall r. Producer b IO r -> IO (Either e (a,r)))
