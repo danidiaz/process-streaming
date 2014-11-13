@@ -40,7 +40,8 @@ Library
         void >= 0.6 && < 0.7,
         containers >= 0.4,
         semigroups >= 0.15 && < 0.16,
-        conceit >= 0.2.1.0 && < 0.3.0.0
+        conceit >= 0.2.1.0 && < 0.3.0.0,
+        contravariant >= 1.2
 
 Test-suite test
     default-language:

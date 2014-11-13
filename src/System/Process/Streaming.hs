@@ -45,6 +45,7 @@ module System.Process.Streaming (
         , fromFallibleProducer
         -- * Siphoning bytes out of stdout/stderr
         , Siphon
+        , SiphonOp (..)
         , siphon
         , siphon'
         , fromFold
@@ -77,6 +78,7 @@ module System.Process.Streaming (
 import Data.Maybe
 import Data.Bifunctor
 import Data.Functor.Identity
+import Data.Functor.Contravariant
 import Data.Either
 import Data.Monoid
 import Data.Foldable
@@ -458,6 +460,17 @@ may fail early with an error of type @e@.
     that each argument receives its own copy of the data.
  -}
 newtype Siphon b e a = Siphon (Lift (Siphon_ b e) a) deriving (Functor,Applicative)
+
+newtype SiphonOp e a b = SiphonOp { getSiphonOp :: Siphon b e a } 
+
+instance Contravariant (SiphonOp e a) where
+    contramap f (SiphonOp (Siphon s)) = SiphonOp . Siphon $ case s of
+        Pure p -> Pure p
+        Other o -> Other $ case o of
+            Exhaustive e -> Exhaustive $ \producer ->
+                e $ producer >-> P.map f
+            Nonexhaustive ne -> Nonexhaustive $ \producer ->
+                ne $ producer >-> P.map f
 
 data Siphon_ b e a = 
          Exhaustive (forall r. Producer b IO r -> IO (Either e (a,r)))
