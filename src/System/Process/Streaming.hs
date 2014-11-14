@@ -51,6 +51,8 @@ module System.Process.Streaming (
         , fromFold
         , fromFold'
         , fromFold'_
+        , fromFoldl
+        , fromFoldlM
         , fromConsumer
         , fromSafeConsumer
         , fromFallibleConsumer
@@ -102,6 +104,7 @@ import Control.Monad.Trans.Free hiding (Pure)
 import Control.Monad.Trans.Except
 import Control.Monad.Trans.State
 import Control.Monad.Trans.Writer.Strict
+import qualified Control.Foldl as L
 import qualified Control.Monad.Catch as C
 import Control.Exception
 import Control.Concurrent
@@ -660,6 +663,19 @@ fromFold' aFold = siphon' $ fmap (fmap pure) aFold
 
 fromFold'_ :: (forall r. Producer b IO r -> IO r) -> Siphon b e () 
 fromFold'_ aFold = fromFold' $ fmap (fmap ((,) ())) aFold
+
+
+{-| 
+   Builds a 'Siphon' out of a pure fold from the @foldl@ package.
+-}
+fromFoldl :: L.Fold b a -> Siphon b e a 
+fromFoldl aFold = fromFold' $ L.purely P.fold' aFold
+
+{-| 
+   Builds a 'Siphon' out of a monadic fold from the @foldl@ package.
+-}
+fromFoldlM :: L.FoldM IO b a -> Siphon b e a 
+fromFoldlM aFoldM = fromFold' $ L.impurely P.foldM' aFoldM
 
 {-|
   Constructs a 'Siphon' that aborts the computation if the underlying
