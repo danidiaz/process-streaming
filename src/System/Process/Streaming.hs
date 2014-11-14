@@ -464,6 +464,7 @@ newtype Siphon b e a = Siphon (Lift (Siphon_ b e) a) deriving (Functor,Applicati
 
 newtype SiphonOp e a b = SiphonOp { getSiphonOp :: Siphon b e a } 
 
+-- | 'contramap' carn turn a 'SiphonOp' for bytes into a 'SiphonOp' for text.
 instance Contravariant (SiphonOp e a) where
     contramap f (SiphonOp (Siphon s)) = SiphonOp . Siphon $ case s of
         Pure p -> Pure p
@@ -473,6 +474,8 @@ instance Contravariant (SiphonOp e a) where
             Nonexhaustive ne -> Nonexhaustive $ \producer ->
                 ne $ producer >-> P.map f
 
+-- | 'divide' builds a 'SiphonOp' for a composite out of the 'SiphonOp's
+-- for the parts.
 instance Monoid a => Divisible (SiphonOp e a) where
     divide divider siphonOp1 siphonOp2 = contramap divider . SiphonOp $ 
         (getSiphonOp (contramap fst siphonOp1)) 
@@ -480,6 +483,8 @@ instance Monoid a => Divisible (SiphonOp e a) where
         (getSiphonOp (contramap snd siphonOp2))
     conquer = SiphonOp (pure mempty)
 
+-- | 'choose' builds a 'SiphonOp' for a sum out of the 'SiphonOp's
+-- for the branches.
 instance Monoid a => Decidable (SiphonOp e a) where
     choose chooser (SiphonOp s1) (SiphonOp s2) = 
         contramap chooser . SiphonOp $ 
