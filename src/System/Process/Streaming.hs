@@ -556,11 +556,11 @@ instance Applicative (Siphon_ b e) where
                                                         `finally` atomically seal2) 
                         )
                 <*>
-                Conceit ((fmap pure $ runEffect $ 
+                _Conceit ((runEffect $ 
                               producer >-> P.tee (toOutput outbox1 >> P.drain) 
                                        >->       (toOutput outbox2 >> P.drain))   
-                         `finally` atomically seal1 `finally` atomically seal2
-                        ) 
+                          `finally` atomically seal1 `finally` atomically seal2
+                         ) 
 
 nonexhaustive :: Siphon_ b e a -> Producer b IO () -> IO (Either e a)
 nonexhaustive (Exhaustive e) = \producer -> liftM (fmap fst) (e producer)
@@ -576,10 +576,9 @@ exhaustive s = case s of
             <$>
             Conceit (activity (fromInput inbox) `finally` atomically seal)
             <*>
-            Conceit ((fmap pure $ runEffect $ 
-                            producer >-> (toOutput outbox >> P.drain))
-                     `finally` atomically seal
-                    )
+            _Conceit (runEffect (producer >-> (toOutput outbox >> P.drain)) 
+                      `finally` atomically seal
+                     )
 
 runSiphon :: Siphon b e a -> Producer b IO () -> IO (Either e a)
 runSiphon (Siphon (unLift -> s)) = nonexhaustive $ case s of 
