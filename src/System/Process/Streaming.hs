@@ -26,7 +26,7 @@ module System.Process.Streaming (
           execute
         , executeFallibly
         -- * Piping Policies
-        , PipingPolicy
+        , Piping
         , nopiping
         , pipeo
         , pipee
@@ -59,8 +59,8 @@ module System.Process.Streaming (
         , DecodingFunction
         , encoded
         -- * Line handling
-        , LinePolicy
-        , linePolicy
+        , Lines
+        , toLines
         , tweakLines
         -- * Pipelines
         , executePipeline
@@ -72,7 +72,12 @@ module System.Process.Streaming (
         , inbound
         -- * Re-exports
         -- $reexports
-        , module System.Process
+        , module System.Process,
+        -- * Deprecated
+        -- $deprecated
+        PipingPolicy,
+        LinePolicy,
+        linePolicy 
     ) where
 
 import Data.Maybe
@@ -116,12 +121,12 @@ import System.Process
 import System.Process.Lens
 import System.Exit
 
-execute :: PipingPolicy Void a -> CreateProcess -> IO (ExitCode,a)
+execute :: Piping Void a -> CreateProcess -> IO (ExitCode,a)
 execute pp cprocess = either absurd id <$> executeFallibly pp cprocess
 
 {-|
    Executes an external process. The standard streams are piped and consumed in
-a way defined by the 'PipingPolicy' argument. 
+a way defined by the 'Piping' argument. 
 
    This function re-throws any 'IOException's it encounters.
 
@@ -132,7 +137,7 @@ thrown in this case.).
    If an error @e@ or an exception happens, the external process is
 terminated.
  -}
-executeFallibly :: PipingPolicy e a -> CreateProcess -> IO (Either e (ExitCode,a))
+executeFallibly :: Piping e a -> CreateProcess -> IO (Either e (ExitCode,a))
 executeFallibly pp record = case pp of
       PPNone a -> executeInternal record nohandles $  
           \() -> (return . Right $ a,return ())
@@ -191,19 +196,19 @@ terminateOnError pHandle action = do
             return $ Right (exitCode,r)  
 
 {-|
-    A 'PipingPolicy' determines what standard streams will be piped and what to
+    A 'Piping' determines what standard streams will be piped and what to
 do with them.
 
     The user doesn't need to manually set the 'std_in', 'std_out' and 'std_err'
 fields of the 'CreateProcess' record to 'CreatePipe', this is done
 automatically. 
 
-    A 'PipingPolicy' is parametrized by the type @e@ of errors that can abort
+    A 'Piping' is parametrized by the type @e@ of errors that can abort
 the processing of the streams.
  -}
 -- Knows that there is a stdin, stdout and a stderr,
 -- but doesn't know anything about file handlers or CreateProcess.
-data PipingPolicy e a = 
+data Piping e a = 
       PPNone a
     | PPOutput (Producer ByteString IO () -> IO (Either e a))
     | PPError (Producer ByteString IO () -> IO (Either e a))
@@ -214,7 +219,7 @@ data PipingPolicy e a =
     | PPInputOutputError ((Consumer ByteString IO (),IO (),Producer ByteString IO (),Producer ByteString IO ()) -> IO (Either e a))
     deriving (Functor)
 
-instance Bifunctor PipingPolicy where
+instance Bifunctor Piping where
   bimap f g pp = case pp of
         PPNone a -> PPNone $ g a 
         PPOutput action -> PPOutput $ fmap (fmap (bimap f g)) action
@@ -228,59 +233,59 @@ instance Bifunctor PipingPolicy where
 {-|
     Do not pipe any standard stream. 
 -}
-nopiping :: PipingPolicy e ()
+nopiping :: Piping e ()
 nopiping = PPNone ()
 
 {-|
     Pipe @stdout@.
 -}
-pipeo :: Siphon ByteString e a -> PipingPolicy e a
+pipeo :: Siphon ByteString e a -> Piping e a
 pipeo (runSiphon -> siphonout) = PPOutput $ siphonout
 
 {-|
     Pipe @stderr@.
 -}
-pipee :: Siphon ByteString e a -> PipingPolicy e a
+pipee :: Siphon ByteString e a -> Piping e a
 pipee (runSiphon -> siphonout) = PPError $ siphonout
 
 {-|
     Pipe @stdout@ and @stderr@.
 -}
-pipeoe :: Siphon ByteString e a -> Siphon ByteString e b -> PipingPolicy e (a,b)
+pipeoe :: Siphon ByteString e a -> Siphon ByteString e b -> Piping e (a,b)
 pipeoe (runSiphon -> siphonout) (runSiphon -> siphonerr) = 
     PPOutputError $ uncurry $ separated siphonout siphonerr  
 
 {-|
     Pipe @stdout@ and @stderr@ and consume them combined as 'Text'.  
 -}
-pipeoec :: LinePolicy e -> LinePolicy e -> Siphon Text e a -> PipingPolicy e a
+pipeoec :: Lines e -> Lines e -> Siphon Text e a -> Piping e a
 pipeoec policy1 policy2 (runSiphon -> siphon) = 
     PPOutputError $ uncurry $ combined policy1 policy2 siphon  
 
 {-|
     Pipe @stdin@.
 -}
-pipei :: Pump ByteString e i -> PipingPolicy e i
+pipei :: Pump ByteString e i -> Piping e i
 pipei (Pump feeder) = PPInput $ \(consumer,cleanup) -> feeder consumer `finally` cleanup
 
 {-|
     Pipe @stdin@ and @stdout@.
 -}
-pipeio :: Pump ByteString e i -> Siphon ByteString e a -> PipingPolicy e (i,a)
+pipeio :: Pump ByteString e i -> Siphon ByteString e a -> Piping e (i,a)
 pipeio (Pump feeder) (runSiphon -> siphonout) = PPInputOutput $ \(consumer,cleanup,producer) ->
         (conceit (feeder consumer `finally` cleanup) (siphonout producer))
 
 {-|
     Pipe @stdin@ and @stderr@.
 -}
-pipeie :: Pump ByteString e i -> Siphon ByteString e a -> PipingPolicy e (i,a)
+pipeie :: Pump ByteString e i -> Siphon ByteString e a -> Piping e (i,a)
 pipeie (Pump feeder) (runSiphon -> siphonerr) = PPInputError $ \(consumer,cleanup,producer) ->
         (conceit (feeder consumer `finally` cleanup) (siphonerr producer))
 
 {-|
     Pipe @stdin@, @stdout@ and @stderr@.
 -}
-pipeioe :: Pump ByteString e i -> Siphon ByteString e a -> Siphon ByteString e b -> PipingPolicy e (i,a,b)
+pipeioe :: Pump ByteString e i -> Siphon ByteString e a -> Siphon ByteString e b -> Piping e (i,a,b)
 pipeioe (Pump feeder) (runSiphon -> siphonout) (runSiphon -> siphonerr) = fmap flattenTuple $ PPInputOutputError $
     \(consumer,cleanup,outprod,errprod) -> 
              (conceit (feeder consumer `finally` cleanup) 
@@ -291,7 +296,7 @@ pipeioe (Pump feeder) (runSiphon -> siphonout) (runSiphon -> siphonerr) = fmap f
 {-|
     Pipe @stdin@, @stdout@ and @stderr@, consuming the last two combined as 'Text'.
 -}
-pipeioec :: Pump ByteString e i -> LinePolicy e -> LinePolicy e -> Siphon Text e a -> PipingPolicy e (i,a)
+pipeioec :: Pump ByteString e i -> Lines e -> Lines e -> Siphon Text e a -> Piping e (i,a)
 pipeioec (Pump feeder) policy1 policy2 (runSiphon -> siphon) = PPInputOutputError $
     \(consumer,cleanup,outprod,errprod) -> 
              (conceit (feeder consumer `finally` cleanup) 
@@ -308,7 +313,7 @@ separated outfunc errfunc outprod errprod =
     multiple streams.
  -}
 
-data LinePolicy e = LinePolicy 
+data Lines e = Lines 
     {
         teardown :: (forall r. Producer T.Text IO r -> Producer T.Text IO r)
                  -> (FreeT (Producer T.Text IO) IO (Producer ByteString IO ()) -> IO (Producer ByteString IO ())) 
@@ -316,8 +321,9 @@ data LinePolicy e = LinePolicy
     ,   lineTweaker :: forall r. Producer T.Text IO r -> Producer T.Text IO r
     } 
 
-instance Functor LinePolicy where
-  fmap f (LinePolicy func lt) = LinePolicy (\x y z -> fmap (bimap f id) $ func x y z) lt
+-- | 'fmap' maps over the encoding error. 
+instance Functor Lines where
+  fmap f (Lines func lt) = Lines (\x y z -> fmap (bimap f id) $ func x y z) lt
 
 
 {-|
@@ -328,19 +334,19 @@ instance Functor LinePolicy where
 
   > (\x -> yield "prefix: " *> x)
 -}
-tweakLines :: (forall r. Producer T.Text IO r -> Producer T.Text IO r) -> LinePolicy e -> LinePolicy e 
-tweakLines lt' (LinePolicy tear lt) = LinePolicy tear (lt' . lt) 
+tweakLines :: (forall r. Producer T.Text IO r -> Producer T.Text IO r) -> Lines e -> Lines e 
+tweakLines lt' (Lines tear lt) = Lines tear (lt' . lt) 
 
 {-|
-    Constructs a 'LinePolicy' out of a 'DecodingFunction' and a 'Siphon'
+    Constructs a 'Lines' out of a 'DecodingFunction' and a 'Siphon'
     that specifies how to handle decoding failures. Passing @pure ()@ as
     the 'Siphon' will ignore any leftovers. Passing @unwanted ()@ will
     abort the computation if leftovers remain.
  -}
-linePolicy :: DecodingFunction ByteString Text 
+toLines :: DecodingFunction ByteString Text 
            -> Siphon ByteString e ()
-           -> LinePolicy e 
-linePolicy decoder lopo = LinePolicy
+           -> Lines e 
+toLines decoder lopo = Lines
     (\tweaker teardown producer -> do
         let freeLines = transFreeT tweaker 
                       . viewLines 
@@ -351,11 +357,11 @@ linePolicy decoder lopo = LinePolicy
     id 
 
 -- http://unix.stackexchange.com/questions/114182/can-redirecting-stdout-and-stderr-to-the-same-file-mangle-lines here
-combined :: LinePolicy e 
-         -> LinePolicy e 
+combined :: Lines e 
+         -> Lines e 
          -> (Producer T.Text IO () -> IO (Either e a))
          -> Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e a)
-combined (LinePolicy fun1 twk1) (LinePolicy fun2 twk2) combinedConsumer prod1 prod2 = 
+combined (Lines fun1 twk1) (Lines fun2 twk2) combinedConsumer prod1 prod2 = 
     manyCombined [fmap ($prod1) (fun1 twk1), fmap ($prod2) (fun2 twk2)] combinedConsumer 
   where     
     manyCombined :: [(FreeT (Producer T.Text IO) IO (Producer ByteString IO ()) -> IO (Producer ByteString IO ())) -> IO (Either e ())]
@@ -666,7 +672,7 @@ unwanted a = siphon' $ \producer -> do
         Left r -> Right (a,r)
         Right (b,_) -> Left b
 
-executePipeline :: PipingPolicy Void a -> Tree (Stage Void) -> IO a 
+executePipeline :: Piping Void a -> Tree (Stage Void) -> IO a 
 executePipeline pp pipeline = either absurd id <$> executePipelineFallibly pp pipeline
 
 
@@ -674,7 +680,7 @@ executePipeline pp pipeline = either absurd id <$> executePipelineFallibly pp pi
     Similar to 'executeFallibly', but instead of a single process it
     executes a (possibly branching) pipeline of external processes. 
 
-    The 'PipingPolicy' argument views the pipeline as a synthetic process
+    The 'Piping' argument views the pipeline as a synthetic process
     for which @stdin@ is the @stdin@ of the first stage, @stdout@ is the
     @stdout@ of the leftmost terminal stage among those closer to the root,
     and @stderr@ is a combination of the @stderr@ streams of all the
@@ -687,7 +693,7 @@ executePipeline pp pipeline = either absurd id <$> executePipelineFallibly pp pi
     processes are not notified and keep going. There is no SIGPIPE-like
     functionality, in other words. 
  -}
-executePipelineFallibly :: PipingPolicy e a -> Tree (Stage e) -> IO (Either e a)
+executePipelineFallibly :: Piping e a -> Tree (Stage e) -> IO (Either e a)
 executePipelineFallibly policy (Node (Stage cp lpol ecpol _) []) = case policy of
           PPNone a -> blende ecpol <$> executeFallibly policy cp 
           PPOutput action -> blende ecpol <$> executeFallibly policy cp 
@@ -848,8 +854,8 @@ executePipelineFallibly policy (Node s (s':ss)) =
                                `finally` atomically iseal `finally` atomically oseal `finally` atomically eseal
                     )
 
-errorSiphonUTF8 :: MVar (Output ByteString) -> LinePolicy e -> Siphon ByteString e ()
-errorSiphonUTF8 mvar (LinePolicy fun twk) = siphon (fun twk iterTLines)
+errorSiphonUTF8 :: MVar (Output ByteString) -> Lines e -> Siphon ByteString e ()
+errorSiphonUTF8 mvar (Lines fun twk) = siphon (fun twk iterTLines)
   where     
     iterTLines = iterT $ \textProducer -> do
         -- the P.drain bit was difficult to figure out!!!
@@ -867,7 +873,7 @@ mute = fmap (const ())
 data Stage e = Stage 
            {
              processDefinition' :: CreateProcess 
-           , stderrLinePolicy' :: LinePolicy e
+           , stderrLines' :: Lines e
            , exitCodePolicy' :: ExitCode -> Either e ()
            , inbound' :: forall r. Producer ByteString IO r -> Producer ByteString (ExceptT e IO) r 
            } 
@@ -876,12 +882,12 @@ instance Functor (Stage) where
     fmap f (Stage a b c d) = Stage a (fmap f b) (bimap f id . c) (hoist (mapExceptT $ liftM (bimap f id)) . d)
 
 {-|
-    Builds a 'Stage' out of a 'LinePolicy' that specifies how to handle
+    Builds a 'Stage' out of a 'Lines' that specifies how to handle
     @stderr@ when piped, a function that determines whether an
     'ExitCode' represents an error (some programs return non-standard exit
     codes) and a process definition. 
 -}
-stage :: LinePolicy e -> (ExitCode -> Either e ()) -> CreateProcess -> Stage e       
+stage :: Lines e -> (ExitCode -> Either e ()) -> CreateProcess -> Stage e       
 stage lp ec cp = Stage cp lp ec (hoist lift) 
 
 {-|
@@ -895,10 +901,10 @@ inbound f (Stage a b c d) = Stage a b c (f . d)
 
 data CreatePipeline e =  CreatePipeline (Stage e) (NonEmpty (Tree (Stage e))) deriving (Functor)
 
-executePipelineInternal :: (Siphon ByteString e () -> LinePolicy e -> PipingPolicy e ())
-                        -> (Pump ByteString e () -> Siphon ByteString e () -> LinePolicy e -> PipingPolicy e ())
-                        -> (Pump ByteString e () -> LinePolicy e -> PipingPolicy e ())
-                        -> (Pump ByteString e () -> LinePolicy e -> PipingPolicy e ())
+executePipelineInternal :: (Siphon ByteString e () -> Lines e -> Piping e ())
+                        -> (Pump ByteString e () -> Siphon ByteString e () -> Lines e -> Piping e ())
+                        -> (Pump ByteString e () -> Lines e -> Piping e ())
+                        -> (Pump ByteString e () -> Lines e -> Piping e ())
                         -> CreatePipeline e 
                         -> IO (Either e ())
 executePipelineInternal ppinitial ppmiddle ppend ppend' (CreatePipeline (Stage cp lpol ecpol _) a) =      
@@ -930,3 +936,15 @@ pipefail ec = case ec of
 
 -} 
 
+{- $deprecated
+ 
+
+-} 
+type PipingPolicy e a = Piping e a  
+
+type LinePolicy e = Lines e   
+
+linePolicy :: DecodingFunction ByteString Text 
+           -> Siphon ByteString e ()
+           -> Lines e 
+linePolicy = toLines 
