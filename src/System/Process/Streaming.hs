@@ -697,11 +697,16 @@ fromFoldl :: L.Fold b a -> Siphon b e a
 fromFoldl aFold = fromFold' $ L.purely P.fold' aFold
 
 {-| 
-   Builds a 'Siphon' out of a monadic fold from the @foldl@ package.
+   Builds a 'Siphon' out of a monadic fold from the @foldl@ package that
+   works in the IO monad.
 -}
 fromFoldlIO :: L.FoldM IO b a -> Siphon b e a 
 fromFoldlIO aFoldM = fromFold' $ L.impurely P.foldM' aFoldM
 
+
+{-| 
+   Builds a 'Siphon' out of a monadic fold from the @foldl@ package.
+-}
 fromFoldlM :: MonadIO m => (forall r. m (a,r) -> IO (Either e (c,r))) -> L.FoldM m b a -> Siphon b e c 
 fromFoldlM whittle aFoldM = siphon' $ \producer -> 
     whittle $ L.impurely P.foldM' aFoldM (hoist liftIO producer)
