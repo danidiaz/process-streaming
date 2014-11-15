@@ -5,12 +5,12 @@
  'std_out' and 'std_err' fields, as these are set automatically according
  to the 'Piping'.
 
- 'Piping' is a datatype that specifies what streams to pipe and what to
- do with them. It has many constructors, one for each possible
+ 'Piping' is a datatype that specifies what standard streams to pipe and
+ what to do with them. It has many constructors, one for each possible
  combination of streams.
 
  Constructors for 'Piping' usually take 'Siphon's as parameters.
- A 'Siphon' specifies what to do with a particular stream.
+ A 'Siphon' specifies what to do with a particular standard stream.
 
  'Siphon's can be built from each of the typical ways of consuming
  a 'Producer' in the @pipes@ ecosystem:
@@ -54,9 +54,12 @@ module System.Process.Streaming.Tutorial (
     -- * Collecting @stdout@ and @stderr@ independently
     -- $collstdoutstderr
 
-
     -- * Collecting @stdout@ as a lazy Text
     -- $collstdouttext
+
+
+    -- * Consuming @stdout@ and @stderr@ combined as Text
+    -- $collstdoutstderrtext
     ) where
 
 import System.Process.Streaming
@@ -123,7 +126,7 @@ We can use 'pipeoe' collect @stdout@ and @stderr@ concurrently:
 If we want to consume @stdout@ as text, we need to use the 'encoded'
 function. 'encoded' takes as parameters a decoding function (the example
 uses one from @pipes-text@) and a 'Siphon' that specifies how to handle the
-leftovers, if any. It returns a function that converts a 'Siphon' for text
+leftovers. It returns a function that converts a 'Siphon' for text
 into a 'Siphon' for bytes.
 
 In the example we pass @pure id@ as the leftover-handling 'Siphon'. This
@@ -131,7 +134,7 @@ means "drain all the undecoded data remaining in the stream and return
 unchanged the result of @(fromFold T.toLazyM)@". In other words: ignore any
 leftovers.
 
->>> execute (pipeo (encoded T.decodeIso8859_1 (pure id) (fromFold T.toLazyM))) (shell "echo ooo")
+>>> execute (pipeo (encoded T.decodeUtf8 (pure id) (fromFold T.toLazyM))) (shell "echo ooo")
 (ExitSuccess,"ooo\n")
 
 But suppose we want to interrupt the execution of the program when we
@@ -142,17 +145,42 @@ leftovers remain. 'unwanted' uses the first leftovers that apear in the
 stream as the error value. So, in this example the error type will be
 'ByteString':
 
->>> executeFallibly (pipeo (encoded T.decodeIso8859_1 (unwanted id) (fromFold T.toLazyM))) (shell "echo ooo")
+>>> executeFallibly (pipeo (encoded T.decodeUtf8 (unwanted id) (fromFold T.toLazyM))) (shell "echo ooo")
 Right (ExitSuccess,"ooo\n")
 
 Notice also that we had to switch from 'execute' to 'executeFallibly'. This
 is because, for the first time in the tutorial, we actually have a need for
 the error type. 'execute' only works when the error type is 'Void'.
 
-(Beware: even if the error type is 'Void', exceptions can still be thrown.)
+Beware: even if the error type is 'Void', exceptions can still be thrown.
 -}
 
 
+{- $collstdoutstderrtext
 
+Sometimes we want to consume both @stdout@ and @stderr@, not independently, but combined into a single stream. We can use 'pipeoec' for that.
 
+'pipeoec' takes as parameter a 'Siphon' for text, and two 'Line' values that know how to decode the bytes coming from @stdout@ and @stderr@ into lines of text.
+
+>>> :{ 
+   let 
+      lin = toLines T.decodeUtf8 (pure ()) 
+      program = shell "{ echo ooo ; sleep 1 ; echo eee 1>&2 ; }"
+   in execute (pipeoec lin lin (fromFold T.toLazyM)) program
+   :}
+(ExitSuccess,"ooo\neee\n")
+
+We may wish to tag each line in the combined stream with its provenance. This can be done by using 'tweakLines' to modify each 'Line' argument.
+
+>>> :{ 
+   let 
+      lin = toLines T.decodeUtf8 (pure ()) 
+      lin_stdout = tweakLines (\p -> P.yield "O" *> p) lin 
+      lin_stderr = tweakLines (\p -> P.yield "E" *> p) lin 
+      program = shell "{ echo ooo ; sleep 1 ; echo eee 1>&2 ; }"
+   in execute (pipeoec lin_stdout lin_stderr (fromFold T.toLazyM)) program
+   :}
+(ExitSuccess,"Oooo\nEeee\n")
+
+-}
 
