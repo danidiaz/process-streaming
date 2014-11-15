@@ -2,6 +2,7 @@
 -------
 
 - Brought back the tutorial.
+- Added newtype SiphonOp with Contravariant, Divisible and Decidable instances.
 - PipingPolicy now deprecated, use Piping instead.
 - LinePolicy now deprecated, use Lines instead.
 - linePolicy now deprecated, use toLines instead.
