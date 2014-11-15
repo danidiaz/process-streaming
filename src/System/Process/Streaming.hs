@@ -41,6 +41,7 @@ module System.Process.Streaming (
         -- * Pumping bytes into stdin
         , Pump (..)
         , fromProducer
+        , fromProducerM
         , fromSafeProducer
         , fromFallibleProducer
         -- * Siphoning bytes out of stdout/stderr
@@ -52,11 +53,14 @@ module System.Process.Streaming (
         , fromFold'
         , fromFold'_
         , fromFoldl
+        , fromFoldlIO
         , fromFoldlM
         , fromConsumer
+        , fromConsumerM
         , fromSafeConsumer
         , fromFallibleConsumer
         , fromParser
+        , fromParserM 
         , unwanted
         , DecodingFunction
         , encoded
@@ -72,6 +76,9 @@ module System.Process.Streaming (
         , stage
         , pipefail
         , inbound
+--        -- * Utilities
+--        -- $utilities
+--        , surely
         -- * Re-exports
         -- $reexports
         , module System.Process,
@@ -386,6 +393,9 @@ combined (Lines fun1 twk1) (Lines fun2 twk2) combinedConsumer prod1 prod2 =
 fromProducer :: Producer b IO r -> Pump b e ()
 fromProducer producer = Pump $ \consumer -> fmap pure $ runEffect (mute producer >-> consumer) 
 
+fromProducerM :: MonadIO m => (m () -> IO (Either e a)) -> Producer b m r -> Pump b e a 
+fromProducerM whittle producer = Pump $ \consumer -> whittle $ runEffect (mute producer >-> hoist liftIO consumer) 
+
 fromSafeProducer :: Producer b (SafeT IO) r -> Pump b e ()
 fromSafeProducer producer = Pump $ safely $ \consumer -> fmap pure $ runEffect (mute producer >-> consumer) 
 
@@ -616,6 +626,9 @@ instance (Monoid a) => Monoid (Siphon b e a) where
 fromConsumer :: Consumer b IO r -> Siphon b e ()
 fromConsumer consumer = siphon $ \producer -> fmap pure $ runEffect $ producer >-> mute consumer 
 
+fromConsumerM :: MonadIO m => (m () -> IO (Either e a)) -> Consumer b m r -> Siphon b e a
+fromConsumerM whittle consumer = siphon $ \producer -> whittle $ runEffect $ (hoist liftIO producer) >-> mute consumer 
+
 fromSafeConsumer :: Consumer b (SafeT IO) r -> Siphon b e ()
 fromSafeConsumer consumer = siphon $ safely $ \producer -> fmap pure $ runEffect $ producer >-> mute consumer 
 
@@ -627,6 +640,18 @@ fromFallibleConsumer consumer = siphon $ \producer -> runExceptT $ runEffect (ho
  -}
 fromParser :: Parser b IO (Either e a) -> Siphon b e a 
 fromParser parser = siphon $ Pipes.Parse.evalStateT parser 
+
+
+{-| 
+  Turn a 'Parser' from @pipes-parse@ into a 'Sihpon'.
+ -}
+fromParserM :: MonadIO m => (forall r. m (a,r) -> IO (Either e (c,r))) -> Parser b m a -> Siphon b e c 
+fromParserM f parser = siphon' $ \producer -> f $ drainage $ (Pipes.Parse.runStateT parser) (hoist liftIO producer)
+  where
+    drainage m = do 
+        (a,leftovers) <- m
+        r <- runEffect (leftovers >-> P.drain)
+        return (a,r)
 
 {-| 
    Builds a 'Siphon' out of a computation that does something with
@@ -674,8 +699,12 @@ fromFoldl aFold = fromFold' $ L.purely P.fold' aFold
 {-| 
    Builds a 'Siphon' out of a monadic fold from the @foldl@ package.
 -}
-fromFoldlM :: L.FoldM IO b a -> Siphon b e a 
-fromFoldlM aFoldM = fromFold' $ L.impurely P.foldM' aFoldM
+fromFoldlIO :: L.FoldM IO b a -> Siphon b e a 
+fromFoldlIO aFoldM = fromFold' $ L.impurely P.foldM' aFoldM
+
+fromFoldlM :: MonadIO m => (forall r. m (a,r) -> IO (Either e (c,r))) -> L.FoldM m b a -> Siphon b e c 
+fromFoldlM whittle aFoldM = siphon' $ \producer -> 
+    whittle $ L.impurely P.foldM' aFoldM (hoist liftIO producer)
 
 {-|
   Constructs a 'Siphon' that aborts the computation if the underlying
@@ -946,6 +975,13 @@ pipefail ec = case ec of
     ExitSuccess -> Right ()
     ExitFailure i -> Left i
 
+
+-- {- $utilities
+-- 
+-- -} 
+-- surely :: ((forall r. m (a,r) -> IO (Either e (c,r))) -> x) -> (forall r. m (a,r) -> IO (c,r)) -> x
+-- surely f f' = f (fmap Right . f')
+ 
 {- $reexports
  
 "System.Process" is re-exported for convenience.
