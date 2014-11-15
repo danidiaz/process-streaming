@@ -21,6 +21,7 @@
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
+
 module System.Process.Streaming ( 
         -- * Execution
           execute
@@ -997,10 +998,13 @@ pipefail ec = case ec of
  
 
 -} 
+{-# DEPRECATED PipingPolicy "Use Piping instead" #-} 
 type PipingPolicy e a = Piping e a  
 
+{-# DEPRECATED LinePolicy "Use Lines instead" #-} 
 type LinePolicy e = Lines e   
 
+{-# DEPRECATED linePolicy "Use toLines instead" #-} 
 linePolicy :: DecodingFunction ByteString Text 
            -> Siphon ByteString e ()
            -> Lines e 

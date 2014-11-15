@@ -1,3 +1,12 @@
+0.6.5.0
+-------
+
+- Brought back the tutorial.
+- PipingPolicy now deprecated, use Piping instead.
+- LinePolicy now deprecated, use Lines instead.
+- linePolicy now deprecated, use toLines instead.
+- Siphon constructors for folds from the "foldl" package.
+
 0.6.2.2
 -------
 
