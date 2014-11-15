@@ -1,9 +1,9 @@
 
 {-|
- @process-streaming@ reuses the 'CreateProcess' record from @process@ to
- describe the external program. The difference is that the user doesn't
- need to set the 'std_in', 'std_out' and 'std_err' fields, as these are
- set automatically according to the 'Piping'.
+ @process-streaming@ uses the 'CreateProcess' record to describe the
+ program to be executed. The user doesn't need to set the 'std_in',
+ 'std_out' and 'std_err' fields, as these are set automatically according
+ to the 'Piping'.
 
  'Piping' is a datatype that specifies what streams to pipe and what to
  do with them. It has many constructors, one for each possible
@@ -35,6 +35,9 @@
  A 'Siphon' reading a stream always consumes the whole stream. If the user
  wants to interrupt the computation early, he can return a failure (or
  throw an exception).
+
+ 'Siphon's have an 'Applicative' instance. 'pure' creates a 'Siphon' that
+ drains a stream but does nothing with the data.
 -}
 
 {-# LANGUAGE DeriveFunctor #-}
@@ -50,6 +53,10 @@ module System.Process.Streaming.Tutorial (
     
     -- * Collecting @stdout@ and @stderr@ independently
     -- $collstdoutstderr
+
+
+    -- * Collecting @stdout@ as a lazy Text
+    -- $collstdouttext
     ) where
 
 import System.Process.Streaming
@@ -109,3 +116,43 @@ We can use 'pipeoe' collect @stdout@ and @stderr@ concurrently:
 (ExitSuccess,("ooo\n","eee\n"))
 
 -}
+
+
+{- $collstdouttext  
+
+If we want to consume @stdout@ as text, we need to use the 'encoded'
+function. 'encoded' takes as parameters a decoding function (the example
+uses one from @pipes-text@) and a 'Siphon' that specifies how to handle the
+leftovers, if any. It returns a function that converts a 'Siphon' for text
+into a 'Siphon' for bytes.
+
+In the example we pass @pure id@ as the leftover-handling 'Siphon'. This
+means "drain all the undecoded data remaining in the stream and return
+unchanged the result of @(fromFold T.toLazyM)@". In other words: ignore any
+leftovers.
+
+>>> execute (pipeo (encoded T.decodeIso8859_1 (pure id) (fromFold T.toLazyM))) (shell "echo ooo")
+(ExitSuccess,"ooo\n")
+
+But suppose we want to interrupt the execution of the program when we
+encounter a decoding error. In that case, we can pass @unwanted id@ as the
+leftover-handling 'Siphon'. 'unwanted' constructs a 'Siphon' that fails
+when the stream produces any output at all, meaning it will fail if any
+leftovers remain. 'unwanted' uses the first leftovers that apear in the
+stream as the error value. So, in this example the error type will be
+'ByteString':
+
+>>> executeFallibly (pipeo (encoded T.decodeIso8859_1 (unwanted id) (fromFold T.toLazyM))) (shell "echo ooo")
+Right (ExitSuccess,"ooo\n")
+
+Notice also that we had to switch from 'execute' to 'executeFallibly'. This
+is because, for the first time in the tutorial, we actually have a need for
+the error type. 'execute' only works when the error type is 'Void'.
+
+(Beware: even if the error type is 'Void', exceptions can still be thrown.)
+-}
+
+
+
+
+
