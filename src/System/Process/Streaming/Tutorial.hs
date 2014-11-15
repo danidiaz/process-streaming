@@ -57,9 +57,11 @@ module System.Process.Streaming.Tutorial (
     -- * Collecting @stdout@ as a lazy Text
     -- $collstdouttext
 
-
     -- * Consuming @stdout@ and @stderr@ combined as Text
     -- $collstdoutstderrtext
+    
+    -- * Feeding @stdin@, consuming @stdout@
+    -- $feedstdincollstdout
     ) where
 
 import System.Process.Streaming
@@ -160,7 +162,7 @@ Beware: even if the error type is 'Void', exceptions can still be thrown.
 
 Sometimes we want to consume both @stdout@ and @stderr@, not independently, but combined into a single stream. We can use 'pipeoec' for that.
 
-'pipeoec' takes as parameter a 'Siphon' for text, and two 'Line' values that know how to decode the bytes coming from @stdout@ and @stderr@ into lines of text.
+'pipeoec' takes as parameter a 'Siphon' for text, and two 'Lines' values that know how to decode the bytes coming from @stdout@ and @stderr@ into lines of text.
 
 >>> :{ 
    let 
@@ -170,7 +172,7 @@ Sometimes we want to consume both @stdout@ and @stderr@, not independently, but 
    :}
 (ExitSuccess,"ooo\neee\n")
 
-We may wish to tag each line in the combined stream with its provenance. This can be done by using 'tweakLines' to modify each 'Line' argument.
+We may wish to tag each line in the combined stream with its provenance. This can be done by using 'tweakLines' to modify each 'Lines' argument.
 
 >>> :{ 
    let 
@@ -184,3 +186,11 @@ We may wish to tag each line in the combined stream with its provenance. This ca
 
 -}
 
+{- $feedstdincollstdout
+
+We can feed bytes to @stdin@ while we read @stdout@ or @stderr@. We use the
+'Pump' datatype for that.
+
+>>> execute (pipeio (fromProducer (yield "iii")) (fromFold B.toLazyM)) (shell "cat")
+(ExitSuccess,((),"iii")
+-}
