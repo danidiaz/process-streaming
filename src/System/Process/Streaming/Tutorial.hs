@@ -62,6 +62,9 @@ module System.Process.Streaming.Tutorial (
     
     -- * Feeding @stdin@, consuming @stdout@
     -- $feedstdincollstdout
+
+    -- * Early termination
+    -- $earlytermination
     ) where
 
 import System.Process.Streaming
@@ -75,6 +78,7 @@ import System.Process.Streaming
 >>> import qualified Data.Attoparsec.Text as A
 >>> import Control.Applicative
 >>> import Control.Monad
+>>> import Control.Monad.Except
 >>> import Control.Lens (view)
 >>> import Pipes
 >>> import qualified Pipes.ByteString as B
@@ -160,9 +164,12 @@ Beware: even if the error type is 'Void', exceptions can still be thrown.
 
 {- $collstdoutstderrtext
 
-Sometimes we want to consume both @stdout@ and @stderr@, not independently, but combined into a single stream. We can use 'pipeoec' for that.
+Sometimes we want to consume both @stdout@ and @stderr@, not independently,
+but combined into a single stream. We can use 'pipeoec' for that.
 
-'pipeoec' takes as parameter a 'Siphon' for text, and two 'Lines' values that know how to decode the bytes coming from @stdout@ and @stderr@ into lines of text.
+'pipeoec' takes as parameter a 'Siphon' for text, and two 'Lines' values
+that know how to decode the bytes coming from @stdout@ and @stderr@ into
+lines of text.
 
 >>> :{ 
    let 
@@ -192,5 +199,15 @@ We can feed bytes to @stdin@ while we read @stdout@ or @stderr@. We use the
 'Pump' datatype for that.
 
 >>> execute (pipeio (fromProducer (yield "iii")) (fromFold B.toLazyM)) (shell "cat")
-(ExitSuccess,((),"iii")
+(ExitSuccess,((),"iii"))
+-}
+
+
+{- $earlytermination
+
+An example of how returning a failure from a 'Siphon' interrupts the whole
+computation and terminates the external program.
+
+>>> executeFallibly (pipeo (siphon (\_ -> return (Left "oops")))) (shell "sleep infinity")
+Left "oops"
 -}
