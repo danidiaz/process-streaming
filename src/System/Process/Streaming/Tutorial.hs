@@ -1,18 +1,41 @@
 
--- |
--- This module contains helper functions and types built on top of
--- "System.Process" and "Pipes".
---
--- They provide concurrent, streaming access to the inputs and outputs of
--- system processes.
---
--- Error conditions not directly related to IO are made explicit
--- in the types.
---
--- Regular 'Consumer's, 'Parser's from @pipes-parse@ and various folds can
--- be used to consume the output streams of the external processes.
---
------------------------------------------------------------------------------
+{-|
+ @process-streaming@ reuses the 'CreateProcess' record from @process@ to
+ describe the external program. The difference is that the user doesn't
+ need to set the 'std_in', 'std_out' and 'std_err' fields, as these are
+ set automatically according to the 'Piping'.
+
+ 'Piping' is a datatype that specifies what streams to pipe and what to
+ do with them. It has many constructors, one for each possible
+ combination of streams.
+
+ Constructors for 'Piping' usually take 'Siphon's as parameters.
+ A 'Siphon' specifies what to do with a particular stream.
+
+ 'Siphon's can be built from each of the typical ways of consuming
+ a 'Producer' in the @pipes@ ecosystem:
+
+ * Regular 'Consumer's (with 'fromConsumer', 'fromConsumerM').
+       
+ * Folds from the @pipes@ 'Pipes.Prelude' or specialized folds from
+ @pipes-bytestring@ or @pipes-text@ (with 'fromFold', 'fromFold'').
+ 
+ * 'Parser's from @pipes-parse@ (with 'fromParser' and 'fromParserM').
+ 
+ * 'Applicative' folds from the @foldl@ package (with 'fromFoldl',
+ 'fromFoldlIO' and 'fromFoldlM').
+ 
+ * In general, any computation that does something with a 'Producer' (with
+ 'siphon' and 'siphon''). 
+
+ 'Siphon's have an explicit error type; when a 'Siphon' reading one of the
+ standard streams fails, the external program is immediately terminated and
+ the error value is returned.
+
+ A 'Siphon' reading a stream always consumes the whole stream. If the user
+ wants to interrupt the computation early, he can return a failure (or
+ throw an exception).
+-}
 
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE ExistentialQuantification #-}
@@ -25,6 +48,8 @@ module System.Process.Streaming.Tutorial (
     -- * Collecting @stdout@ as a lazy ByteString
     -- $collstdout
     ) where
+
+import System.Process.Streaming
 
 {- $setup
 
@@ -67,7 +92,7 @@ This example uses the 'toLazyM' fold from @pipes-bytestring@.
 >>> execute (pipeo (BL.toStrict <$> fromFold B.toLazyM)) (shell "echo aaa")
 (ExitSuccess,"aaa\n")
 
-Of course, collecting the output in this way breaks streaming. But it is OK
+Of course, collecting the output in this way breaks streaming. But this is OK
 if the output is small.
 -}
 
