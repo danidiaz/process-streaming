@@ -47,6 +47,9 @@
 module System.Process.Streaming.Tutorial ( 
     -- * Collecting @stdout@ as a lazy ByteString
     -- $collstdout
+    
+    -- * Collecting @stdout@ and @stderr@ independently
+    -- $collstdoutstderr
     ) where
 
 import System.Process.Streaming
@@ -83,17 +86,26 @@ import System.Process.Streaming
 
 This example uses the 'toLazyM' fold from @pipes-bytestring@.
 
->>> execute (pipeo (fromFold B.toLazyM)) (shell "echo aaa")
-(ExitSuccess,"aaa\n")
+>>> execute (pipeo (fromFold B.toLazyM)) (shell "echo ooo")
+(ExitSuccess,"ooo\n")
 
 'Siphon's are functors, so if we wanted to collect the output as a strict
 'ByteString', we could do
 
->>> execute (pipeo (BL.toStrict <$> fromFold B.toLazyM)) (shell "echo aaa")
-(ExitSuccess,"aaa\n")
+>>> execute (pipeo (BL.toStrict <$> fromFold B.toLazyM)) (shell "echo ooo")
+(ExitSuccess,"ooo\n")
 
 Of course, collecting the output in this way breaks streaming. But this is OK
 if the output is small.
 -}
 
 
+
+{- $collstdoutstderr
+
+We can use 'pipeoe' collect @stdout@ and @stderr@ concurrently:
+
+>>> execute (pipeoe (fromFold B.toLazyM) (fromFold B.toLazyM)) (shell "{ echo ooo ; echo eee 1>&2 ; }")
+(ExitSuccess,("ooo\n","eee\n"))
+
+-}
