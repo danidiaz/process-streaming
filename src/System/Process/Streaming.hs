@@ -20,6 +20,10 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE TypeSynonymInstances #-}
+{-# LANGUAGE FlexibleInstances #-}
 
 
 module System.Process.Streaming ( 
@@ -45,6 +49,7 @@ module System.Process.Streaming (
         , fromProducerM
         , fromSafeProducer
         , fromFallibleProducer
+        , Pumptastic
         -- * Siphoning bytes out of stdout/stderr
         , Siphon
         , SiphonOp (..)
@@ -65,6 +70,7 @@ module System.Process.Streaming (
         , unwanted
         , DecodingFunction
         , encoded
+        , Siphonic
         -- * Line handling
         , Lines
         , toLines
@@ -470,6 +476,12 @@ instance (Monoid a) => Monoid (Pump b e a) where
    mempty = Pump . pure . pure . pure $ mempty
    mappend s1 s2 = (<>) <$> s1 <*> s2
 
+class Pumptastic c b e a | c -> b e a where
+    toPump :: c -> Pump b e a
+       
+instance Pumptastic (Producer b IO r) b Void () where
+     toPump = fromProducer
+
 {-| 
     A 'Siphon' represents a computation that completely drains a producer, but
 may fail early with an error of type @e@. 
@@ -722,6 +734,30 @@ unwanted a = siphon' $ \producer -> do
     return $ case n of 
         Left r -> Right (a,r)
         Right (b,_) -> Left b
+
+class Siphonic c b e a | c -> b e a where
+    toSiphon :: c -> Siphon b e a
+       
+instance Siphonic (Producer b IO () -> ExceptT e IO a) b e a where
+    toSiphon = siphon . fmap runExceptT
+
+instance Siphonic (Consumer b IO r) b Void () where
+    toSiphon = fromConsumer
+
+instance Siphonic (Consumer b (ExceptT e IO) r) b e () where
+    toSiphon = fromFallibleConsumer
+
+instance Siphonic (Consumer b (SafeT IO) r) b Void () where
+    toSiphon = fromSafeConsumer
+
+instance Siphonic (Producer b IO () -> IO a) b Void a where
+    toSiphon = fromFold
+
+instance Siphonic (L.Fold b a) b Void a where
+    toSiphon = fromFoldl
+
+instance Siphonic (L.FoldM IO b a) b Void a where
+    toSiphon = fromFoldlIO
 
 executePipeline :: Piping Void a -> Tree (Stage Void) -> IO a 
 executePipeline pp pipeline = either absurd id <$> executePipelineFallibly pp pipeline
