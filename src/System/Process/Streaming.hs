@@ -258,14 +258,22 @@ data Piping e a =
 
 instance Bifunctor Piping where
   bimap f g pp = case pp of
-        PPNone a -> PPNone $ g a 
-        PPOutput action -> PPOutput $ fmap (fmap (bimap f g)) action
-        PPError action -> PPError $ fmap (fmap (bimap f g)) action
-        PPOutputError action -> PPOutputError $ fmap (fmap (bimap f g)) action
-        PPInput action -> PPInput $ fmap (fmap (bimap f g)) action
-        PPInputOutput action -> PPInputOutput $ fmap (fmap (bimap f g)) action
-        PPInputError action -> PPInputError $ fmap (fmap (bimap f g)) action
-        PPInputOutputError action -> PPInputOutputError $ fmap (fmap (bimap f g)) action
+        PPNone a -> PPNone $ 
+            g a 
+        PPOutput action -> PPOutput $ 
+            fmap (fmap (bimap f g)) action
+        PPError action -> PPError $ 
+            fmap (fmap (bimap f g)) action
+        PPOutputError action -> PPOutputError $ 
+            fmap (fmap (bimap f g)) action
+        PPInput action -> PPInput $ 
+            fmap (fmap (bimap f g)) action
+        PPInputOutput action -> PPInputOutput $ 
+            fmap (fmap (bimap f g)) action
+        PPInputError action -> PPInputError $ 
+            fmap (fmap (bimap f g)) action
+        PPInputOutputError action -> PPInputOutputError $ 
+            fmap (fmap (bimap f g)) action
 
 {-|
     Do not pipe any standard stream. 
