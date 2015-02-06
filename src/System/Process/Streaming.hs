@@ -45,6 +45,8 @@ module System.Process.Streaming (
         , fromProducerM
         , fromSafeProducer
         , fromFallibleProducer
+        , fromFoldable
+        , fromEnumerable
         -- * Siphoning bytes out of stdout/stderr
         , Siphon
         , SiphonOp (..)
@@ -69,6 +71,7 @@ module System.Process.Streaming (
         , Lines
         , toLines
         , tweakLines
+        , prefixLines
         -- * Pipelines
         , executePipeline
         , executePipelineFallibly
@@ -77,9 +80,6 @@ module System.Process.Streaming (
         , stage
         , pipefail
         , inbound
---        -- * Utilities
---        -- $utilities
---        , surely
         -- * Re-exports
         -- $reexports
         , module System.Process,
@@ -348,6 +348,15 @@ instance Functor Lines where
 tweakLines :: (forall r. Producer T.Text IO r -> Producer T.Text IO r) -> Lines e -> Lines e 
 tweakLines lt' (Lines tear lt) = Lines tear (lt' . lt) 
 
+
+{-|
+    Specifies a prefix that will be calculated and appeded for each line of
+    text.
+-}
+prefixLines :: IO T.Text -> Lines e -> Lines e 
+prefixLines tio = tweakLines (\p -> liftIO tio *> p) 
+
+
 {-|
     Constructs a 'Lines' out of a 'DecodingFunction' and a 'Siphon'
     that specifies how to handle decoding failures. Passing @pure ()@ as
@@ -402,6 +411,12 @@ fromSafeProducer producer = Pump $ safely $ \consumer -> fmap pure $ runEffect (
 
 fromFallibleProducer :: Producer b (ExceptT e IO) r -> Pump b e ()
 fromFallibleProducer producer = Pump $ \consumer -> runExceptT $ runEffect (mute producer >-> hoist lift consumer) 
+
+fromFoldable :: Foldable f => f b -> Pump b e ()
+fromFoldable = fromProducer . each
+
+fromEnumerable :: Enumerable t => t IO b -> Pump b e ()
+fromEnumerable = fromProducer . every
 
 {-| 
   Useful when we want to plug in a handler that does its work in the 'SafeT'
