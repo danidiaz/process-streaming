@@ -221,13 +221,39 @@ the processing of the streams.
 -- but doesn't know anything about file handlers or CreateProcess.
 data Piping e a = 
       PPNone a
-    | PPOutput (Producer ByteString IO () -> IO (Either e a))
-    | PPError (Producer ByteString IO () -> IO (Either e a))
-    | PPOutputError ((Producer ByteString IO (),Producer ByteString IO ()) -> IO (Either e a))
-    | PPInput ((Consumer ByteString IO (), IO ()) -> IO (Either e a))
-    | PPInputOutput ((Consumer ByteString IO (), IO (),Producer ByteString IO ()) -> IO (Either e a))
-    | PPInputError ((Consumer ByteString IO (), IO (), Producer ByteString IO ()) -> IO (Either e a))
-    | PPInputOutputError ((Consumer ByteString IO (),IO (),Producer ByteString IO (),Producer ByteString IO ()) -> IO (Either e a))
+    | PPOutput 
+        (Producer ByteString IO () 
+         -> 
+         IO (Either e a))
+    | PPError 
+        (Producer ByteString IO () 
+         -> 
+         IO (Either e a))
+    | PPOutputError 
+        ((Producer ByteString IO (),
+          Producer ByteString IO ()) 
+         -> 
+         IO (Either e a))
+    | PPInput 
+        ((Consumer ByteString IO (), IO ()) 
+         -> 
+         IO (Either e a))
+    | PPInputOutput 
+        ((Consumer ByteString IO (), IO (),
+          Producer ByteString IO ()) 
+         -> 
+         IO (Either e a))
+    | PPInputError 
+        ((Consumer ByteString IO (), IO (), 
+          Producer ByteString IO ()) 
+         -> 
+         IO (Either e a))
+    | PPInputOutputError 
+        ((Consumer ByteString IO (),IO (),
+          Producer ByteString IO (),
+          Producer ByteString IO ()) 
+         -> 
+         IO (Either e a))
     deriving (Functor)
 
 instance Bifunctor Piping where
