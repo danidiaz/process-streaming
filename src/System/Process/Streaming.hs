@@ -418,10 +418,10 @@ fromProducerM :: MonadIO m => (m () -> IO (Either e a)) -> Producer b m r -> Pum
 fromProducerM whittle producer = Pump $ \consumer -> whittle $ runEffect (mute producer >-> hoist liftIO consumer) 
 
 fromSafeProducer :: Producer b (SafeT IO) r -> Pump b e ()
-fromSafeProducer producer = Pump $ safely $ \consumer -> fmap pure $ runEffect (mute producer >-> consumer) 
+fromSafeProducer = fromProducerM (fmap pure . runSafeT)
 
 fromFallibleProducer :: Producer b (ExceptT e IO) r -> Pump b e ()
-fromFallibleProducer producer = Pump $ \consumer -> runExceptT $ runEffect (mute producer >-> hoist lift consumer) 
+fromFallibleProducer = fromProducerM runExceptT
 
 fromFoldable :: Foldable f => f b -> Pump b e ()
 fromFoldable = fromProducer . each
@@ -646,10 +646,10 @@ fromConsumerM :: MonadIO m => (m () -> IO (Either e a)) -> Consumer b m r -> Sip
 fromConsumerM whittle consumer = siphon $ \producer -> whittle $ runEffect $ (hoist liftIO producer) >-> mute consumer 
 
 fromSafeConsumer :: Consumer b (SafeT IO) r -> Siphon b e ()
-fromSafeConsumer consumer = siphon $ safely $ \producer -> fmap pure $ runEffect $ producer >-> mute consumer 
+fromSafeConsumer = fromConsumerM (fmap pure . runSafeT)
 
 fromFallibleConsumer :: Consumer b (ExceptT e IO) r -> Siphon b e ()
-fromFallibleConsumer consumer = siphon $ \producer -> runExceptT $ runEffect (hoist lift producer >-> mute consumer) 
+fromFallibleConsumer = fromConsumerM runExceptT
 
 {-| 
   Turn a 'Parser' from @pipes-parse@ into a 'Sihpon'.
@@ -763,17 +763,6 @@ toLines decoder lopo = Lines
             viewLines = getConst . T.lines Const
         teardown freeLines >>= runSiphon lopo)
     id 
-
-
-{-| 
-  Useful when we want to plug in a handler that does its work in the 'SafeT'
-transformer.
- -}
-safely :: (MFunctor t, C.MonadMask m, MonadIO m) 
-       => (t (SafeT m) l -> (SafeT m) x) 
-       ->  t m         l -> m         x 
-safely activity = runSafeT . activity . hoist lift 
-
 
 
 executePipeline :: Piping Void a -> Tree (Stage Void) -> IO a 
