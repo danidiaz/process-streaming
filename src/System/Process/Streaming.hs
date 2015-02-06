@@ -353,63 +353,6 @@ separated :: (Producer ByteString IO () -> IO (Either e a))
 separated outfunc errfunc outprod errprod = 
     conceit (outfunc outprod) (errfunc errprod)
 
-{-|
-    A configuration parameter used in functions that combine lines from
-    multiple streams.
- -}
-
-data Lines e = Lines 
-    {
-        teardown :: (forall r. Producer T.Text IO r -> Producer T.Text IO r)
-                 -> (FreeT (Producer T.Text IO) IO (Producer ByteString IO ()) -> IO (Producer ByteString IO ())) 
-                 -> Producer ByteString IO () -> IO (Either e ())
-    ,   lineTweaker :: forall r. Producer T.Text IO r -> Producer T.Text IO r
-    } 
-
--- | 'fmap' maps over the encoding error. 
-instance Functor Lines where
-  fmap f (Lines func lt) = Lines (\x y z -> fmap (bimap f id) $ func x y z) lt
-
-
-{-|
-    Specifies a transformation that will be applied to each line of text,
-    represented as a 'Producer'.
-
-    Line prefixes are easy to add using applicative notation:
-
-  > (\x -> yield "prefix: " *> x)
--}
-tweakLines :: (forall r. Producer T.Text IO r -> Producer T.Text IO r) -> Lines e -> Lines e 
-tweakLines lt' (Lines tear lt) = Lines tear (lt' . lt) 
-
-
-{-|
-    Specifies a prefix that will be calculated and appeded for each line of
-    text.
--}
-prefixLines :: IO T.Text -> Lines e -> Lines e 
-prefixLines tio = tweakLines (\p -> liftIO tio *> p) 
-
-
-{-|
-    Constructs a 'Lines' out of a 'DecodingFunction' and a 'Siphon'
-    that specifies how to handle decoding failures. Passing @pure ()@ as
-    the 'Siphon' will ignore any leftovers. Passing @unwanted ()@ will
-    abort the computation if leftovers remain.
- -}
-toLines :: DecodingFunction ByteString Text 
-           -> Siphon ByteString e ()
-           -> Lines e 
-toLines decoder lopo = Lines
-    (\tweaker teardown producer -> do
-        let freeLines = transFreeT tweaker 
-                      . viewLines 
-                      . decoder
-                      $ producer
-            viewLines = getConst . T.lines Const
-        teardown freeLines >>= runSiphon lopo)
-    id 
-
 -- http://unix.stackexchange.com/questions/114182/can-redirecting-stdout-and-stderr-to-the-same-file-mangle-lines here
 combined :: Lines e 
          -> Lines e 
@@ -434,58 +377,6 @@ combined (Lines fun1 twk1) (Lines fun2 twk2) combinedConsumer prod1 prod2 =
             join $ withMVar mvar $ \output -> do
                 runEffect $ (textProducer <* P.yield (singleton '\n')) >-> (toOutput output >> P.drain)
 
-fromProducer :: Producer b IO r -> Pump b e ()
-fromProducer producer = Pump $ \consumer -> fmap pure $ runEffect (mute producer >-> consumer) 
-
-fromProducerM :: MonadIO m => (m () -> IO (Either e a)) -> Producer b m r -> Pump b e a 
-fromProducerM whittle producer = Pump $ \consumer -> whittle $ runEffect (mute producer >-> hoist liftIO consumer) 
-
-fromSafeProducer :: Producer b (SafeT IO) r -> Pump b e ()
-fromSafeProducer producer = Pump $ safely $ \consumer -> fmap pure $ runEffect (mute producer >-> consumer) 
-
-fromFallibleProducer :: Producer b (ExceptT e IO) r -> Pump b e ()
-fromFallibleProducer producer = Pump $ \consumer -> runExceptT $ runEffect (mute producer >-> hoist lift consumer) 
-
-fromFoldable :: Foldable f => f b -> Pump b e ()
-fromFoldable = fromProducer . each
-
-fromEnumerable :: Enumerable t => t IO b -> Pump b e ()
-fromEnumerable = fromProducer . every
-
-{-| 
-  Useful when we want to plug in a handler that does its work in the 'SafeT'
-transformer.
- -}
-safely :: (MFunctor t, C.MonadMask m, MonadIO m) 
-       => (t (SafeT m) l -> (SafeT m) x) 
-       ->  t m         l -> m         x 
-safely activity = runSafeT . activity . hoist lift 
-
-{-|
-    See the section /Non-lens decoding functions/ in the documentation for the
-@pipes-text@ package.  
--}
-type DecodingFunction bytes text = forall r. Producer bytes IO r -> Producer text IO (Producer bytes IO r)
-
-{-|
-    Constructs a 'Siphon' that works on encoded values out of a 'Siphon' that
-works on decoded values. 
-   
-    The two first arguments are a decoding function and a 'Siphon' that
-determines how to handle leftovers. Pass @pure id@ to ignore leftovers. Pass
-@unwanted id@ to abort the computation if leftovers remain.
- -}
-encoded :: DecodingFunction bytes text
-        -> Siphon bytes e (a -> b)
-        -> Siphon text  e a 
-        -> Siphon bytes e b
-encoded decoder (Siphon (unLift -> policy)) (Siphon (unLift -> activity)) = 
-    Siphon (Other internal)
-  where
-    internal = Exhaustive $ \producer -> runExceptT $ do
-        (a,leftovers) <- ExceptT $ exhaustive activity $ decoder producer 
-        (f,r) <- ExceptT $ exhaustive policy leftovers 
-        pure (f a,r)
 
 newtype Pump b e a = Pump { runPump :: Consumer b IO () -> IO (Either e a) } deriving Functor
 
@@ -519,6 +410,26 @@ instance (Monoid a) => Monoid (Pump b e a) where
    mempty = Pump . pure . pure . pure $ mempty
    mappend s1 s2 = (<>) <$> s1 <*> s2
 
+
+fromProducer :: Producer b IO r -> Pump b e ()
+fromProducer producer = Pump $ \consumer -> fmap pure $ runEffect (mute producer >-> consumer) 
+
+fromProducerM :: MonadIO m => (m () -> IO (Either e a)) -> Producer b m r -> Pump b e a 
+fromProducerM whittle producer = Pump $ \consumer -> whittle $ runEffect (mute producer >-> hoist liftIO consumer) 
+
+fromSafeProducer :: Producer b (SafeT IO) r -> Pump b e ()
+fromSafeProducer producer = Pump $ safely $ \consumer -> fmap pure $ runEffect (mute producer >-> consumer) 
+
+fromFallibleProducer :: Producer b (ExceptT e IO) r -> Pump b e ()
+fromFallibleProducer producer = Pump $ \consumer -> runExceptT $ runEffect (mute producer >-> hoist lift consumer) 
+
+fromFoldable :: Foldable f => f b -> Pump b e ()
+fromFoldable = fromProducer . each
+
+fromEnumerable :: Enumerable t => t IO b -> Pump b e ()
+fromEnumerable = fromProducer . every
+
+
 {-| 
     A 'Siphon' represents a computation that completely drains a producer, but
 may fail early with an error of type @e@. 
@@ -530,82 +441,6 @@ may fail early with an error of type @e@.
     that each argument receives its own copy of the data.
  -}
 newtype Siphon b e a = Siphon (Lift (Siphon_ b e) a) deriving (Functor,Applicative)
-
-newtype SiphonOp e a b = SiphonOp { getSiphonOp :: Siphon b e a } 
-
--- | 'contramap' carn turn a 'SiphonOp' for bytes into a 'SiphonOp' for text.
-instance Contravariant (SiphonOp e a) where
-    contramap f (SiphonOp (Siphon s)) = SiphonOp . Siphon $ case s of
-        Pure p -> Pure p
-        Other o -> Other $ case o of
-            Exhaustive e -> Exhaustive $ \producer ->
-                e $ producer >-> P.map f
-            Nonexhaustive ne -> Nonexhaustive $ \producer ->
-                ne $ producer >-> P.map f
-
--- | 'divide' builds a 'SiphonOp' for a composite out of the 'SiphonOp's
--- for the parts.
-instance Monoid a => Divisible (SiphonOp e a) where
-    divide divider siphonOp1 siphonOp2 = contramap divider . SiphonOp $ 
-        (getSiphonOp (contramap fst siphonOp1)) 
-        `mappend`
-        (getSiphonOp (contramap snd siphonOp2))
-    conquer = SiphonOp (pure mempty)
-
--- | 'choose' builds a 'SiphonOp' for a sum out of the 'SiphonOp's
--- for the branches.
-instance Monoid a => Decidable (SiphonOp e a) where
-    choose chooser (SiphonOp s1) (SiphonOp s2) = 
-        contramap chooser . SiphonOp $ 
-            (contraPipeMapL s1) 
-            `mappend`
-            (contraPipeMapR s2)
-      where
-        contraPipeMapL (Siphon s) = Siphon $ case s of
-            Pure p -> Pure p
-            Other o -> Other $ case o of
-                Exhaustive e -> Exhaustive $ \producer ->
-                    e $ producer >-> allowLefts
-                Nonexhaustive ne -> Nonexhaustive $ \producer ->
-                    ne $ producer >-> allowLefts
-        contraPipeMapR (Siphon s) = Siphon $ case s of
-            Pure p -> Pure p
-            Other o -> Other $ case o of
-                Exhaustive e -> Exhaustive $ \producer ->
-                    e $ producer >-> allowRights
-                Nonexhaustive ne -> Nonexhaustive $ \producer ->
-                    ne $ producer >-> allowRights
-        allowLefts = do
-            e <- await
-            case e of 
-                Left l -> Pipes.yield l >> allowLefts
-                Right _ -> allowLefts
-        allowRights = do
-            e <- await
-            case e of 
-                Right r -> Pipes.yield r >> allowRights
-                Left _ -> allowRights
-    lose f = SiphonOp . Siphon . Other . Nonexhaustive $ \producer -> do
-        n <- next producer  
-        return $ case n of 
-            Left () -> Right mempty
-            Right (b,_) -> Right (absurd (f b))
-
-
-allowLefts :: Monad m => Pipe (Either b a) b m r
-allowLefts = do
-    e <- await
-    case e of 
-        Left l -> Pipes.yield l >> allowLefts
-        Right _ -> allowLefts
-                                           
-allowRights :: Monad m => Pipe (Either b a) a m r
-allowRights = do
-    e <- await
-    case e of 
-        Right r -> Pipes.yield r >> allowRights
-        Left _ -> allowRights
-                                           
 
 data Siphon_ b e a = 
          Exhaustive (forall r. Producer b IO r -> IO (Either e (a,r)))
@@ -673,36 +508,80 @@ instance (Monoid a) => Monoid (Siphon b e a) where
    mempty = pure mempty
    mappend s1 s2 = (<>) <$> s1 <*> s2
 
-fromConsumer :: Consumer b IO r -> Siphon b e ()
-fromConsumer consumer = siphon $ \producer -> fmap pure $ runEffect $ producer >-> mute consumer 
+newtype SiphonOp e a b = SiphonOp { getSiphonOp :: Siphon b e a } 
 
-fromConsumerM :: MonadIO m => (m () -> IO (Either e a)) -> Consumer b m r -> Siphon b e a
-fromConsumerM whittle consumer = siphon $ \producer -> whittle $ runEffect $ (hoist liftIO producer) >-> mute consumer 
+-- | 'contramap' carn turn a 'SiphonOp' for bytes into a 'SiphonOp' for text.
+instance Contravariant (SiphonOp e a) where
+    contramap f (SiphonOp (Siphon s)) = SiphonOp . Siphon $ case s of
+        Pure p -> Pure p
+        Other o -> Other $ case o of
+            Exhaustive e -> Exhaustive $ \producer ->
+                e $ producer >-> P.map f
+            Nonexhaustive ne -> Nonexhaustive $ \producer ->
+                ne $ producer >-> P.map f
 
-fromSafeConsumer :: Consumer b (SafeT IO) r -> Siphon b e ()
-fromSafeConsumer consumer = siphon $ safely $ \producer -> fmap pure $ runEffect $ producer >-> mute consumer 
+-- | 'divide' builds a 'SiphonOp' for a composite out of the 'SiphonOp's
+-- for the parts.
+instance Monoid a => Divisible (SiphonOp e a) where
+    divide divider siphonOp1 siphonOp2 = contramap divider . SiphonOp $ 
+        (getSiphonOp (contramap fst siphonOp1)) 
+        `mappend`
+        (getSiphonOp (contramap snd siphonOp2))
+    conquer = SiphonOp (pure mempty)
 
-fromFallibleConsumer :: Consumer b (ExceptT e IO) r -> Siphon b e ()
-fromFallibleConsumer consumer = siphon $ \producer -> runExceptT $ runEffect (hoist lift producer >-> mute consumer) 
+-- | 'choose' builds a 'SiphonOp' for a sum out of the 'SiphonOp's
+-- for the branches.
+instance Monoid a => Decidable (SiphonOp e a) where
+    choose chooser (SiphonOp s1) (SiphonOp s2) = 
+        contramap chooser . SiphonOp $ 
+            (contraPipeMapL s1) 
+            `mappend`
+            (contraPipeMapR s2)
+      where
+        contraPipeMapL (Siphon s) = Siphon $ case s of
+            Pure p -> Pure p
+            Other o -> Other $ case o of
+                Exhaustive e -> Exhaustive $ \producer ->
+                    e $ producer >-> allowLefts
+                Nonexhaustive ne -> Nonexhaustive $ \producer ->
+                    ne $ producer >-> allowLefts
+        contraPipeMapR (Siphon s) = Siphon $ case s of
+            Pure p -> Pure p
+            Other o -> Other $ case o of
+                Exhaustive e -> Exhaustive $ \producer ->
+                    e $ producer >-> allowRights
+                Nonexhaustive ne -> Nonexhaustive $ \producer ->
+                    ne $ producer >-> allowRights
+        allowLefts = do
+            e <- await
+            case e of 
+                Left l -> Pipes.yield l >> allowLefts
+                Right _ -> allowLefts
+        allowRights = do
+            e <- await
+            case e of 
+                Right r -> Pipes.yield r >> allowRights
+                Left _ -> allowRights
+    lose f = SiphonOp . Siphon . Other . Nonexhaustive $ \producer -> do
+        n <- next producer  
+        return $ case n of 
+            Left () -> Right mempty
+            Right (b,_) -> Right (absurd (f b))
 
-{-| 
-  Turn a 'Parser' from @pipes-parse@ into a 'Sihpon'.
- -}
-fromParser :: Parser b IO (Either e a) -> Siphon b e a 
-fromParser parser = siphon $ Pipes.Parse.evalStateT parser 
-
-
-{-| 
-  Turn a 'Parser' from @pipes-parse@ into a 'Sihpon'.
- -}
-fromParserM :: MonadIO m => (forall r. m (a,r) -> IO (Either e (c,r))) -> Parser b m a -> Siphon b e c 
-fromParserM f parser = siphon' $ \producer -> f $ drainage $ (Pipes.Parse.runStateT parser) (hoist liftIO producer)
-  where
-    drainage m = do 
-        (a,leftovers) <- m
-        r <- runEffect (leftovers >-> P.drain)
-        return (a,r)
-
+allowLefts :: Monad m => Pipe (Either b a) b m r
+allowLefts = do
+    e <- await
+    case e of 
+        Left l -> Pipes.yield l >> allowLefts
+        Right _ -> allowLefts
+                                           
+allowRights :: Monad m => Pipe (Either b a) a m r
+allowRights = do
+    e <- await
+    case e of 
+        Right r -> Pipes.yield r >> allowRights
+        Left _ -> allowRights
+                                           
 {-| 
    Builds a 'Siphon' out of a computation that does something with
    a 'Producer', but may fail with an error of type @e@.
@@ -713,7 +592,6 @@ fromParserM f parser = siphon' $ \producer -> f $ drainage $ (Pipes.Parse.runSta
 siphon :: (Producer b IO () -> IO (Either e a))
        -> Siphon b e a 
 siphon f = Siphon (Other (Nonexhaustive f))
-
 
 {-| 
    Builds a 'Siphon' out of a computation that drains a 'Producer' completely,
@@ -761,6 +639,36 @@ fromFoldlM :: MonadIO m => (forall r. m (a,r) -> IO (Either e (c,r))) -> L.FoldM
 fromFoldlM whittle aFoldM = siphon' $ \producer -> 
     whittle $ L.impurely P.foldM' aFoldM (hoist liftIO producer)
 
+fromConsumer :: Consumer b IO r -> Siphon b e ()
+fromConsumer consumer = siphon $ \producer -> fmap pure $ runEffect $ producer >-> mute consumer 
+
+fromConsumerM :: MonadIO m => (m () -> IO (Either e a)) -> Consumer b m r -> Siphon b e a
+fromConsumerM whittle consumer = siphon $ \producer -> whittle $ runEffect $ (hoist liftIO producer) >-> mute consumer 
+
+fromSafeConsumer :: Consumer b (SafeT IO) r -> Siphon b e ()
+fromSafeConsumer consumer = siphon $ safely $ \producer -> fmap pure $ runEffect $ producer >-> mute consumer 
+
+fromFallibleConsumer :: Consumer b (ExceptT e IO) r -> Siphon b e ()
+fromFallibleConsumer consumer = siphon $ \producer -> runExceptT $ runEffect (hoist lift producer >-> mute consumer) 
+
+{-| 
+  Turn a 'Parser' from @pipes-parse@ into a 'Sihpon'.
+ -}
+fromParser :: Parser b IO (Either e a) -> Siphon b e a 
+fromParser parser = siphon $ Pipes.Parse.evalStateT parser 
+
+
+{-| 
+  Turn a 'Parser' from @pipes-parse@ into a 'Sihpon'.
+ -}
+fromParserM :: MonadIO m => (forall r. m (a,r) -> IO (Either e (c,r))) -> Parser b m a -> Siphon b e c 
+fromParserM f parser = siphon' $ \producer -> f $ drainage $ (Pipes.Parse.runStateT parser) (hoist liftIO producer)
+  where
+    drainage m = do 
+        (a,leftovers) <- m
+        r <- runEffect (leftovers >-> P.drain)
+        return (a,r)
+
 {-|
   Constructs a 'Siphon' that aborts the computation if the underlying
 'Producer' produces anything.
@@ -771,6 +679,102 @@ unwanted a = siphon' $ \producer -> do
     return $ case n of 
         Left r -> Right (a,r)
         Right (b,_) -> Left b
+
+{-|
+    See the section /Non-lens decoding functions/ in the documentation for the
+@pipes-text@ package.  
+-}
+type DecodingFunction bytes text = forall r. Producer bytes IO r -> Producer text IO (Producer bytes IO r)
+
+{-|
+    Constructs a 'Siphon' that works on encoded values out of a 'Siphon' that
+works on decoded values. 
+   
+    The two first arguments are a decoding function and a 'Siphon' that
+determines how to handle leftovers. Pass @pure id@ to ignore leftovers. Pass
+@unwanted id@ to abort the computation if leftovers remain.
+ -}
+encoded :: DecodingFunction bytes text
+        -> Siphon bytes e (a -> b)
+        -> Siphon text  e a 
+        -> Siphon bytes e b
+encoded decoder (Siphon (unLift -> policy)) (Siphon (unLift -> activity)) = 
+    Siphon (Other internal)
+  where
+    internal = Exhaustive $ \producer -> runExceptT $ do
+        (a,leftovers) <- ExceptT $ exhaustive activity $ decoder producer 
+        (f,r) <- ExceptT $ exhaustive policy leftovers 
+        pure (f a,r)
+
+
+{-|
+    A configuration parameter used in functions that combine lines from
+    multiple streams.
+ -}
+
+data Lines e = Lines 
+    {
+        teardown :: (forall r. Producer T.Text IO r -> Producer T.Text IO r)
+                 -> (FreeT (Producer T.Text IO) IO (Producer ByteString IO ()) -> IO (Producer ByteString IO ())) 
+                 -> Producer ByteString IO () -> IO (Either e ())
+    ,   lineTweaker :: forall r. Producer T.Text IO r -> Producer T.Text IO r
+    } 
+
+-- | 'fmap' maps over the encoding error. 
+instance Functor Lines where
+  fmap f (Lines func lt) = Lines (\x y z -> fmap (bimap f id) $ func x y z) lt
+
+
+{-|
+    Specifies a transformation that will be applied to each line of text,
+    represented as a 'Producer'.
+
+    Line prefixes are easy to add using applicative notation:
+
+  > (\x -> yield "prefix: " *> x)
+-}
+tweakLines :: (forall r. Producer T.Text IO r -> Producer T.Text IO r) -> Lines e -> Lines e 
+tweakLines lt' (Lines tear lt) = Lines tear (lt' . lt) 
+
+
+{-|
+    Specifies a prefix that will be calculated and appeded for each line of
+    text.
+-}
+prefixLines :: IO T.Text -> Lines e -> Lines e 
+prefixLines tio = tweakLines (\p -> liftIO tio *> p) 
+
+
+{-|
+    Constructs a 'Lines' out of a 'DecodingFunction' and a 'Siphon'
+    that specifies how to handle decoding failures. Passing @pure ()@ as
+    the 'Siphon' will ignore any leftovers. Passing @unwanted ()@ will
+    abort the computation if leftovers remain.
+ -}
+toLines :: DecodingFunction ByteString Text 
+           -> Siphon ByteString e ()
+           -> Lines e 
+toLines decoder lopo = Lines
+    (\tweaker teardown producer -> do
+        let freeLines = transFreeT tweaker 
+                      . viewLines 
+                      . decoder
+                      $ producer
+            viewLines = getConst . T.lines Const
+        teardown freeLines >>= runSiphon lopo)
+    id 
+
+
+{-| 
+  Useful when we want to plug in a handler that does its work in the 'SafeT'
+transformer.
+ -}
+safely :: (MFunctor t, C.MonadMask m, MonadIO m) 
+       => (t (SafeT m) l -> (SafeT m) x) 
+       ->  t m         l -> m         x 
+safely activity = runSafeT . activity . hoist lift 
+
+
 
 executePipeline :: Piping Void a -> Tree (Stage Void) -> IO a 
 executePipeline pp pipeline = either absurd id <$> executePipelineFallibly pp pipeline
@@ -1031,12 +1035,6 @@ pipefail ec = case ec of
     ExitFailure i -> Left i
 
 
--- {- $utilities
--- 
--- -} 
--- surely :: ((forall r. m (a,r) -> IO (Either e (c,r))) -> x) -> (forall r. m (a,r) -> IO (c,r)) -> x
--- surely f f' = f (fmap Right . f')
- 
 {- $reexports
  
 "System.Process" is re-exported for convenience.
