@@ -150,24 +150,45 @@ terminated.
  -}
 executeFallibly :: Piping e a -> CreateProcess -> IO (Either e (ExitCode,a))
 executeFallibly pp record = case pp of
-      PPNone a -> executeInternal record nohandles $  
-          \() -> (return . Right $ a,return ())
-      PPOutput action -> executeInternal (record{std_out = CreatePipe}) handleso $
-          \h->(action (fromHandle h),hClose h) 
-      PPError action ->  executeInternal (record{std_err = CreatePipe}) handlese $
-          \h->(action (fromHandle h),hClose h)
-      PPOutputError action -> executeInternal (record{std_out = CreatePipe, std_err = CreatePipe}) handlesoe $
-          \(hout,herr)->(action (fromHandle hout,fromHandle herr),hClose hout `finally` hClose herr)
-      PPInput action -> executeInternal (record{std_in = CreatePipe}) handlesi $
-          \h -> (action (toHandle h, hClose h), return ())
-      PPInputOutput action -> executeInternal (record{std_in = CreatePipe,std_out = CreatePipe}) handlesio $
-          \(hin,hout) -> (action (toHandle hin,hClose hin,fromHandle hout), hClose hout)
-      PPInputError action -> executeInternal (record{std_in = CreatePipe,std_err = CreatePipe}) handlesie $
-          \(hin,herr) -> (action (toHandle hin,hClose hin,fromHandle herr), hClose herr)
-      PPInputOutputError action -> executeInternal (record{std_in = CreatePipe, std_out = CreatePipe, std_err = CreatePipe}) handlesioe $
-          \(hin,hout,herr) -> (action (toHandle hin,hClose hin,fromHandle hout,fromHandle herr), hClose hout `finally` hClose herr)
+      PPNone a -> executeInternal 
+          record 
+          nohandles   
+          (\() -> (return . Right $ a,return ()))
+      PPOutput action -> executeInternal 
+          (record{std_out = CreatePipe}) 
+          handleso 
+          (\h->(action (fromHandle h),hClose h)) 
+      PPError action ->  executeInternal 
+          (record{std_err = CreatePipe}) 
+          handlese 
+          (\h->(action (fromHandle h),hClose h))
+      PPOutputError action -> executeInternal 
+          (record{std_out = CreatePipe, std_err = CreatePipe}) 
+          handlesoe 
+          (\(hout,herr)->(action (fromHandle hout,fromHandle herr),hClose hout `finally` hClose herr))
+      PPInput action -> executeInternal 
+          (record{std_in = CreatePipe}) 
+          handlesi 
+          (\h -> (action (toHandle h, hClose h), return ()))
+      PPInputOutput action -> executeInternal 
+          (record{std_in = CreatePipe,std_out = CreatePipe}) 
+          handlesio 
+          (\(hin,hout) -> (action (toHandle hin,hClose hin,fromHandle hout), hClose hout))
+      PPInputError action -> executeInternal 
+          (record{std_in = CreatePipe,std_err = CreatePipe}) 
+          handlesie 
+          (\(hin,herr) -> (action (toHandle hin,hClose hin,fromHandle herr), hClose herr))
+      PPInputOutputError action -> executeInternal 
+          (record{std_in = CreatePipe, std_out = CreatePipe, std_err = CreatePipe}) 
+          handlesioe 
+          (\(hin,hout,herr) -> (action (toHandle hin,hClose hin,fromHandle hout,fromHandle herr), hClose hout `finally` hClose herr))
 
-executeInternal :: CreateProcess -> (forall m. Applicative m => (t -> m t) -> (Maybe Handle, Maybe Handle, Maybe Handle) -> m (Maybe Handle, Maybe Handle, Maybe Handle)) -> (t ->(IO (Either e a),IO ())) -> IO (Either e (ExitCode,a))
+executeInternal :: CreateProcess 
+                -> (forall m. Applicative m => (t -> m t) 
+                                            -> (Maybe Handle, Maybe Handle, Maybe Handle) 
+                                            -> m (Maybe Handle, Maybe Handle, Maybe Handle)) 
+                -> (t ->(IO (Either e a),IO ())) 
+                -> IO (Either e (ExitCode,a))
 executeInternal record somePrism allocator = mask $ \restore -> do
     (min,mout,merr,phandle) <- createProcess record
     case getFirst . getConst . somePrism (Const . First . Just) $ (min,mout,merr) of
@@ -230,8 +251,8 @@ data Piping e a =
          -> 
          IO (Either e a))
     | PPOutputError 
-        ((Producer ByteString IO (),
-          Producer ByteString IO ()) 
+        ((Producer ByteString IO ()
+         ,Producer ByteString IO ()) 
          -> 
          IO (Either e a))
     | PPInput 
@@ -239,19 +260,19 @@ data Piping e a =
          -> 
          IO (Either e a))
     | PPInputOutput 
-        ((Consumer ByteString IO (), IO (),
-          Producer ByteString IO ()) 
+        ((Consumer ByteString IO (), IO ()
+         ,Producer ByteString IO ()) 
          -> 
          IO (Either e a))
     | PPInputError 
-        ((Consumer ByteString IO (), IO (), 
-          Producer ByteString IO ()) 
+        ((Consumer ByteString IO (), IO () 
+         ,Producer ByteString IO ()) 
          -> 
          IO (Either e a))
     | PPInputOutputError 
-        ((Consumer ByteString IO (),IO (),
-          Producer ByteString IO (),
-          Producer ByteString IO ()) 
+        ((Consumer ByteString IO (), IO ()
+         ,Producer ByteString IO ()
+         ,Producer ByteString IO ()) 
          -> 
          IO (Either e a))
     deriving (Functor)
@@ -738,7 +759,7 @@ tweakLines lt' (Lines tear lt) = Lines tear (lt' . lt)
 
 
 {-|
-    Specifies a prefix that will be calculated and appeded for each line of
+    Specifies a prefix that will be calculated and appended for each line of
     text.
 -}
 prefixLines :: IO T.Text -> Lines e -> Lines e 
