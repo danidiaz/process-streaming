@@ -165,7 +165,9 @@ executeFallibly pp record = case pp of
       PPOutputError action -> executeInternal 
           (record{std_out = CreatePipe, std_err = CreatePipe}) 
           handlesoe 
-          (\(hout,herr)->(action (fromHandle hout,fromHandle herr),hClose hout `finally` hClose herr))
+          (\(hout,herr)->(action (fromHandle hout
+                                 ,fromHandle herr)
+                         ,hClose hout `finally` hClose herr))
       PPInput action -> executeInternal 
           (record{std_in = CreatePipe}) 
           handlesi 
@@ -173,20 +175,32 @@ executeFallibly pp record = case pp of
       PPInputOutput action -> executeInternal 
           (record{std_in = CreatePipe,std_out = CreatePipe}) 
           handlesio 
-          (\(hin,hout) -> (action (toHandle hin,hClose hin,fromHandle hout), hClose hout))
+          (\(hin,hout) -> (action (toHandle hin,hClose hin,fromHandle hout)
+                          ,hClose hout))
       PPInputError action -> executeInternal 
           (record{std_in = CreatePipe,std_err = CreatePipe}) 
           handlesie 
-          (\(hin,herr) -> (action (toHandle hin,hClose hin,fromHandle herr), hClose herr))
+          (\(hin,herr) -> (action (toHandle hin,hClose hin,fromHandle herr)
+                          ,hClose herr))
       PPInputOutputError action -> executeInternal 
-          (record{std_in = CreatePipe, std_out = CreatePipe, std_err = CreatePipe}) 
+          (record{std_in = CreatePipe
+                 ,std_out = CreatePipe
+                 ,std_err = CreatePipe}) 
           handlesioe 
-          (\(hin,hout,herr) -> (action (toHandle hin,hClose hin,fromHandle hout,fromHandle herr), hClose hout `finally` hClose herr))
+          (\(hin,hout,herr) -> (action (toHandle hin
+                                       ,hClose hin
+                                       ,fromHandle hout
+                                       ,fromHandle herr)
+                               ,hClose hout `finally` hClose herr))
 
 executeInternal :: CreateProcess 
                 -> (forall m. Applicative m => (t -> m t) 
-                                            -> (Maybe Handle, Maybe Handle, Maybe Handle) 
-                                            -> m (Maybe Handle, Maybe Handle, Maybe Handle)) 
+                                            -> (Maybe Handle
+                                               ,Maybe Handle
+                                               ,Maybe Handle) 
+                                            -> m (Maybe Handle
+                                                 ,Maybe Handle
+                                                 ,Maybe Handle)) 
                 -> (t ->(IO (Either e a),IO ())) 
                 -> IO (Either e (ExitCode,a))
 executeInternal record somePrism allocator = mask $ \restore -> do
@@ -256,21 +270,25 @@ data Piping e a =
          -> 
          IO (Either e a))
     | PPInput 
-        ((Consumer ByteString IO (), IO ()) 
+        ((Consumer ByteString IO ()
+         ,IO ()) 
          -> 
          IO (Either e a))
     | PPInputOutput 
-        ((Consumer ByteString IO (), IO ()
+        ((Consumer ByteString IO ()
+         ,IO ()
          ,Producer ByteString IO ()) 
          -> 
          IO (Either e a))
     | PPInputError 
-        ((Consumer ByteString IO (), IO () 
+        ((Consumer ByteString IO ()
+         ,IO () 
          ,Producer ByteString IO ()) 
          -> 
          IO (Either e a))
     | PPInputOutputError 
-        ((Consumer ByteString IO (), IO ()
+        ((Consumer ByteString IO ()
+         ,IO ()
          ,Producer ByteString IO ()
          ,Producer ByteString IO ()) 
          -> 
@@ -630,7 +648,8 @@ fromFold :: (Producer b IO () -> IO a) -> Siphon b e a
 fromFold aFold = siphon $ fmap (fmap pure) $ aFold 
 
 {-| 
-   Builds a 'Siphon' out of a computation that folds a 'Producer' and drains it completely.
+   Builds a 'Siphon' out of a computation that folds a 'Producer' and
+   drains it completely.
 -}
 fromFold' :: (forall r. Producer b IO r -> IO (a,r)) -> Siphon b e a 
 fromFold' aFold = siphon' $ fmap (fmap pure) aFold
@@ -656,14 +675,20 @@ fromFoldlIO aFoldM = fromFold' $ L.impurely P.foldM' aFoldM
 {-| 
    Builds a 'Siphon' out of a monadic fold from the @foldl@ package.
 -}
-fromFoldlM :: MonadIO m => (forall r. m (a,r) -> IO (Either e (c,r))) -> L.FoldM m b a -> Siphon b e c 
+fromFoldlM :: MonadIO m 
+           => (forall r. m (a,r) -> IO (Either e (c,r))) 
+           -> L.FoldM m b a 
+           -> Siphon b e c 
 fromFoldlM whittle aFoldM = siphon' $ \producer -> 
     whittle $ L.impurely P.foldM' aFoldM (hoist liftIO producer)
 
 fromConsumer :: Consumer b IO r -> Siphon b e ()
 fromConsumer consumer = siphon $ \producer -> fmap pure $ runEffect $ producer >-> mute consumer 
 
-fromConsumerM :: MonadIO m => (m () -> IO (Either e a)) -> Consumer b m r -> Siphon b e a
+fromConsumerM :: MonadIO m 
+              => (m () -> IO (Either e a)) 
+              -> Consumer b m r 
+              -> Siphon b e a
 fromConsumerM whittle consumer = siphon $ \producer -> whittle $ runEffect $ (hoist liftIO producer) >-> mute consumer 
 
 fromSafeConsumer :: Consumer b (SafeT IO) r -> Siphon b e ()
@@ -682,7 +707,9 @@ fromParser parser = siphon $ Pipes.Parse.evalStateT parser
 {-| 
   Turn a 'Parser' from @pipes-parse@ into a 'Sihpon'.
  -}
-fromParserM :: MonadIO m => (forall r. m (a,r) -> IO (Either e (c,r))) -> Parser b m a -> Siphon b e c 
+fromParserM :: MonadIO m 
+            => (forall r. m (a,r) -> IO (Either e (c,r))) 
+            -> Parser b m a -> Siphon b e c 
 fromParserM f parser = siphon' $ \producer -> f $ drainage $ (Pipes.Parse.runStateT parser) (hoist liftIO producer)
   where
     drainage m = do 
@@ -773,8 +800,8 @@ prefixLines tio = tweakLines (\p -> liftIO tio *> p)
     abort the computation if leftovers remain.
  -}
 toLines :: DecodingFunction ByteString Text 
-           -> Siphon ByteString e ()
-           -> Lines e 
+        -> Siphon ByteString e ()
+        -> Lines e 
 toLines decoder lopo = Lines
     (\tweaker teardown producer -> do
         let freeLines = transFreeT tweaker 
@@ -989,7 +1016,8 @@ data Stage e = Stage
              processDefinition' :: CreateProcess 
            , stderrLines' :: Lines e
            , exitCodePolicy' :: ExitCode -> Either e ()
-           , inbound' :: forall r. Producer ByteString IO r -> Producer ByteString (ExceptT e IO) r 
+           , inbound' :: forall r. Producer ByteString IO r 
+                      -> Producer ByteString (ExceptT e IO) r 
            } 
 
 instance Functor (Stage) where
