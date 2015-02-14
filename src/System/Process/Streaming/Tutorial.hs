@@ -78,7 +78,6 @@ import System.Process.Streaming
 >>> import qualified Data.Attoparsec.Text as A
 >>> import Control.Applicative
 >>> import Control.Monad
->>> import Control.Monad.Except
 >>> import Control.Lens (view)
 >>> import Pipes
 >>> import qualified Pipes.ByteString as B

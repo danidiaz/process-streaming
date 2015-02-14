@@ -113,7 +113,6 @@ import Control.Monad.Trans.Except
 import Control.Monad.Trans.State
 import Control.Monad.Trans.Writer.Strict
 import qualified Control.Foldl as L
-import qualified Control.Monad.Catch as C
 import Control.Exception
 import Control.Concurrent
 import Control.Concurrent.Conceit
