@@ -20,12 +20,14 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE StandaloneDeriving #-}
 
 
 module System.Process.Streaming ( 
         -- * Execution
-          execute
-        , executeFallibly
+          executeFallibly
+        , execute
         -- * Piping Policies
         , Piping
         , nopiping
@@ -49,7 +51,6 @@ module System.Process.Streaming (
         , fromEnumerable
         -- * Siphoning bytes out of stdout/stderr
         , Siphon
-        , SiphonOp (..)
         , siphon
         , siphon'
         , fromFold
@@ -67,14 +68,15 @@ module System.Process.Streaming (
         , unwanted
         , DecodingFunction
         , encoded
+        , SiphonOp (..)
         -- * Line handling
         , Lines
         , toLines
         , tweakLines
         , prefixLines
         -- * Pipelines
-        , executePipeline
         , executePipelineFallibly
+        , executePipeline
         --, simplePipeline
         , Stage
         , stage
@@ -100,6 +102,7 @@ import Data.Monoid
 import Data.Foldable
 import Data.Traversable
 import Data.Tree
+import Data.String
 import Data.Text 
 import Data.Text.Encoding 
 import Data.Void
@@ -131,6 +134,10 @@ import System.Process
 import System.Process.Lens
 import System.Exit
 
+{-|
+  A simplified version of 'executeFallibly' for when the error type is `Void`.
+  Note however that this function may still throw exceptions.
+ -}
 execute :: Piping Void a -> CreateProcess -> IO (ExitCode,a)
 execute pp cprocess = either absurd id <$> executeFallibly pp cprocess
 
@@ -140,11 +147,11 @@ a way defined by the 'Piping' argument.
 
    This function re-throws any 'IOException's it encounters.
 
-   If the consumption of the standard streams fails with @e@, the whole
-computation is immediately aborted and @e@ is returned. (An exception is not
-thrown in this case.).  
+   Besides exceptions, if the consumption of the standard streams fails
+   with @e@, the whole computation is immediately aborted and @e@ is
+   returned. 
 
-   If an error @e@ or an exception happens, the external process is
+   If an exception or an error @e@ happen, the external process is
 terminated.
  -}
 executeFallibly :: Piping e a -> CreateProcess -> IO (Either e (ExitCode,a))
@@ -294,6 +301,10 @@ data Piping e a =
          IO (Either e a))
     deriving (Functor)
 
+
+{-| 
+    'first' is useful to massage errors.
+-}
 instance Bifunctor Piping where
   bimap f g pp = case pp of
         PPNone a -> PPNone $ 
@@ -418,6 +429,10 @@ combined (Lines fun1 twk1) (Lines fun2 twk2) combinedConsumer prod1 prod2 =
 
 newtype Pump b e a = Pump { runPump :: Consumer b IO () -> IO (Either e a) } deriving Functor
 
+
+{-| 
+    'first' is useful to massage errors.
+-}
 instance Bifunctor (Pump b) where
   bimap f g (Pump x) = Pump $ fmap (liftM  (bimap f g)) x
 
@@ -448,6 +463,8 @@ instance (Monoid a) => Monoid (Pump b e a) where
    mempty = Pump . pure . pure . pure $ mempty
    mappend s1 s2 = (<>) <$> s1 <*> s2
 
+instance IsString (Pump ByteString e ()) where 
+   fromString = fromProducer . P.yield . fromString 
 
 fromProducer :: Producer b IO r -> Pump b e ()
 fromProducer producer = Pump $ \consumer -> fmap pure $ runEffect (mute producer >-> consumer) 
@@ -471,19 +488,24 @@ fromEnumerable = fromProducer . every
 {-| 
     A 'Siphon' represents a computation that completely drains a producer, but
 may fail early with an error of type @e@. 
+ -}
+newtype Siphon b e a = Siphon (Lift (Siphon_ b e) a) deriving (Functor)
 
+
+{-| 
     'pure' creates a 'Siphon' that does nothing besides draining the
 'Producer'. 
 
     '<*>' executes its arguments concurrently. The 'Producer' is forked so
     that each argument receives its own copy of the data.
- -}
-newtype Siphon b e a = Siphon (Lift (Siphon_ b e) a) deriving (Functor,Applicative)
+-}
+instance Applicative (Siphon b e)
 
 data Siphon_ b e a = 
          Exhaustive (forall r. Producer b IO r -> IO (Either e (a,r)))
        | Nonexhaustive (Producer b IO () -> IO (Either e a))
        deriving (Functor)
+
 
 instance Applicative (Siphon_ b e) where
     pure a = Exhaustive $ \producer -> do
@@ -532,11 +554,15 @@ runSiphon (Siphon (unLift -> s)) = nonexhaustive $ case s of
     Exhaustive _ -> s
     Nonexhaustive _ -> Exhaustive (exhaustive s)
 
+
 instance Bifunctor (Siphon_ b) where
   bimap f g s = case s of
       Exhaustive u -> Exhaustive $ fmap (liftM  (bimap f (bimap g id))) u
       Nonexhaustive h -> Nonexhaustive $ fmap (liftM  (bimap f g)) h
 
+{-| 
+    'first' is useful to massage errors.
+-}
 instance Bifunctor (Siphon b) where
   bimap f g (Siphon s) = Siphon $ case s of
       Pure a -> Pure (g a)
@@ -736,13 +762,13 @@ type DecodingFunction bytes text = forall r. Producer bytes IO r -> Producer tex
 {-|
     Constructs a 'Siphon' that works on encoded values out of a 'Siphon' that
 works on decoded values. 
-   
-    The two first arguments are a decoding function and a 'Siphon' that
-determines how to handle leftovers. Pass @pure id@ to ignore leftovers. Pass
-@unwanted id@ to abort the computation if leftovers remain.
  -}
 encoded :: DecodingFunction bytes text
+        -- ^ A decoding function.
         -> Siphon bytes e (a -> b)
+        -- ^ A 'Siphon' that determines how to handle leftovers. 
+        -- Pass @pure id@ to ignore leftovers. Pass
+        -- @unwanted id@ to abort the computation if leftovers remain.
         -> Siphon text  e a 
         -> Siphon bytes e b
 encoded decoder (Siphon (unLift -> policy)) (Siphon (unLift -> activity)) = 
@@ -755,7 +781,7 @@ encoded decoder (Siphon (unLift -> policy)) (Siphon (unLift -> activity)) =
 
 
 {-|
-    A configuration parameter used in functions that combine lines from
+    A configuration parameter used in functions that combine lines of text from
     multiple streams.
  -}
 
@@ -775,10 +801,6 @@ instance Functor Lines where
 {-|
     Specifies a transformation that will be applied to each line of text,
     represented as a 'Producer'.
-
-    Line prefixes are easy to add using applicative notation:
-
-  > (\x -> yield "prefix: " *> x)
 -}
 tweakLines :: (forall r. Producer T.Text IO r -> Producer T.Text IO r) -> Lines e -> Lines e 
 tweakLines lt' (Lines tear lt) = Lines tear (lt' . lt) 
@@ -793,13 +815,15 @@ prefixLines tio = tweakLines (\p -> liftIO tio *> p)
 
 
 {-|
-    Constructs a 'Lines' out of a 'DecodingFunction' and a 'Siphon'
-    that specifies how to handle decoding failures. Passing @pure ()@ as
-    the 'Siphon' will ignore any leftovers. Passing @unwanted ()@ will
-    abort the computation if leftovers remain.
+    Constructs a 'Lines' value.
  -}
 toLines :: DecodingFunction ByteString Text 
+        -- ^ A decoding function for lines of text.
         -> Siphon ByteString e ()
+        -- ^ A 'Siphon'
+        -- that specifies how to handle decoding failures. Passing @pure ()@ as
+        -- the 'Siphon' will ignore any leftovers. Passing @unwanted ()@ will
+        -- abort the computation if leftovers remain.
         -> Lines e 
 toLines decoder lopo = Lines
     (\tweaker teardown producer -> do
@@ -812,6 +836,10 @@ toLines decoder lopo = Lines
     id 
 
 
+{-|
+  A simplified version of 'executePipelineFallibly' for when the error type is `Void`.
+  Note however that this function may still throw exceptions.
+ -}
 executePipeline :: Piping Void a -> Tree (Stage Void) -> IO a 
 executePipeline pp pipeline = either absurd id <$> executePipelineFallibly pp pipeline
 
@@ -820,20 +848,22 @@ executePipeline pp pipeline = either absurd id <$> executePipelineFallibly pp pi
     Similar to 'executeFallibly', but instead of a single process it
     executes a (possibly branching) pipeline of external processes. 
 
-    The 'Piping' argument views the pipeline as a synthetic process
-    for which @stdin@ is the @stdin@ of the first stage, @stdout@ is the
-    @stdout@ of the leftmost terminal stage among those closer to the root,
-    and @stderr@ is a combination of the @stderr@ streams of all the
-    stages.
-
-    The combined @stderr@ stream always has UTF-8 encoding.
-
     This function has a limitation compared to the standard UNIX pipelines.
     If a downstream process terminates early without error, the upstream
     processes are not notified and keep going. There is no SIGPIPE-like
     functionality, in other words. 
  -}
-executePipelineFallibly :: Piping e a -> Tree (Stage e) -> IO (Either e a)
+executePipelineFallibly :: Piping e a 
+                        -- ^ 
+                        -- Views the pipeline as a single process
+                        -- for which @stdin@ is the @stdin@ of the first stage and @stdout@ is the
+                        -- @stdout@ of the leftmost terminal stage closer to the root.
+                        -- @stderr@ is a combination of the @stderr@ streams of all the
+                        -- stages. The combined @stderr@ stream always has UTF-8 encoding.
+                        -> Tree (Stage e) 
+                        -- ^ A tree of processes. Each process' stdin is fed with the stdout
+                        -- of its parent in the tree.
+                        -> IO (Either e a)
 executePipelineFallibly policy (Node (Stage cp lpol ecpol _) []) = case policy of
           PPNone a -> blende ecpol <$> executeFallibly policy cp 
           PPOutput action -> blende ecpol <$> executeFallibly policy cp 
@@ -1023,12 +1053,16 @@ instance Functor (Stage) where
     fmap f (Stage a b c d) = Stage a (fmap f b) (bimap f id . c) (hoist (mapExceptT $ liftM (bimap f id)) . d)
 
 {-|
-    Builds a 'Stage' out of a 'Lines' that specifies how to handle
-    @stderr@ when piped, a function that determines whether an
-    'ExitCode' represents an error (some programs return non-standard exit
-    codes) and a process definition. 
+    Builds a 'Stage'.
 -}
-stage :: Lines e -> (ExitCode -> Either e ()) -> CreateProcess -> Stage e       
+stage :: Lines e 
+      -- ^ How to handle lines coming from stderr for this 'Stage'.
+      -> (ExitCode -> Either e ()) 
+      -- ^ Does the 'ExitCode' for this 'Stage' represent an error? (Some
+      -- programs return non-standard exit codes.)
+      -> CreateProcess 
+      -- ^ A process definition.
+      -> Stage e       
 stage lp ec cp = Stage cp lp ec (hoist lift) 
 
 {-|
