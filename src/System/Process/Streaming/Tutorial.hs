@@ -6,7 +6,7 @@
  to the 'Piping'.
 
  'Piping' is a datatype that specifies what standard streams to pipe and
- what to do with them. It has many constructors, one for each possible
+ what to do with them. It has several constructors, one for each possible
  combination of streams.
 
  Constructors for 'Piping' usually take 'Siphon's as parameters.

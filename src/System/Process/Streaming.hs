@@ -6,7 +6,7 @@
 -- They provide concurrent, streaming access to the inputs and outputs of
 -- system processes.
 --
--- Error conditions not directly related to IO are made explicit
+-- Error conditions other than 'IOException's are made explicit
 -- in the types.
 --
 -- Regular 'Consumer's, 'Parser's from @pipes-parse@ and various folds can
