@@ -48,6 +48,7 @@ module System.Process.Streaming (
         , fromFallibleProducer
         , fromFoldable
         , fromEnumerable
+        , fromLazyBytes
         -- * Siphoning bytes out of stdout/stderr
         , Siphon
         , siphon
@@ -65,6 +66,8 @@ module System.Process.Streaming (
         , fromParser
         , fromParserM 
         , unwanted
+        , intoLazyBytes
+        , intoLazyText 
         , DecodingFunction
         , encoded
         , SiphonOp (..)
@@ -83,15 +86,17 @@ module System.Process.Streaming (
         , inbound
         -- * Re-exports
         -- $reexports
-        , module System.Process,
+        , module System.Process
+        , T.decodeUtf8 
         -- * Deprecated
         -- $deprecated
-        PipingPolicy,
-        LinePolicy,
-        linePolicy 
+        , PipingPolicy
+        , LinePolicy
+        , linePolicy 
     ) where
 
 import Data.Maybe
+import qualified Data.ByteString.Lazy as BL
 import Data.Bifunctor
 import Data.Functor.Identity
 import Data.Functor.Contravariant
@@ -102,6 +107,7 @@ import Data.Foldable
 import Data.Traversable
 import Data.Tree
 import Data.String
+import qualified Data.Text.Lazy as TL
 import Data.Text 
 import Data.Text.Encoding 
 import Data.Void
@@ -125,6 +131,7 @@ import Pipes.Lift
 import Pipes.ByteString
 import Pipes.Parse
 import qualified Pipes.Text as T
+import qualified Pipes.Text.Encoding as T
 import Pipes.Concurrent
 import Pipes.Safe (SafeT, runSafeT)
 import System.IO
@@ -462,7 +469,7 @@ instance (Monoid a) => Monoid (Pump b e a) where
    mempty = Pump . pure . pure . pure $ mempty
    mappend s1 s2 = (<>) <$> s1 <*> s2
 
-instance IsString (Pump ByteString e ()) where 
+instance IsString b => IsString (Pump b e ()) where 
    fromString = fromProducer . P.yield . fromString 
 
 fromProducer :: Producer b IO r -> Pump b e ()
@@ -483,19 +490,27 @@ fromFoldable = fromProducer . each
 fromEnumerable :: Enumerable t => t IO b -> Pump b e ()
 fromEnumerable = fromProducer . every
 
+fromLazyBytes :: BL.ByteString -> Pump ByteString e () 
+fromLazyBytes = fromProducer . fromLazy 
 
 {-| 
     A 'Siphon' represents a computation that completely drains a producer, but
 may fail early with an error of type @e@. 
 
+ -}
+newtype Siphon b e a = Siphon (Lift (Siphon_ b e) a) deriving (Functor)
+
+
+{-| 
     'pure' creates a 'Siphon' that does nothing besides draining the
 'Producer'. 
 
     '<*>' executes its arguments concurrently. The 'Producer' is forked so
     that each argument receives its own copy of the data.
- -}
-newtype Siphon b e a = Siphon (Lift (Siphon_ b e) a) deriving (Functor, Applicative)
-
+-}
+instance Applicative (Siphon b e) where
+    pure a = Siphon (pure a)
+    (Siphon fa) <*> (Siphon a) = Siphon (fa <*> a)
 
 data Siphon_ b e a = 
          Exhaustive (forall r. Producer b IO r -> IO (Either e (a,r)))
@@ -642,6 +657,12 @@ allowRights = do
         Right r -> Pipes.yield r >> allowRights
         Left _ -> allowRights
                                            
+intoLazyBytes :: Siphon ByteString e BL.ByteString 
+intoLazyBytes = fromFold toLazyM  
+
+intoLazyText :: Siphon Text e TL.Text
+intoLazyText = fromFold T.toLazyM  
+
 {-| 
    Builds a 'Siphon' out of a computation that does something with
    a 'Producer', but may fail with an error of type @e@.
@@ -857,8 +878,9 @@ executePipelineFallibly :: Piping e a
                         -- @stderr@ is a combination of the @stderr@ streams of all the
                         -- stages. The combined @stderr@ stream always has UTF-8 encoding.
                         -> Tree (Stage e) 
-                        -- ^ A tree of processes. Each process' stdin is fed with the stdout
-                        -- of its parent in the tree.
+                        -- ^ A (possibly branching) pipeline of processes.
+                        -- Each process' stdin is fed with the stdout of
+                        -- its parent in the tree.
                         -> IO (Either e a)
 executePipelineFallibly policy (Node (Stage cp lpol ecpol _) []) = case policy of
           PPNone a -> blende ecpol <$> executeFallibly policy cp 

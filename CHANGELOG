@@ -1,3 +1,8 @@
+0.6.9.0
+-------
+- fromLazyBytes, intoLazyBytes, intoLazyText.
+- re-export decodeUtf8 from pipes-text. 
+
 0.6.8.0
 -------
 - IsString instance for Pump.
