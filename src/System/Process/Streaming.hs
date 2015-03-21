@@ -27,7 +27,7 @@ module System.Process.Streaming (
         -- * Execution
           executeFallibly
         , execute
-        -- * Piping Policies
+        -- * Piping the standard streams
         , Piping
         , nopiping
         , pipeo
