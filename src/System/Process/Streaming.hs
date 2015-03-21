@@ -109,7 +109,7 @@ import Data.Tree
 import Data.String
 import qualified Data.Text.Lazy as TL
 import Data.Text 
-import Data.Text.Encoding 
+import Data.Text.Encoding hiding (decodeUtf8)
 import Data.Void
 import Data.List.NonEmpty
 import qualified Data.List.NonEmpty as N
@@ -131,6 +131,7 @@ import Pipes.Lift
 import Pipes.ByteString
 import Pipes.Parse
 import qualified Pipes.Text as T
+import Pipes.Text.Encoding (decodeUtf8)
 import qualified Pipes.Text.Encoding as T
 import Pipes.Concurrent
 import Pipes.Safe (SafeT, runSafeT)
