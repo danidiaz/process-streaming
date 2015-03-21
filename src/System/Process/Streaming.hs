@@ -21,7 +21,6 @@
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE StandaloneDeriving #-}
 
 
 module System.Process.Streaming ( 
@@ -488,18 +487,15 @@ fromEnumerable = fromProducer . every
 {-| 
     A 'Siphon' represents a computation that completely drains a producer, but
 may fail early with an error of type @e@. 
- -}
-newtype Siphon b e a = Siphon (Lift (Siphon_ b e) a) deriving (Functor)
 
-
-{-| 
     'pure' creates a 'Siphon' that does nothing besides draining the
 'Producer'. 
 
     '<*>' executes its arguments concurrently. The 'Producer' is forked so
     that each argument receives its own copy of the data.
--}
-instance Applicative (Siphon b e)
+ -}
+newtype Siphon b e a = Siphon (Lift (Siphon_ b e) a) deriving (Functor, Applicative)
+
 
 data Siphon_ b e a = 
          Exhaustive (forall r. Producer b IO r -> IO (Either e (a,r)))
