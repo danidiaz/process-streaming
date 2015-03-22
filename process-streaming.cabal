@@ -21,6 +21,7 @@ Library
     exposed-modules: 
         System.Process.Streaming
         System.Process.Streaming.Extended
+        System.Process.Streaming.Internal
         System.Process.Streaming.Tutorial
         System.Process.Lens
     other-modules: 

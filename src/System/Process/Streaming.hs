@@ -142,6 +142,8 @@ import System.Process
 import System.Process.Lens
 import System.Exit
 
+import System.Process.Streaming.Internal
+
 {-|
   A simplified version of 'executeFallibly' for when the error type is `Void`.
   Note however that this function may still throw exceptions.
@@ -254,83 +256,6 @@ terminateOnError pHandle action = do
         Right r -> do 
             exitCode <- waitForProcess pHandle 
             return $ Right (exitCode,r)  
-
-{-|
-    A 'Piping' determines what standard streams will be piped and what to
-do with them.
-
-    The user doesn't need to manually set the 'std_in', 'std_out' and 'std_err'
-fields of the 'CreateProcess' record to 'CreatePipe', this is done
-automatically. 
-
-    A 'Piping' is parametrized by the type @e@ of errors that can abort
-the processing of the streams.
- -}
--- Knows that there is a stdin, stdout and a stderr,
--- but doesn't know anything about file handlers or CreateProcess.
-data Piping e a = 
-      PPNone a
-    | PPOutput 
-        (Producer ByteString IO () 
-         -> 
-         IO (Either e a))
-    | PPError 
-        (Producer ByteString IO () 
-         -> 
-         IO (Either e a))
-    | PPOutputError 
-        ((Producer ByteString IO ()
-         ,Producer ByteString IO ()) 
-         -> 
-         IO (Either e a))
-    | PPInput 
-        ((Consumer ByteString IO ()
-         ,IO ()) 
-         -> 
-         IO (Either e a))
-    | PPInputOutput 
-        ((Consumer ByteString IO ()
-         ,IO ()
-         ,Producer ByteString IO ()) 
-         -> 
-         IO (Either e a))
-    | PPInputError 
-        ((Consumer ByteString IO ()
-         ,IO () 
-         ,Producer ByteString IO ()) 
-         -> 
-         IO (Either e a))
-    | PPInputOutputError 
-        ((Consumer ByteString IO ()
-         ,IO ()
-         ,Producer ByteString IO ()
-         ,Producer ByteString IO ()) 
-         -> 
-         IO (Either e a))
-    deriving (Functor)
-
-
-{-| 
-    'first' is useful to massage errors.
--}
-instance Bifunctor Piping where
-  bimap f g pp = case pp of
-        PPNone a -> PPNone $ 
-            g a 
-        PPOutput action -> PPOutput $ 
-            fmap (fmap (bimap f g)) action
-        PPError action -> PPError $ 
-            fmap (fmap (bimap f g)) action
-        PPOutputError action -> PPOutputError $ 
-            fmap (fmap (bimap f g)) action
-        PPInput action -> PPInput $ 
-            fmap (fmap (bimap f g)) action
-        PPInputOutput action -> PPInputOutput $ 
-            fmap (fmap (bimap f g)) action
-        PPInputError action -> PPInputError $ 
-            fmap (fmap (bimap f g)) action
-        PPInputOutputError action -> PPInputOutputError $ 
-            fmap (fmap (bimap f g)) action
 
 {-|
     Do not pipe any standard stream. 

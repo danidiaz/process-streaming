@@ -62,6 +62,7 @@ import System.Process.Lens
 import System.Exit
 
 import System.Process.Streaming
+import System.Process.Streaming.Internal
 
 newtype Pap e a = Pap { runPap :: (Consumer ByteString IO (), IO (), Producer ByteString IO (), Producer ByteString IO ()) -> IO (Either e a) } deriving (Functor)
 
@@ -127,4 +128,4 @@ instance Applicative (Pap e) where
 
 toPiping :: Pap e a -> Piping e a  
 toPiping (Pap f) = undefined
--- toPiping (Pap f) = PPInputOutputError f
+toPiping (Pap f) = PPInputOutputError f
