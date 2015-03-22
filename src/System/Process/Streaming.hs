@@ -852,20 +852,6 @@ errorSiphonUTF8 mvar (Lines fun twk) = siphon (fun twk iterTLines)
 mute :: Functor f => f a -> f ()
 mute = fmap (const ())
 
-{-|
-   An individual stage in a process pipeline. 
- -}
-data Stage e = Stage 
-           {
-             processDefinition' :: CreateProcess 
-           , stderrLines' :: Lines e
-           , exitCodePolicy' :: ExitCode -> Either e ()
-           , inbound' :: forall r. Producer ByteString IO r 
-                      -> Producer ByteString (ExceptT e IO) r 
-           } 
-
-instance Functor (Stage) where
-    fmap f (Stage a b c d) = Stage a (fmap f b) (bimap f id . c) (hoist (mapExceptT $ liftM (bimap f id)) . d)
 
 {-|
     Builds a 'Stage'.

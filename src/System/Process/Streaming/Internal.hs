@@ -15,7 +15,8 @@ module System.Process.Streaming.Internal (
         exhaustive,
         Lines(..),
         combined,
-        manyCombined
+        manyCombined,
+        Stage(..)
     ) where
 
 import Data.Maybe
@@ -279,3 +280,19 @@ data Lines e = Lines
 instance Functor Lines where
   fmap f (Lines func lt) = Lines (\x y z -> fmap (bimap f id) $ func x y z) lt
 
+
+
+{-|
+   An individual stage in a process pipeline. 
+ -}
+data Stage e = Stage 
+           {
+             processDefinition' :: CreateProcess 
+           , stderrLines' :: Lines e
+           , exitCodePolicy' :: ExitCode -> Either e ()
+           , inbound' :: forall r. Producer ByteString IO r 
+                      -> Producer ByteString (ExceptT e IO) r 
+           } 
+
+instance Functor (Stage) where
+    fmap f (Stage a b c d) = Stage a (fmap f b) (bimap f id . c) (hoist (mapExceptT $ liftM (bimap f id)) . d)

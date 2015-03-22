@@ -74,11 +74,29 @@ import System.Exit
 import System.Process.Streaming
 import System.Process.Streaming.Internal
 
+
+{-|
+    An alternative way to `Piping` for defining what to do with the
+    standard streams. 'Pap' is an instance of 'Applicative', unlike
+    'Piping'. 
+
+    With 'Pap', the standard streams are always piped. The values of
+    @std_in@, @std_out@ and @std_err@ of the 'CreateProcess' record are
+    ignored.
+ -}
 newtype Pap e a = Pap { runPap :: (Consumer ByteString IO (), IO (), Producer ByteString IO (), Producer ByteString IO ()) -> IO (Either e a) } deriving (Functor)
 
 instance Bifunctor Pap where
   bimap f g (Pap action) = Pap $ fmap (fmap (bimap f g)) action
 
+
+{-| 
+    'pure' creates a 'Pap' that writes nothing to @stdin@ and drains
+    @stdout@ and @stderr@, discarding the data.
+
+    '<*>' schedules the writes to @stdin@ sequentially, and the reads from
+    @stdout@ and @stderr@ concurrently.
+-}
 instance Applicative (Pap e) where
   pure a = Pap $ \(consumer, cleanup, producer1, producer2) -> do
       let nullInput = runPump (pure ()) consumer `finally` cleanup
@@ -140,7 +158,7 @@ toPiping :: Pap e a -> Piping e a
 toPiping (Pap f) = PPInputOutputError f
 
 {-|
-    Pipe @stdout@.
+    Do stuff with @stdout@.
 -}
 papo :: Siphon ByteString e a -> Pap e a
 papo s = Pap $ \(consumer, cleanup, producer1, producer2) -> do
@@ -157,7 +175,7 @@ papo s = Pap $ \(consumer, cleanup, producer1, producer2) -> do
         Conceit drainError
 
 {-|
-    Pipe @stderr@.
+    Do stuff with @stderr@.
 -}
 pape :: Siphon ByteString e a -> Pap e a
 pape s = Pap $ \(consumer, cleanup, producer1, producer2) -> do
@@ -174,7 +192,7 @@ pape s = Pap $ \(consumer, cleanup, producer1, producer2) -> do
         Conceit drainError
 
 {-|
-    Pipe @stdin@.
+    Do stuff with @stdin@.
 -}
 papi :: Pump ByteString e a -> Pap e a
 papi p = Pap $ \(consumer, cleanup, producer1, producer2) -> do
@@ -191,7 +209,7 @@ papi p = Pap $ \(consumer, cleanup, producer1, producer2) -> do
         Conceit drainError
 
 {-|
-    Pipe @stdout@ and @stderr@ and consume them combined as 'Text'.  
+    Do stuff with @stdout@ and @stderr@ combined as 'Text'.  
 -}
 papoe :: Lines e -> Lines e -> Siphon Text e a -> Pap e a
 papoe policy1 policy2 s = Pap $ \(consumer, cleanup, producer1, producer2) -> do
@@ -204,12 +222,21 @@ papoe policy1 policy2 s = Pap $ \(consumer, cleanup, producer1, producer2) -> do
         <*>
         Conceit combination
 
+{-|
+    Pipe @stdin@ to the created process' @stdin@.
+-}
 sameStdin :: Pap e ()
 sameStdin = papi $ pumpFromHandle System.IO.stdin
 
+{-|
+    Pipe the created process' @stdout@ to @stdout@.
+-}
 sameStdout :: Pap e ()
 sameStdout = papo $ siphonToHandle System.IO.stdout
 
+{-|
+    Pipe the created process' @stderr@ to @stderr@.
+-}
 sameStderr :: Pap e ()
 sameStderr = pape $ siphonToHandle System.IO.stderr
 
