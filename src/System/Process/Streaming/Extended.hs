@@ -70,6 +70,30 @@ instance Bifunctor Pap where
   bimap f g (Pap action) = Pap $ fmap (fmap (bimap f g)) action
 
 instance Applicative (Pap e) where
-  pure a = undefined
-  (Pap fa) <*> (Pap fb) = undefined
+  pure a = Pap $ \(consumer, _, producer1, producer2) ->
+      fmap (fmap (const a))  
+           (conceit 
+             (runPump (pure ()) consumer)
+             (conceit 
+                 (runSiphon (pure ()) producer1)
+                 (runSiphon (pure ()) producer2)))
+      -- what do do with the closing action????????
 
+  (Pap fa) <*> (Pap fb) = Pap $ \(consumer, _, producer1, producer2) -> do
+        latch <- newEmptyMVar :: IO (MVar ())
+        (ioutbox, iinbox, iseal) <- spawn' Single
+        (ooutbox, oinbox, oseal) <- spawn' Single
+        (eoutbox, einbox, eseal) <- spawn' Single
+        (ioutbox2, iinbox2, iseal2) <- spawn' Single
+        (ooutbox2, oinbox2, oseal2) <- spawn' Single
+        (eoutbox2, einbox2, eseal2) <- spawn' Single
+        runConceit $
+            (Conceit (fa (toOutput ioutbox <* liftIO (putMVar latch ()), 
+                          return (), 
+                          fromInput oinbox, 
+                          fromInput einbox)))
+            <*>
+            (Conceit (fb (liftIO (takeMVar latch) *> toOutput ioutbox2, 
+                          return (), 
+                          fromInput oinbox2, 
+                          fromInput einbox2)))
