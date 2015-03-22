@@ -222,3 +222,12 @@ pumpFromHandle = fromProducer . fromHandle
 siphonToHandle :: Handle -> Siphon ByteString e ()
 siphonToHandle = fromConsumer . toHandle
 
+-- not sure how to do this
+-- siphonThrowIO :: Exception ex => (e -> ex) -> Siphon b e a -> Siphon b e' a
+-- siphonThrowIO exgen = 
+--   let elide f = \producer -> do
+--          result <- f producer
+--          case result of
+--              Left e -> throwIO $ exgen e 
+--              Right a -> return $ Right a
+--   in Siphon . Other . Exhaustive . elide . runSiphon 
