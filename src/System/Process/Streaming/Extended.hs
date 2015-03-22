@@ -11,9 +11,9 @@
 
 module System.Process.Streaming.Extended ( 
        Pap
+    ,  toPiping
     ,  module System.Process.Streaming
     ) where
-
 
 import Data.Maybe
 import qualified Data.ByteString.Lazy as BL
@@ -61,7 +61,6 @@ import System.Process
 import System.Process.Lens
 import System.Exit
 
-
 import System.Process.Streaming
 
 newtype Pap e a = Pap { runPap :: (Consumer ByteString IO (), IO (), Producer ByteString IO (), Producer ByteString IO ()) -> IO (Either e a) } deriving (Functor)
@@ -70,16 +69,20 @@ instance Bifunctor Pap where
   bimap f g (Pap action) = Pap $ fmap (fmap (bimap f g)) action
 
 instance Applicative (Pap e) where
-  pure a = Pap $ \(consumer, _, producer1, producer2) ->
-      fmap (fmap (const a))  
-           (conceit 
-             (runPump (pure ()) consumer)
-             (conceit 
-                 (runSiphon (pure ()) producer1)
-                 (runSiphon (pure ()) producer2)))
-      -- what do do with the closing action????????
+  pure a = Pap $ \(consumer, cleanup, producer1, producer2) -> do
+      let nullInput = runPump (pure ()) consumer `finally` cleanup
+          drainOutput = runSiphon (pure ()) producer1
+          drainError = runSiphon (pure ()) producer2
+      runConceit $ 
+          (\_ _ _ -> a)
+          <$>
+          Conceit nullInput
+          <*>
+          Conceit drainOutput
+          <*>
+          Conceit drainError
 
-  (Pap fa) <*> (Pap fb) = Pap $ \(consumer, _, producer1, producer2) -> do
+  (Pap fa) <*> (Pap fb) = Pap $ \(consumer, cleanup, producer1, producer2) -> do
         latch <- newEmptyMVar :: IO (MVar ())
         (ioutbox, iinbox, iseal) <- spawn' Single
         (ooutbox, oinbox, oseal) <- spawn' Single
@@ -87,13 +90,41 @@ instance Applicative (Pap e) where
         (ioutbox2, iinbox2, iseal2) <- spawn' Single
         (ooutbox2, oinbox2, oseal2) <- spawn' Single
         (eoutbox2, einbox2, eseal2) <- spawn' Single
+        let reroutei = runEffect (fromInput (iinbox <> iinbox2) >-> consumer)
+                       `finally` atomically iseal 
+                       `finally` atomically iseal2
+                       `finally` cleanup
+            rerouteo = runEffect (producer1 >-> toOutput (ooutbox <> ooutbox2))
+                       `finally` atomically oseal 
+                       `finally` atomically oseal2
+            reroutee = runEffect (producer2 >-> toOutput (eoutbox <> eoutbox2))
+                       `finally` atomically eseal 
+                       `finally` atomically eseal2
+            deceivedf = fa 
+                (toOutput ioutbox <* liftIO (putMVar latch ()), 
+                 atomically iseal, 
+                 fromInput oinbox, 
+                 fromInput einbox)
+                 `finally` atomically iseal 
+                 `finally` atomically oseal 
+                 `finally` atomically eseal 
+            deceivedx = fb 
+                (liftIO (takeMVar latch) *> toOutput ioutbox2, 
+                 atomically iseal2, 
+                 fromInput oinbox2, 
+                 fromInput einbox2)
+                 `finally` atomically iseal2 
+                 `finally` atomically oseal2 
+                 `finally` atomically eseal2 
         runConceit $
-            (Conceit (fa (toOutput ioutbox <* liftIO (putMVar latch ()), 
-                          return (), 
-                          fromInput oinbox, 
-                          fromInput einbox)))
-            <*>
-            (Conceit (fb (liftIO (takeMVar latch) *> toOutput ioutbox2, 
-                          return (), 
-                          fromInput oinbox2, 
-                          fromInput einbox2)))
+            _Conceit reroutei 
+            *>
+            _Conceit rerouteo 
+            *> 
+            _Conceit reroutee 
+            *> 
+            (Conceit deceivedf <*> Conceit deceivedx)
+
+toPiping :: Pap e a -> Piping e a  
+toPiping (Pap f) = undefined
+-- toPiping (Pap f) = PPInputOutputError f

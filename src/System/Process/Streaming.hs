@@ -414,7 +414,9 @@ separated outfunc errfunc outprod errprod =
 combined :: Lines e 
          -> Lines e 
          -> (Producer T.Text IO () -> IO (Either e a))
-         -> Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e a)
+         -> Producer ByteString IO () 
+         -> Producer ByteString IO () 
+         -> IO (Either e a)
 combined (Lines fun1 twk1) (Lines fun2 twk2) combinedConsumer prod1 prod2 = 
     manyCombined [fmap ($prod1) (fun1 twk1), fmap ($prod2) (fun2 twk2)] combinedConsumer 
   where     
