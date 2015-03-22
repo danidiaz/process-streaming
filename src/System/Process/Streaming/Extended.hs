@@ -82,8 +82,8 @@ instance Bifunctor Pap where
 instance Applicative (Pap e) where
   pure a = Pap $ \(consumer, cleanup, producer1, producer2) -> do
       let nullInput = runPump (pure ()) consumer `finally` cleanup
-          drainOutput = runSiphon (pure ()) producer1
-          drainError = runSiphon (pure ()) producer2
+          drainOutput = runSiphonDumb (pure ()) producer1
+          drainError = runSiphonDumb (pure ()) producer2
       runConceit $ 
           (\_ _ _ -> a)
           <$>
@@ -137,49 +137,88 @@ instance Applicative (Pap e) where
             (Conceit deceivedf <*> Conceit deceivedx)
 
 toPiping :: Pap e a -> Piping e a  
-toPiping (Pap f) = undefined
 toPiping (Pap f) = PPInputOutputError f
 
 {-|
     Pipe @stdout@.
 -}
 papo :: Siphon ByteString e a -> Pap e a
-papo _ = undefined
---papo (runSiphonDumb -> siphonout) = PPOutput $ siphonout
+papo s = Pap $ \(consumer, cleanup, producer1, producer2) -> do
+    let nullInput = runPump (pure ()) consumer `finally` cleanup
+        drainOutput = runSiphonDumb s producer1 
+        drainError = runSiphonDumb (pure ()) producer2
+    runConceit $ 
+        (\_ r _ -> r)
+        <$>
+        Conceit nullInput
+        <*>
+        Conceit drainOutput
+        <*>
+        Conceit drainError
 
 {-|
     Pipe @stderr@.
 -}
 pape :: Siphon ByteString e a -> Pap e a
-pape _ = undefined
+pape s = Pap $ \(consumer, cleanup, producer1, producer2) -> do
+    let nullInput = runPump (pure ()) consumer `finally` cleanup
+        drainOutput = runSiphonDumb (pure ()) producer1 
+        drainError = runSiphonDumb s producer2
+    runConceit $ 
+        (\_ _ r -> r)
+        <$>
+        Conceit nullInput
+        <*>
+        Conceit drainOutput
+        <*>
+        Conceit drainError
 
 {-|
     Pipe @stdin@.
 -}
-papi :: Siphon ByteString e a -> Pap e a
-papi _ = undefined
+papi :: Pump ByteString e a -> Pap e a
+papi p = Pap $ \(consumer, cleanup, producer1, producer2) -> do
+    let nullInput = runPump p consumer `finally` cleanup
+        drainOutput = runSiphonDumb (pure ()) producer1 
+        drainError = runSiphonDumb (pure ()) producer2
+    runConceit $ 
+        (\r _ _ -> r)
+        <$>
+        Conceit nullInput
+        <*>
+        Conceit drainOutput
+        <*>
+        Conceit drainError
 
 {-|
     Pipe @stdout@ and @stderr@ and consume them combined as 'Text'.  
 -}
-papoe :: Lines e -> Lines e -> Siphon Text e a -> Piping e a
-papoe policy1 policy2 (runSiphonDumb -> siphon) = undefined
+papoe :: Lines e -> Lines e -> Siphon Text e a -> Pap e a
+papoe policy1 policy2 s = Pap $ \(consumer, cleanup, producer1, producer2) -> do
+    let nullInput = runPump (pure ()) consumer `finally` cleanup
+        combination = combined policy1 policy2 (runSiphonDumb s) producer1 producer2 
+    runConceit $ 
+        (\_ r -> r)
+        <$>
+        Conceit nullInput
+        <*>
+        Conceit combination
 
 sameStdin :: Pap e ()
-sameStdin = undefined
+sameStdin = papi $ pumpFromHandle System.IO.stdin
 
 sameStdout :: Pap e ()
-sameStdout = undefined
+sameStdout = papo $ siphonToHandle System.IO.stdout
 
 sameStderr :: Pap e ()
-sameStderr = undefined
+sameStderr = pape $ siphonToHandle System.IO.stderr
 
 sameStreams :: Pap e ()
 sameStreams = sameStdin *> sameStdout *> sameStderr
 
 pumpFromHandle :: Handle -> Pump ByteString e ()
-pumpFromHandle = undefined
+pumpFromHandle = fromProducer . fromHandle
 
 siphonToHandle :: Handle -> Siphon ByteString e ()
-siphonToHandle = undefined
+siphonToHandle = fromConsumer . toHandle
 

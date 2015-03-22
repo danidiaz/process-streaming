@@ -334,31 +334,6 @@ separated :: (Producer ByteString IO () -> IO (Either e a))
 separated outfunc errfunc outprod errprod = 
     conceit (outfunc outprod) (errfunc errprod)
 
--- http://unix.stackexchange.com/questions/114182/can-redirecting-stdout-and-stderr-to-the-same-file-mangle-lines here
-combined :: Lines e 
-         -> Lines e 
-         -> (Producer T.Text IO () -> IO (Either e a))
-         -> Producer ByteString IO () 
-         -> Producer ByteString IO () 
-         -> IO (Either e a)
-combined (Lines fun1 twk1) (Lines fun2 twk2) combinedConsumer prod1 prod2 = 
-    manyCombined [fmap ($prod1) (fun1 twk1), fmap ($prod2) (fun2 twk2)] combinedConsumer 
-  where     
-    manyCombined :: [(FreeT (Producer T.Text IO) IO (Producer ByteString IO ()) -> IO (Producer ByteString IO ())) -> IO (Either e ())]
-                 -> (Producer T.Text IO () -> IO (Either e a))
-                 -> IO (Either e a) 
-    manyCombined actions consumer = do
-        (outbox, inbox, seal) <- spawn' Single
-        mVar <- newMVar outbox
-        runConceit $ 
-            Conceit (mapConceit ($ iterTLines mVar) actions `finally` atomically seal)
-            *>
-            Conceit (consumer (fromInput inbox) `finally` atomically seal)
-        where 
-        iterTLines mvar = iterT $ \textProducer -> do
-            -- the P.drain bit was difficult to figure out!!!
-            join $ withMVar mvar $ \output -> do
-                runEffect $ (textProducer <* P.yield (singleton '\n')) >-> (toOutput output >> P.drain)
 
 
 newtype Pump b e a = Pump { runPump :: Consumer b IO () -> IO (Either e a) } deriving Functor
@@ -635,23 +610,6 @@ allowRights = do
     case e of 
         Right r -> Pipes.yield r >> allowRights
         Left _ -> allowRights
-
-{-|
-    A configuration parameter used in functions that combine lines of text from
-    multiple streams.
- -}
-
-data Lines e = Lines 
-    {
-        teardown :: (forall r. Producer T.Text IO r -> Producer T.Text IO r)
-                 -> (FreeT (Producer T.Text IO) IO (Producer ByteString IO ()) -> IO (Producer ByteString IO ())) 
-                 -> Producer ByteString IO () -> IO (Either e ())
-    ,   lineTweaker :: forall r. Producer T.Text IO r -> Producer T.Text IO r
-    } 
-
--- | 'fmap' maps over the encoding error. 
-instance Functor Lines where
-  fmap f (Lines func lt) = Lines (\x y z -> fmap (bimap f id) $ func x y z) lt
 
 
 {-|
