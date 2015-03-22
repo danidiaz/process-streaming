@@ -51,6 +51,7 @@ module System.Process.Streaming (
         , fromLazyBytes
         -- * Siphoning bytes out of stdout/stderr
         , Siphon
+        , runSiphon
         , siphon
         , siphon'
         , fromFold
@@ -341,26 +342,26 @@ nopiping = PPNone ()
     Pipe @stdout@.
 -}
 pipeo :: Siphon ByteString e a -> Piping e a
-pipeo (runSiphon -> siphonout) = PPOutput $ siphonout
+pipeo (runSiphonDumb -> siphonout) = PPOutput $ siphonout
 
 {-|
     Pipe @stderr@.
 -}
 pipee :: Siphon ByteString e a -> Piping e a
-pipee (runSiphon -> siphonout) = PPError $ siphonout
+pipee (runSiphonDumb -> siphonout) = PPError $ siphonout
 
 {-|
     Pipe @stdout@ and @stderr@.
 -}
 pipeoe :: Siphon ByteString e a -> Siphon ByteString e b -> Piping e (a,b)
-pipeoe (runSiphon -> siphonout) (runSiphon -> siphonerr) = 
+pipeoe (runSiphonDumb -> siphonout) (runSiphonDumb -> siphonerr) = 
     PPOutputError $ uncurry $ separated siphonout siphonerr  
 
 {-|
     Pipe @stdout@ and @stderr@ and consume them combined as 'Text'.  
 -}
 pipeoec :: Lines e -> Lines e -> Siphon Text e a -> Piping e a
-pipeoec policy1 policy2 (runSiphon -> siphon) = 
+pipeoec policy1 policy2 (runSiphonDumb -> siphon) = 
     PPOutputError $ uncurry $ combined policy1 policy2 siphon  
 
 {-|
@@ -373,21 +374,21 @@ pipei (Pump feeder) = PPInput $ \(consumer,cleanup) -> feeder consumer `finally`
     Pipe @stdin@ and @stdout@.
 -}
 pipeio :: Pump ByteString e i -> Siphon ByteString e a -> Piping e (i,a)
-pipeio (Pump feeder) (runSiphon -> siphonout) = PPInputOutput $ \(consumer,cleanup,producer) ->
+pipeio (Pump feeder) (runSiphonDumb -> siphonout) = PPInputOutput $ \(consumer,cleanup,producer) ->
         (conceit (feeder consumer `finally` cleanup) (siphonout producer))
 
 {-|
     Pipe @stdin@ and @stderr@.
 -}
 pipeie :: Pump ByteString e i -> Siphon ByteString e a -> Piping e (i,a)
-pipeie (Pump feeder) (runSiphon -> siphonerr) = PPInputError $ \(consumer,cleanup,producer) ->
+pipeie (Pump feeder) (runSiphonDumb -> siphonerr) = PPInputError $ \(consumer,cleanup,producer) ->
         (conceit (feeder consumer `finally` cleanup) (siphonerr producer))
 
 {-|
     Pipe @stdin@, @stdout@ and @stderr@.
 -}
 pipeioe :: Pump ByteString e i -> Siphon ByteString e a -> Siphon ByteString e b -> Piping e (i,a,b)
-pipeioe (Pump feeder) (runSiphon -> siphonout) (runSiphon -> siphonerr) = fmap flattenTuple $ PPInputOutputError $
+pipeioe (Pump feeder) (runSiphonDumb -> siphonout) (runSiphonDumb -> siphonerr) = fmap flattenTuple $ PPInputOutputError $
     \(consumer,cleanup,outprod,errprod) -> 
              (conceit (feeder consumer `finally` cleanup) 
                       (separated siphonout siphonerr outprod errprod))
@@ -398,7 +399,7 @@ pipeioe (Pump feeder) (runSiphon -> siphonout) (runSiphon -> siphonerr) = fmap f
     Pipe @stdin@, @stdout@ and @stderr@, consuming the last two combined as 'Text'.
 -}
 pipeioec :: Pump ByteString e i -> Lines e -> Lines e -> Siphon Text e a -> Piping e (i,a)
-pipeioec (Pump feeder) policy1 policy2 (runSiphon -> siphon) = PPInputOutputError $
+pipeioec (Pump feeder) policy1 policy2 (runSiphonDumb -> siphon) = PPInputOutputError $
     \(consumer,cleanup,outprod,errprod) -> 
              (conceit (feeder consumer `finally` cleanup) 
                       (combined policy1 policy2 siphon outprod errprod))
@@ -561,8 +562,11 @@ exhaustive s = case s of
                       `finally` atomically seal
                      )
 
-runSiphon :: Siphon b e a -> Producer b IO () -> IO (Either e a)
-runSiphon (Siphon (unLift -> s)) = nonexhaustive $ case s of 
+runSiphon :: Siphon b e a -> Producer b IO r -> IO (Either e (a,r))
+runSiphon (Siphon (unLift -> s)) = exhaustive s
+
+runSiphonDumb :: Siphon b e a -> Producer b IO () -> IO (Either e a)
+runSiphonDumb (Siphon (unLift -> s)) = nonexhaustive $ case s of 
     Exhaustive _ -> s
     Nonexhaustive _ -> Exhaustive (exhaustive s)
 
@@ -850,7 +854,7 @@ toLines decoder lopo = Lines
                       . decoder
                       $ producer
             viewLines = getConst . T.lines Const
-        teardown freeLines >>= runSiphon lopo)
+        teardown freeLines >>= runSiphonDumb lopo)
     id 
 
 
