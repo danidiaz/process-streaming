@@ -15,9 +15,9 @@ module System.Process.Streaming.Extended (
     ,  papo
     ,  pape
     ,  papoe
-    ,  sameStdin 
-    ,  sameStdout
-    ,  sameStderr
+    ,  samei
+    ,  sameo
+    ,  samee
     ,  sameStreams
     ,  toPiping
     ,  pumpFromHandle 
@@ -130,8 +130,8 @@ instance Applicative (Pap e) where
                        `finally` atomically eseal 
                        `finally` atomically eseal2
             deceivedf = fa 
-                (toOutput ioutbox <* liftIO (putMVar latch ()), 
-                 atomically iseal, 
+                (toOutput ioutbox, 
+                 atomically iseal `finally` putMVar latch (), 
                  fromInput oinbox, 
                  fromInput einbox)
                  `finally` atomically iseal 
@@ -225,23 +225,23 @@ papoe policy1 policy2 s = Pap $ \(consumer, cleanup, producer1, producer2) -> do
 {-|
     Pipe @stdin@ to the created process' @stdin@.
 -}
-sameStdin :: Pap e ()
-sameStdin = papi $ pumpFromHandle System.IO.stdin
+samei :: Pap e ()
+samei = papi $ pumpFromHandle System.IO.stdin
 
 {-|
     Pipe the created process' @stdout@ to @stdout@.
 -}
-sameStdout :: Pap e ()
-sameStdout = papo $ siphonToHandle System.IO.stdout
+sameo :: Pap e ()
+sameo = papo $ siphonToHandle System.IO.stdout
 
 {-|
     Pipe the created process' @stderr@ to @stderr@.
 -}
-sameStderr :: Pap e ()
-sameStderr = pape $ siphonToHandle System.IO.stderr
+samee :: Pap e ()
+samee = pape $ siphonToHandle System.IO.stderr
 
 sameStreams :: Pap e ()
-sameStreams = sameStdin *> sameStdout *> sameStderr
+sameStreams = samei *> sameo *> samee
 
 pumpFromHandle :: Handle -> Pump ByteString e ()
 pumpFromHandle = fromProducer . fromHandle
