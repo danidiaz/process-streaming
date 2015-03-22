@@ -11,7 +11,17 @@
 
 module System.Process.Streaming.Extended ( 
        Pap
+    ,  papi
+    ,  papo
+    ,  pape
+    ,  papoe
+    ,  sameStdin 
+    ,  sameStdout
+    ,  sameStderr
+    ,  sameStreams
     ,  toPiping
+    ,  pumpFromHandle 
+    ,  siphonToHandle 
     ,  module System.Process.Streaming
     ) where
 
@@ -129,3 +139,47 @@ instance Applicative (Pap e) where
 toPiping :: Pap e a -> Piping e a  
 toPiping (Pap f) = undefined
 toPiping (Pap f) = PPInputOutputError f
+
+{-|
+    Pipe @stdout@.
+-}
+papo :: Siphon ByteString e a -> Pap e a
+papo _ = undefined
+--papo (runSiphonDumb -> siphonout) = PPOutput $ siphonout
+
+{-|
+    Pipe @stderr@.
+-}
+pape :: Siphon ByteString e a -> Pap e a
+pape _ = undefined
+
+{-|
+    Pipe @stdin@.
+-}
+papi :: Siphon ByteString e a -> Pap e a
+papi _ = undefined
+
+{-|
+    Pipe @stdout@ and @stderr@ and consume them combined as 'Text'.  
+-}
+papoe :: Lines e -> Lines e -> Siphon Text e a -> Piping e a
+papoe policy1 policy2 (runSiphonDumb -> siphon) = undefined
+
+sameStdin :: Pap e ()
+sameStdin = undefined
+
+sameStdout :: Pap e ()
+sameStdout = undefined
+
+sameStderr :: Pap e ()
+sameStderr = undefined
+
+sameStreams :: Pap e ()
+sameStreams = sameStdin *> sameStdout *> sameStderr
+
+pumpFromHandle :: Handle -> Pump ByteString e ()
+pumpFromHandle = undefined
+
+siphonToHandle :: Handle -> Siphon ByteString e ()
+siphonToHandle = undefined
+
