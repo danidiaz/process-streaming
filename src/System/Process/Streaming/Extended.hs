@@ -18,7 +18,7 @@ module System.Process.Streaming.Extended (
     ,  samei
     ,  sameo
     ,  samee
-    ,  sameStreams
+    ,  sameioe
     ,  toPiping
     ,  pumpFromHandle 
     ,  siphonToHandle 
@@ -240,8 +240,8 @@ sameo = papo $ siphonToHandle System.IO.stdout
 samee :: Pap e ()
 samee = pape $ siphonToHandle System.IO.stderr
 
-sameStreams :: Pap e ()
-sameStreams = samei *> sameo *> samee
+sameioe :: Pap e ()
+sameioe = samei *> sameo *> samee
 
 pumpFromHandle :: Handle -> Pump ByteString e ()
 pumpFromHandle = fromProducer . fromHandle
