@@ -51,7 +51,6 @@ module System.Process.Streaming (
         , fromLazyBytes
         -- * Siphoning bytes out of stdout/stderr
         , Siphon
-        , runSiphon
         , siphon
         , siphon'
         , fromFold
@@ -422,172 +421,6 @@ fromEnumerable = fromProducer . every
 fromLazyBytes :: BL.ByteString -> Pump ByteString e () 
 fromLazyBytes = fromProducer . fromLazy 
 
-{-| 
-    A 'Siphon' represents a computation that completely drains a producer, but
-may fail early with an error of type @e@. 
-
- -}
-newtype Siphon b e a = Siphon (Lift (Siphon_ b e) a) deriving (Functor)
-
-
-{-| 
-    'pure' creates a 'Siphon' that does nothing besides draining the
-'Producer'. 
-
-    '<*>' executes its arguments concurrently. The 'Producer' is forked so
-    that each argument receives its own copy of the data.
--}
-instance Applicative (Siphon b e) where
-    pure a = Siphon (pure a)
-    (Siphon fa) <*> (Siphon a) = Siphon (fa <*> a)
-
-data Siphon_ b e a = 
-         Exhaustive (forall r. Producer b IO r -> IO (Either e (a,r)))
-       | Nonexhaustive (Producer b IO () -> IO (Either e a))
-       deriving (Functor)
-
-
-instance Applicative (Siphon_ b e) where
-    pure a = Exhaustive $ \producer -> do
-        r <- runEffect (producer >-> P.drain)
-        pure (pure (a,r))
-    s1 <*> s2 = bifurcate (nonexhaustive s1) (nonexhaustive s2)  
-      where 
-        bifurcate fs as = Exhaustive $ \producer -> do
-            (outbox1,inbox1,seal1) <- spawn' Single
-            (outbox2,inbox2,seal2) <- spawn' Single
-            runConceit $
-                (,)
-                <$>
-                Conceit (fmap (uncurry ($)) <$> conceit ((fs $ fromInput inbox1) 
-                                                        `finally` atomically seal1) 
-                                                        ((as $ fromInput inbox2) 
-                                                        `finally` atomically seal2) 
-                        )
-                <*>
-                _Conceit ((runEffect $ 
-                              producer >-> P.tee (toOutput outbox1 >> P.drain) 
-                                       >->       (toOutput outbox2 >> P.drain))   
-                          `finally` atomically seal1 `finally` atomically seal2
-                         ) 
-
-nonexhaustive :: Siphon_ b e a -> Producer b IO () -> IO (Either e a)
-nonexhaustive (Exhaustive e) = \producer -> liftM (fmap fst) (e producer)
-nonexhaustive (Nonexhaustive u) = u
-
-exhaustive :: Siphon_ b e a -> Producer b IO r -> IO (Either e (a,r))
-exhaustive s = case s of 
-    Exhaustive e -> e
-    Nonexhaustive activity -> \producer -> do 
-        (outbox,inbox,seal) <- spawn' Single
-        runConceit $ 
-            (,) 
-            <$>
-            Conceit (activity (fromInput inbox) `finally` atomically seal)
-            <*>
-            _Conceit (runEffect (producer >-> (toOutput outbox >> P.drain)) 
-                      `finally` atomically seal
-                     )
-
-runSiphon :: Siphon b e a -> Producer b IO r -> IO (Either e (a,r))
-runSiphon (Siphon (unLift -> s)) = exhaustive s
-
-runSiphonDumb :: Siphon b e a -> Producer b IO () -> IO (Either e a)
-runSiphonDumb (Siphon (unLift -> s)) = nonexhaustive $ case s of 
-    Exhaustive _ -> s
-    Nonexhaustive _ -> Exhaustive (exhaustive s)
-
-
-instance Bifunctor (Siphon_ b) where
-  bimap f g s = case s of
-      Exhaustive u -> Exhaustive $ fmap (liftM  (bimap f (bimap g id))) u
-      Nonexhaustive h -> Nonexhaustive $ fmap (liftM  (bimap f g)) h
-
-{-| 
-    'first' is useful to massage errors.
--}
-instance Bifunctor (Siphon b) where
-  bimap f g (Siphon s) = Siphon $ case s of
-      Pure a -> Pure (g a)
-      Other o -> Other (bimap f g o)
-
-instance (Monoid a) => Monoid (Siphon b e a) where
-   mempty = pure mempty
-   mappend s1 s2 = (<>) <$> s1 <*> s2
-
-newtype SiphonOp e a b = SiphonOp { getSiphonOp :: Siphon b e a } 
-
--- | 'contramap' carn turn a 'SiphonOp' for bytes into a 'SiphonOp' for text.
-instance Contravariant (SiphonOp e a) where
-    contramap f (SiphonOp (Siphon s)) = SiphonOp . Siphon $ case s of
-        Pure p -> Pure p
-        Other o -> Other $ case o of
-            Exhaustive e -> Exhaustive $ \producer ->
-                e $ producer >-> P.map f
-            Nonexhaustive ne -> Nonexhaustive $ \producer ->
-                ne $ producer >-> P.map f
-
--- | 'divide' builds a 'SiphonOp' for a composite out of the 'SiphonOp's
--- for the parts.
-instance Monoid a => Divisible (SiphonOp e a) where
-    divide divider siphonOp1 siphonOp2 = contramap divider . SiphonOp $ 
-        (getSiphonOp (contramap fst siphonOp1)) 
-        `mappend`
-        (getSiphonOp (contramap snd siphonOp2))
-    conquer = SiphonOp (pure mempty)
-
--- | 'choose' builds a 'SiphonOp' for a sum out of the 'SiphonOp's
--- for the branches.
-instance Monoid a => Decidable (SiphonOp e a) where
-    choose chooser (SiphonOp s1) (SiphonOp s2) = 
-        contramap chooser . SiphonOp $ 
-            (contraPipeMapL s1) 
-            `mappend`
-            (contraPipeMapR s2)
-      where
-        contraPipeMapL (Siphon s) = Siphon $ case s of
-            Pure p -> Pure p
-            Other o -> Other $ case o of
-                Exhaustive e -> Exhaustive $ \producer ->
-                    e $ producer >-> allowLefts
-                Nonexhaustive ne -> Nonexhaustive $ \producer ->
-                    ne $ producer >-> allowLefts
-        contraPipeMapR (Siphon s) = Siphon $ case s of
-            Pure p -> Pure p
-            Other o -> Other $ case o of
-                Exhaustive e -> Exhaustive $ \producer ->
-                    e $ producer >-> allowRights
-                Nonexhaustive ne -> Nonexhaustive $ \producer ->
-                    ne $ producer >-> allowRights
-        allowLefts = do
-            e <- await
-            case e of 
-                Left l -> Pipes.yield l >> allowLefts
-                Right _ -> allowLefts
-        allowRights = do
-            e <- await
-            case e of 
-                Right r -> Pipes.yield r >> allowRights
-                Left _ -> allowRights
-    lose f = SiphonOp . Siphon . Other . Nonexhaustive $ \producer -> do
-        n <- next producer  
-        return $ case n of 
-            Left () -> Right mempty
-            Right (b,_) -> Right (absurd (f b))
-
-allowLefts :: Monad m => Pipe (Either b a) b m r
-allowLefts = do
-    e <- await
-    case e of 
-        Left l -> Pipes.yield l >> allowLefts
-        Right _ -> allowLefts
-                                           
-allowRights :: Monad m => Pipe (Either b a) a m r
-allowRights = do
-    e <- await
-    case e of 
-        Right r -> Pipes.yield r >> allowRights
-        Left _ -> allowRights
                                            
 intoLazyBytes :: Siphon ByteString e BL.ByteString 
 intoLazyBytes = fromFold toLazyM  
@@ -728,6 +561,80 @@ encoded decoder (Siphon (unLift -> policy)) (Siphon (unLift -> activity)) =
         (f,r) <- ExceptT $ exhaustive policy leftovers 
         pure (f a,r)
 
+
+newtype SiphonOp e a b = SiphonOp { getSiphonOp :: Siphon b e a } 
+
+-- | 'contramap' carn turn a 'SiphonOp' for bytes into a 'SiphonOp' for text.
+instance Contravariant (SiphonOp e a) where
+    contramap f (SiphonOp (Siphon s)) = SiphonOp . Siphon $ case s of
+        Pure p -> Pure p
+        Other o -> Other $ case o of
+            Exhaustive e -> Exhaustive $ \producer ->
+                e $ producer >-> P.map f
+            Nonexhaustive ne -> Nonexhaustive $ \producer ->
+                ne $ producer >-> P.map f
+
+-- | 'divide' builds a 'SiphonOp' for a composite out of the 'SiphonOp's
+-- for the parts.
+instance Monoid a => Divisible (SiphonOp e a) where
+    divide divider siphonOp1 siphonOp2 = contramap divider . SiphonOp $ 
+        (getSiphonOp (contramap fst siphonOp1)) 
+        `mappend`
+        (getSiphonOp (contramap snd siphonOp2))
+    conquer = SiphonOp (pure mempty)
+
+-- | 'choose' builds a 'SiphonOp' for a sum out of the 'SiphonOp's
+-- for the branches.
+instance Monoid a => Decidable (SiphonOp e a) where
+    choose chooser (SiphonOp s1) (SiphonOp s2) = 
+        contramap chooser . SiphonOp $ 
+            (contraPipeMapL s1) 
+            `mappend`
+            (contraPipeMapR s2)
+      where
+        contraPipeMapL (Siphon s) = Siphon $ case s of
+            Pure p -> Pure p
+            Other o -> Other $ case o of
+                Exhaustive e -> Exhaustive $ \producer ->
+                    e $ producer >-> allowLefts
+                Nonexhaustive ne -> Nonexhaustive $ \producer ->
+                    ne $ producer >-> allowLefts
+        contraPipeMapR (Siphon s) = Siphon $ case s of
+            Pure p -> Pure p
+            Other o -> Other $ case o of
+                Exhaustive e -> Exhaustive $ \producer ->
+                    e $ producer >-> allowRights
+                Nonexhaustive ne -> Nonexhaustive $ \producer ->
+                    ne $ producer >-> allowRights
+        allowLefts = do
+            e <- await
+            case e of 
+                Left l -> Pipes.yield l >> allowLefts
+                Right _ -> allowLefts
+        allowRights = do
+            e <- await
+            case e of 
+                Right r -> Pipes.yield r >> allowRights
+                Left _ -> allowRights
+    lose f = SiphonOp . Siphon . Other . Nonexhaustive $ \producer -> do
+        n <- next producer  
+        return $ case n of 
+            Left () -> Right mempty
+            Right (b,_) -> Right (absurd (f b))
+
+allowLefts :: Monad m => Pipe (Either b a) b m r
+allowLefts = do
+    e <- await
+    case e of 
+        Left l -> Pipes.yield l >> allowLefts
+        Right _ -> allowLefts
+                                           
+allowRights :: Monad m => Pipe (Either b a) a m r
+allowRights = do
+    e <- await
+    case e of 
+        Right r -> Pipes.yield r >> allowRights
+        Left _ -> allowRights
 
 {-|
     A configuration parameter used in functions that combine lines of text from

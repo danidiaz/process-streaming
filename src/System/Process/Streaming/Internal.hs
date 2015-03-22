@@ -4,10 +4,15 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE FlexibleInstances #-}
-
+{-# LANGUAGE ViewPatterns #-}
 
 module System.Process.Streaming.Internal ( 
-        Piping(..)
+        Piping(..), 
+        Siphon(..),
+        runSiphon,
+        runSiphonDumb,
+        Siphon_(..),
+        exhaustive,
     ) where
 
 import Data.Maybe
@@ -132,3 +137,99 @@ instance Bifunctor Piping where
             fmap (fmap (bimap f g)) action
         PPInputOutputError action -> PPInputOutputError $ 
             fmap (fmap (bimap f g)) action
+
+{-| 
+    A 'Siphon' represents a computation that completely drains a producer, but
+may fail early with an error of type @e@. 
+
+ -}
+newtype Siphon b e a = Siphon (Lift (Siphon_ b e) a) deriving (Functor)
+
+
+{-| 
+    'pure' creates a 'Siphon' that does nothing besides draining the
+'Producer'. 
+
+    '<*>' executes its arguments concurrently. The 'Producer' is forked so
+    that each argument receives its own copy of the data.
+-}
+instance Applicative (Siphon b e) where
+    pure a = Siphon (pure a)
+    (Siphon fa) <*> (Siphon a) = Siphon (fa <*> a)
+
+data Siphon_ b e a = 
+         Exhaustive (forall r. Producer b IO r -> IO (Either e (a,r)))
+       | Nonexhaustive (Producer b IO () -> IO (Either e a))
+       deriving (Functor)
+
+
+instance Applicative (Siphon_ b e) where
+    pure a = Exhaustive $ \producer -> do
+        r <- runEffect (producer >-> P.drain)
+        pure (pure (a,r))
+    s1 <*> s2 = bifurcate (nonexhaustive s1) (nonexhaustive s2)  
+      where 
+        bifurcate fs as = Exhaustive $ \producer -> do
+            (outbox1,inbox1,seal1) <- spawn' Single
+            (outbox2,inbox2,seal2) <- spawn' Single
+            runConceit $
+                (,)
+                <$>
+                Conceit (fmap (uncurry ($)) <$> conceit ((fs $ fromInput inbox1) 
+                                                        `finally` atomically seal1) 
+                                                        ((as $ fromInput inbox2) 
+                                                        `finally` atomically seal2) 
+                        )
+                <*>
+                _Conceit ((runEffect $ 
+                              producer >-> P.tee (toOutput outbox1 >> P.drain) 
+                                       >->       (toOutput outbox2 >> P.drain))   
+                          `finally` atomically seal1 `finally` atomically seal2
+                         ) 
+
+nonexhaustive :: Siphon_ b e a -> Producer b IO () -> IO (Either e a)
+nonexhaustive (Exhaustive e) = \producer -> liftM (fmap fst) (e producer)
+nonexhaustive (Nonexhaustive u) = u
+
+exhaustive :: Siphon_ b e a -> Producer b IO r -> IO (Either e (a,r))
+exhaustive s = case s of 
+    Exhaustive e -> e
+    Nonexhaustive activity -> \producer -> do 
+        (outbox,inbox,seal) <- spawn' Single
+        runConceit $ 
+            (,) 
+            <$>
+            Conceit (activity (fromInput inbox) `finally` atomically seal)
+            <*>
+            _Conceit (runEffect (producer >-> (toOutput outbox >> P.drain)) 
+                      `finally` atomically seal
+                     )
+
+runSiphon :: Siphon b e a -> Producer b IO r -> IO (Either e (a,r))
+runSiphon (Siphon (unLift -> s)) = exhaustive s
+
+runSiphonDumb :: Siphon b e a -> Producer b IO () -> IO (Either e a)
+runSiphonDumb (Siphon (unLift -> s)) = nonexhaustive $ case s of 
+    Exhaustive _ -> s
+    Nonexhaustive _ -> Exhaustive (exhaustive s)
+
+
+instance Bifunctor (Siphon_ b) where
+  bimap f g s = case s of
+      Exhaustive u -> Exhaustive $ fmap (liftM  (bimap f (bimap g id))) u
+      Nonexhaustive h -> Nonexhaustive $ fmap (liftM  (bimap f g)) h
+
+{-| 
+    'first' is useful to massage errors.
+-}
+instance Bifunctor (Siphon b) where
+  bimap f g (Siphon s) = Siphon $ case s of
+      Pure a -> Pure (g a)
+      Other o -> Other (bimap f g o)
+
+instance (Monoid a) => Monoid (Siphon b e a) where
+   mempty = pure mempty
+   mappend s1 s2 = (<>) <$> s1 <*> s2
+
+
+
