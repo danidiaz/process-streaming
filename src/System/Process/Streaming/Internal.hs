@@ -8,6 +8,8 @@
 
 module System.Process.Streaming.Internal ( 
         Piping(..), 
+        Pap(..), 
+        Pump(..),
         Siphon(..),
         runSiphon,
         runSiphonDumb,
@@ -141,6 +143,125 @@ instance Bifunctor Piping where
             fmap (fmap (bimap f g)) action
         PPInputOutputError action -> PPInputOutputError $ 
             fmap (fmap (bimap f g)) action
+
+
+newtype Pump b e a = Pump { runPump :: Consumer b IO () -> IO (Either e a) } deriving Functor
+
+{-| 
+    'first' is useful to massage errors.
+-}
+instance Bifunctor (Pump b) where
+  bimap f g (Pump x) = Pump $ fmap (liftM  (bimap f g)) x
+
+instance Applicative (Pump b e) where
+  pure = Pump . pure . pure . pure
+  Pump fs <*> Pump as = 
+      Pump $ \consumer -> do
+          (outbox1,inbox1,seal1) <- spawn' Single
+          (outbox2,inbox2,seal2) <- spawn' Single
+          runConceit $ 
+              Conceit (runExceptT $ do
+                           r1 <- ExceptT $ (fs $ toOutput outbox1) 
+                                               `finally` atomically seal1
+                           r2 <- ExceptT $ (as $ toOutput outbox2) 
+                                               `finally` atomically seal2
+                           return $ r1 r2 
+                      )
+              <* 
+              Conceit (do
+                         (runEffect $
+                             (fromInput inbox1 >> fromInput inbox2) >-> consumer)
+                            `finally` atomically seal1
+                            `finally` atomically seal2
+                         runExceptT $ pure ()
+                      )
+
+instance (Monoid a) => Monoid (Pump b e a) where
+   mempty = Pump . pure . pure . pure $ mempty
+   mappend s1 s2 = (<>) <$> s1 <*> s2
+
+-- instance IsString b => IsString (Pump b e ()) where 
+--    fromString = fromProducer . P.yield . fromString 
+
+{-|
+    An alternative to `Piping` for defining what to do with the
+    standard streams. 'Pap' is an instance of 'Applicative', unlike
+    'Piping'. 
+
+    With 'Pap', the standard streams are always piped. The values of
+    @std_in@, @std_out@ and @std_err@ of the 'CreateProcess' record are
+    ignored.
+ -}
+newtype Pap e a = Pap { runPap :: (Consumer ByteString IO (), IO (), Producer ByteString IO (), Producer ByteString IO ()) -> IO (Either e a) } deriving (Functor)
+
+instance Bifunctor Pap where
+  bimap f g (Pap action) = Pap $ fmap (fmap (bimap f g)) action
+
+
+{-| 
+    'pure' creates a 'Pap' that writes nothing to @stdin@ and drains
+    @stdout@ and @stderr@, discarding the data.
+
+    '<*>' schedules the writes to @stdin@ sequentially, and the reads from
+    @stdout@ and @stderr@ concurrently.
+-}
+instance Applicative (Pap e) where
+  pure a = Pap $ \(consumer, cleanup, producer1, producer2) -> do
+      let nullInput = runPump (pure ()) consumer `finally` cleanup
+          drainOutput = runSiphonDumb (pure ()) producer1
+          drainError = runSiphonDumb (pure ()) producer2
+      runConceit $ 
+          (\_ _ _ -> a)
+          <$>
+          Conceit nullInput
+          <*>
+          Conceit drainOutput
+          <*>
+          Conceit drainError
+
+  (Pap fa) <*> (Pap fb) = Pap $ \(consumer, cleanup, producer1, producer2) -> do
+        latch <- newEmptyMVar :: IO (MVar ())
+        (ioutbox, iinbox, iseal) <- spawn' Single
+        (ooutbox, oinbox, oseal) <- spawn' Single
+        (eoutbox, einbox, eseal) <- spawn' Single
+        (ioutbox2, iinbox2, iseal2) <- spawn' Single
+        (ooutbox2, oinbox2, oseal2) <- spawn' Single
+        (eoutbox2, einbox2, eseal2) <- spawn' Single
+        let reroutei = runEffect (fromInput (iinbox <> iinbox2) >-> consumer)
+                       `finally` atomically iseal 
+                       `finally` atomically iseal2
+                       `finally` cleanup
+            rerouteo = runEffect (producer1 >-> toOutput (ooutbox <> ooutbox2))
+                       `finally` atomically oseal 
+                       `finally` atomically oseal2
+            reroutee = runEffect (producer2 >-> toOutput (eoutbox <> eoutbox2))
+                       `finally` atomically eseal 
+                       `finally` atomically eseal2
+            deceivedf = fa 
+                (toOutput ioutbox, 
+                 atomically iseal `finally` putMVar latch (), 
+                 fromInput oinbox, 
+                 fromInput einbox)
+                 `finally` atomically iseal 
+                 `finally` atomically oseal 
+                 `finally` atomically eseal 
+            deceivedx = fb 
+                (liftIO (takeMVar latch) *> toOutput ioutbox2, 
+                 atomically iseal2, 
+                 fromInput oinbox2, 
+                 fromInput einbox2)
+                 `finally` atomically iseal2 
+                 `finally` atomically oseal2 
+                 `finally` atomically eseal2 
+        runConceit $
+            _Conceit reroutei 
+            *>
+            _Conceit rerouteo 
+            *> 
+            _Conceit reroutee 
+            *> 
+            (Conceit deceivedf <*> Conceit deceivedx)
+
 
 {-| 
     A 'Siphon' represents a computation that completely drains a producer, but
@@ -287,12 +408,16 @@ instance Functor Lines where
  -}
 data Stage e = Stage 
            {
-             processDefinition' :: CreateProcess 
-           , stderrLines' :: Lines e
-           , exitCodePolicy' :: ExitCode -> Either e ()
-           , inbound' :: forall r. Producer ByteString IO r 
+             _processDefinition :: CreateProcess 
+           , _stderrLines :: Lines e
+           , _exitCodePolicy :: ExitCode -> Either e ()
+           , _inbound :: forall r. Producer ByteString IO r 
                       -> Producer ByteString (ExceptT e IO) r 
            } 
 
 instance Functor (Stage) where
     fmap f (Stage a b c d) = Stage a (fmap f b) (bimap f id . c) (hoist (mapExceptT $ liftM (bimap f id)) . d)
+
+
+
+

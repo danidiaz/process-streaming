@@ -41,7 +41,7 @@ module System.Process.Streaming (
         , pipeioec
 
         -- * Pumping bytes into stdin
-        , Pump (..)
+        , Pump
         , fromProducer
         , fromProducerM
         , fromSafeProducer
@@ -333,47 +333,6 @@ separated :: (Producer ByteString IO () -> IO (Either e a))
           ->  Producer ByteString IO () -> Producer ByteString IO () -> IO (Either e (a,b))
 separated outfunc errfunc outprod errprod = 
     conceit (outfunc outprod) (errfunc errprod)
-
-
-
-newtype Pump b e a = Pump { runPump :: Consumer b IO () -> IO (Either e a) } deriving Functor
-
-
-{-| 
-    'first' is useful to massage errors.
--}
-instance Bifunctor (Pump b) where
-  bimap f g (Pump x) = Pump $ fmap (liftM  (bimap f g)) x
-
-instance Applicative (Pump b e) where
-  pure = Pump . pure . pure . pure
-  Pump fs <*> Pump as = 
-      Pump $ \consumer -> do
-          (outbox1,inbox1,seal1) <- spawn' Single
-          (outbox2,inbox2,seal2) <- spawn' Single
-          runConceit $ 
-              Conceit (runExceptT $ do
-                           r1 <- ExceptT $ (fs $ toOutput outbox1) 
-                                               `finally` atomically seal1
-                           r2 <- ExceptT $ (as $ toOutput outbox2) 
-                                               `finally` atomically seal2
-                           return $ r1 r2 
-                      )
-              <* 
-              Conceit (do
-                         (runEffect $
-                             (fromInput inbox1 >> fromInput inbox2) >-> consumer)
-                            `finally` atomically seal1
-                            `finally` atomically seal2
-                         runExceptT $ pure ()
-                      )
-
-instance (Monoid a) => Monoid (Pump b e a) where
-   mempty = Pump . pure . pure . pure $ mempty
-   mappend s1 s2 = (<>) <$> s1 <*> s2
-
-instance IsString b => IsString (Pump b e ()) where 
-   fromString = fromProducer . P.yield . fromString 
 
 fromProducer :: Producer b IO r -> Pump b e ()
 fromProducer producer = Pump $ \consumer -> fmap pure $ runEffect (mute producer >-> consumer) 
