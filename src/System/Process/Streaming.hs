@@ -65,9 +65,11 @@ module System.Process.Streaming (
         , fromFallibleConsumer
         , fromParser
         , fromParserM 
-        , unwanted
         , intoLazyBytes
         , intoLazyText 
+        , unwanted
+        , unwantedThrowIO
+        , trip
         , DecodingFunction
         , encoded
         , SiphonOp (..)
@@ -468,6 +470,16 @@ unwanted a = siphon' $ \producer -> do
     return $ case n of 
         Left r -> Right (a,r)
         Right (b,_) -> Left b
+
+unwantedThrowIO :: Exception ex => (b -> ex) -> a -> Siphon b e a
+unwantedThrowIO f a = siphon' $ \producer -> do
+    n <- next producer  
+    case n of 
+        Left r -> return $ Right (a,r)
+        Right (b,_) -> throwIO (f b)
+
+trip :: Siphon ByteString e (a -> a)
+trip = unwantedThrowIO (\b -> userError ("Encoding error: " <> show b)) id
 
 {-|
     See the section /Non-lens decoding functions/ in the documentation for the
