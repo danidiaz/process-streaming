@@ -55,7 +55,7 @@ module System.Process.Streaming (
         , siphon'
         , fromFold
         , fromFold'
-        , fromFold'_
+--        , fromFold'_
         , fromFoldl
         , fromFoldlIO
         , fromFoldlM
@@ -68,16 +68,17 @@ module System.Process.Streaming (
         , intoLazyBytes
         , intoLazyText 
         , unwanted
-        , unwantedThrowIO
-        , trip
         , DecodingFunction
         , encoded
         , SiphonOp (..)
-        -- * Line handling
+        -- * Handling lines
         , Lines
         , toLines
         , tweakLines
         , prefixLines
+        -- * Throwing exceptions
+        , unwantedX
+        , byteX
         -- * Pipelines
         , executePipelineFallibly
         , executePipeline
@@ -425,19 +426,19 @@ fromFoldlM :: MonadIO m
 fromFoldlM whittle aFoldM = siphon' $ \producer -> 
     whittle $ L.impurely P.foldM' aFoldM (hoist liftIO producer)
 
-fromConsumer :: Consumer b IO r -> Siphon b e ()
-fromConsumer consumer = siphon $ \producer -> fmap pure $ runEffect $ producer >-> mute consumer 
+fromConsumer :: Consumer b IO () -> Siphon b e ()
+fromConsumer consumer = siphon $ \producer -> fmap pure $ runEffect $ producer >-> consumer 
 
 fromConsumerM :: MonadIO m 
               => (m () -> IO (Either e a)) 
-              -> Consumer b m r 
+              -> Consumer b m () 
               -> Siphon b e a
-fromConsumerM whittle consumer = siphon $ \producer -> whittle $ runEffect $ (hoist liftIO producer) >-> mute consumer 
+fromConsumerM whittle consumer = siphon $ \producer -> whittle $ runEffect $ (hoist liftIO producer) >-> consumer 
 
-fromSafeConsumer :: Consumer b (SafeT IO) r -> Siphon b e ()
+fromSafeConsumer :: Consumer b (SafeT IO) () -> Siphon b e ()
 fromSafeConsumer = fromConsumerM (fmap pure . runSafeT)
 
-fromFallibleConsumer :: Consumer b (ExceptT e IO) r -> Siphon b e ()
+fromFallibleConsumer :: Consumer b (ExceptT e IO) () -> Siphon b e ()
 fromFallibleConsumer = fromConsumerM runExceptT
 
 {-| 
@@ -461,8 +462,8 @@ fromParserM f parser = siphon' $ \producer -> f $ drainage $ (Pipes.Parse.runSta
         return (a,r)
 
 {-|
-  Constructs a 'Siphon' that aborts the computation if the underlying
-'Producer' produces anything.
+  Constructs a 'Siphon' that aborts the computation with an explicit error
+  if the underlying 'Producer' produces anything.
  -}
 unwanted :: a -> Siphon b b a
 unwanted a = siphon' $ \producer -> do
@@ -471,15 +472,15 @@ unwanted a = siphon' $ \producer -> do
         Left r -> Right (a,r)
         Right (b,_) -> Left b
 
-unwantedThrowIO :: Exception ex => (b -> ex) -> a -> Siphon b e a
-unwantedThrowIO f a = siphon' $ \producer -> do
+unwantedX :: Exception ex => (b -> ex) -> a -> Siphon b e a
+unwantedX f a = siphon' $ \producer -> do
     n <- next producer  
     case n of 
         Left r -> return $ Right (a,r)
         Right (b,_) -> throwIO (f b)
 
-trip :: Siphon ByteString e (a -> a)
-trip = unwantedThrowIO (\b -> userError ("Encoding error: " <> show b)) id
+byteX :: Siphon ByteString e (a -> a)
+byteX = unwantedX (\b -> userError ("Encoding error: " <> show b)) id
 
 {-|
     See the section /Non-lens decoding functions/ in the documentation for the
@@ -494,9 +495,10 @@ works on decoded values.
 encoded :: DecodingFunction bytes text
         -- ^ A decoding function.
         -> Siphon bytes e (a -> b)
-        -- ^ A 'Siphon' that determines how to handle leftovers. 
-        -- Pass @pure id@ to ignore leftovers. Pass
-        -- @unwanted id@ to abort the computation if leftovers remain.
+        -- ^ A 'Siphon' that determines how to handle leftovers.  Pass
+        -- @pure id@ to ignore leftovers. Pass @unwanted id@ to abort the
+        -- computation with an explicit error if leftovers remain. Pass
+        -- 'byteX' to throw an encoding exception if leftovers remain.
         -> Siphon text  e a 
         -> Siphon bytes e b
 encoded decoder (Siphon (unLift -> policy)) (Siphon (unLift -> activity)) = 
@@ -605,10 +607,11 @@ prefixLines tio = tweakLines (\p -> liftIO tio *> p)
 toLines :: DecodingFunction ByteString Text 
         -- ^ A decoding function for lines of text.
         -> Siphon ByteString e ()
-        -- ^ A 'Siphon'
-        -- that specifies how to handle decoding failures. Passing @pure ()@ as
-        -- the 'Siphon' will ignore any leftovers. Passing @unwanted ()@ will
-        -- abort the computation if leftovers remain.
+        -- ^ A 'Siphon' that specifies how to handle decoding failures.
+        -- Passing @pure id@ as the 'Siphon' will ignore any leftovers.
+        -- Passing @unwanted id@ will abort the computation with an
+        -- explicit error if leftovers remain. Passing 'byteX' will throw
+        -- an encoding exception if leftovers remain.  
         -> Lines e 
 toLines decoder lopo = Lines
     (\tweaker teardown producer -> do
