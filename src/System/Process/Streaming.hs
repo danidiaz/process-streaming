@@ -460,7 +460,14 @@ fromFallibleConsumer = fromConsumerM' (fmap (fmap (\r -> ((), r))) . runExceptT)
   Turn a 'Parser' from @pipes-parse@ into a 'Sihpon'.
  -}
 fromParser :: Parser b IO (Either e a) -> Siphon b e a 
-fromParser parser = siphon $ Pipes.Parse.evalStateT parser 
+fromParser parser = siphon' $ \producer -> drainage $ Pipes.Parse.runStateT parser producer
+  where
+    drainage m = do 
+        (a,leftovers) <- m
+        r <- runEffect (leftovers >-> P.drain)
+        case a of
+            Left e -> return (Left e)
+            Right a' -> return (Right (a',r)) 
 
 {-| 
   Turn a 'Parser' from @pipes-parse@ into a 'Sihpon'.
