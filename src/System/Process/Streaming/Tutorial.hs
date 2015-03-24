@@ -172,7 +172,7 @@ lines of text.
 
 >>> :{ 
    let 
-      lin = toLines T.decodeUtf8 (pure ()) 
+      lin = toLines T.decodeUtf8 (pure id) 
       program = shell "{ echo ooo ; sleep 1 ; echo eee 1>&2 ; }"
    in execute (pipeoec lin lin (fromFold T.toLazyM)) program
    :}
@@ -182,7 +182,7 @@ We may wish to tag each line in the combined stream with its provenance. This ca
 
 >>> :{ 
    let 
-      lin = toLines T.decodeUtf8 (pure ()) 
+      lin = toLines T.decodeUtf8 (pure id) 
       lin_stdout = tweakLines (\p -> P.yield "O" *> p) lin 
       lin_stderr = tweakLines (\p -> P.yield "E" *> p) lin 
       program = shell "{ echo ooo ; sleep 1 ; echo eee 1>&2 ; }"

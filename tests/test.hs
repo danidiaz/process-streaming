@@ -102,8 +102,8 @@ testCombinedStdoutStderr = testCase "testCombinedStdoutStderr"  $ do
 
 combinedStdoutStderr :: IO (ExitCode,TL.Text)
 combinedStdoutStderr = execute
-    (pipeoec (linePolicy T.decodeIso8859_1 (pure ()))
-             (tweakLines annotate $ linePolicy T.decodeIso8859_1 (pure ()))    
+    (pipeoec (toLines T.decodeIso8859_1 (pure id))
+             (tweakLines annotate $ toLines T.decodeIso8859_1 (pure id))    
              (fromFold T.toLazyM))
     (shell "{ echo ooo ; echo eee 1>&2 ; echo ppp ;  echo ffff 1>&2 ; }")
   where
@@ -195,7 +195,7 @@ singletonPipeline :: IO (Either Int (BL.ByteString,BL.ByteString))
 singletonPipeline =  executePipelineFallibly 
     (pipeoe (fromFold B.toLazyM) 
             (fromFold B.toLazyM)) 
-    (pure $ stage (linePolicy T.decodeUtf8 (pure ())) pipefail $ 
+    (pure $ stage (toLines T.decodeUtf8 (pure id)) pipefail $ 
          shell "{ echo ooo ; echo eee 1>&2 ; echo ppp ;  echo ffff 1>&2 ; }"
     )     
 
@@ -211,7 +211,7 @@ basicPipeline :: IO (Either Int ((),BL.ByteString))
 basicPipeline =  executePipelineFallibly 
     (pipeio (fromProducer $ yield "aaabbb\naaaccc\nxxxccc") 
             (fromFold B.toLazyM)) 
-    (fmap (stage (linePolicy T.decodeUtf8 (pure ())) pipefail) $   
+    (fmap (stage (toLines T.decodeUtf8 (pure id)) pipefail) $   
         Node (shell "grep aaa") [Node (shell "grep ccc") []] )
 
 -------------------------------------------------------------------------------
@@ -243,28 +243,28 @@ branchingPipeline = executePipelineFallibly
     succStage = P.map (Data.ByteString.map succ)
 
     rootStage :: Stage Int 
-    rootStage = stage (linePolicy T.decodeIso8859_1 (pure ()))                 
+    rootStage = stage (toLines T.decodeIso8859_1 (pure id))                 
                       pipefail
                       (shell "{ echo oooaaa ; echo eee 1>&2 ; echo xxx ;  echo ffff 1>&2 ; }")
 
     branch1 :: Stage Int 
-    branch1 = stage (linePolicy T.decodeIso8859_1 (pure ()))                 
+    branch1 = stage (toLines T.decodeIso8859_1 (pure id))                 
                     pipefail
                     (shell "grep ooo")
     branch2 :: Stage Int 
-    branch2 = stage (linePolicy T.decodeIso8859_1 (pure ()))                 
+    branch2 = stage (toLines T.decodeIso8859_1 (pure id))                 
                     pipefail
                     (shell "grep xxx")
 
     terminalStage1 :: Stage Int 
     terminalStage1 = inbound (\p -> p >-> succStage) $
-        stage (linePolicy T.decodeIso8859_1 (pure ()))                 
+        stage (toLines T.decodeIso8859_1 (pure id))                 
               pipefail
               (shell "tr -d b")
 
     terminalStage2 :: Stage Int
     terminalStage2 = inbound (\p -> p >-> succStage) $
-        stage (linePolicy T.decodeIso8859_1 (pure ()))                 
+        stage (toLines T.decodeIso8859_1 (pure id))                 
               pipefail
               (shell $ "cat > " ++ branchingPipelineFile)
 
@@ -307,7 +307,7 @@ alternatingWithCombined = execute
     (pipeoec lp lp countLines)
     (proc "tests/alternating.sh" [])
   where
-    lp = linePolicy T.decodeIso8859_1 (pure ()) 
+    lp = toLines T.decodeIso8859_1 (pure id) 
     countLines = fromFold $ P.sum . G.folds const () (const 1) . view T.lines
 
 
@@ -316,7 +316,7 @@ alternatingWithCombined2 = execute
     (pipeoec lp lp $ (,) <$> countLines <*> countLines)
     (proc "tests/alternating.sh" [])
   where
-    lp = linePolicy T.decodeIso8859_1 (pure ()) 
+    lp = toLines T.decodeIso8859_1 (pure id) 
     countLines = fromFold $ P.sum . G.folds const () (const 1) . view T.lines
 
 

@@ -96,11 +96,8 @@ module System.Process.Streaming (
         -- $reexports
         , module System.Process
         , T.decodeUtf8 
-        -- * Deprecated
-        -- $deprecated
-        , PipingPolicy
-        , LinePolicy
-        , linePolicy 
+        , T.decodeAscii 
+        , T.decodeIso8859_1
     ) where
 
 import Data.Maybe
@@ -649,7 +646,7 @@ prefixLines tio = tweakLines (\p -> liftIO tio *> p)
  -}
 toLines :: DecodingFunction ByteString Text 
         -- ^ A decoding function for lines of text.
-        -> Siphon ByteString e ()
+        -> Siphon ByteString e (() -> ())
         -- ^ A 'Siphon' that specifies how to handle decoding failures.
         -- Passing @pure id@ as the 'Siphon' will ignore any leftovers.
         -- Passing @unwanted id@ will abort the computation with an
@@ -663,7 +660,7 @@ toLines decoder lopo = Lines
                       . decoder
                       $ producer
             viewLines = getConst . T.lines Const
-        teardown freeLines >>= runSiphonDumb lopo)
+        teardown freeLines >>= runSiphonDumb (fmap ($()) lopo))
     id 
 
 
@@ -929,19 +926,3 @@ pipefail ec = case ec of
 "System.Process" is re-exported for convenience.
 
 -} 
-
-{- $deprecated
- 
-
--} 
-{-# DEPRECATED PipingPolicy "Use Piping instead" #-} 
-type PipingPolicy e a = Piping e a  
-
-{-# DEPRECATED LinePolicy "Use Lines instead" #-} 
-type LinePolicy e = Lines e   
-
-{-# DEPRECATED linePolicy "Use toLines instead" #-} 
-linePolicy :: DecodingFunction ByteString Text 
-           -> Siphon ByteString e ()
-           -> Lines e 
-linePolicy = toLines 

@@ -1,3 +1,17 @@
+0.7.0.0
+-------
+- Changed signature of toLines to make it more consistent with that of encoded
+  (breaking change).
+- Stricter signatures of some fromConsumer... functions (breaking change).
+- Pump constructor now hidden (breaking change).
+- Added new fromConsumer... functions for Consumers that don't stop.
+- Functions to throw exceptions for encoding errors (unwantedX, leftoverX,
+  _leftoverX). Also a new LeftoverException.
+- Re-exported more decoding functions from pipes-text.
+- New module System.Process.Streaming.Extended with some experimental
+  functions.
+- New module System.Process.Streaming.Internal. 
+
 0.6.9.0
 -------
 - fromLazyBytes, intoLazyBytes, intoLazyText.
