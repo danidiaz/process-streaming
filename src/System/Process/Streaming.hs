@@ -535,10 +535,10 @@ works on decoded values.
 encoded :: DecodingFunction bytes text
         -- ^ A decoding function.
         -> Siphon bytes e (a -> b)
-        -- ^ A 'Siphon' that determines how to handle leftovers.  Pass
-        -- @pure id@ to ignore leftovers. Pass @unwanted id@ to abort the
-        -- computation with an explicit error if leftovers remain. Pass
-        -- 'byteX' to throw an encoding exception if leftovers remain.
+        -- ^ A 'Siphon' that determines how to handle decoding leftovers.
+        -- Pass @pure id@ to ignore leftovers. Pass @unwanted id@ to abort
+        -- the computation with an explicit error if leftovers remain. Pass
+        -- '_leftoverX' to throw a 'LeftoverException' if leftovers remain.
         -> Siphon text  e a 
         -> Siphon bytes e b
 encoded decoder (Siphon (unLift -> policy)) (Siphon (unLift -> activity)) = 
@@ -647,11 +647,10 @@ prefixLines tio = tweakLines (\p -> liftIO tio *> p)
 toLines :: DecodingFunction ByteString Text 
         -- ^ A decoding function for lines of text.
         -> Siphon ByteString e (() -> ())
-        -- ^ A 'Siphon' that specifies how to handle decoding failures.
-        -- Passing @pure id@ as the 'Siphon' will ignore any leftovers.
-        -- Passing @unwanted id@ will abort the computation with an
-        -- explicit error if leftovers remain. Passing 'byteX' will throw
-        -- an encoding exception if leftovers remain.  
+        -- ^ A 'Siphon' that determines how to handle decoding leftovers.
+        -- Pass @pure id@ to ignore leftovers. Pass @unwanted id@ to abort
+        -- the computation with an explicit error if leftovers remain. Pass
+        -- '_leftoverX' to throw a 'LeftoverException' if leftovers remain.
         -> Lines e 
 toLines decoder lopo = Lines
     (\tweaker teardown producer -> do

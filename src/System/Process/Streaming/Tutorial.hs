@@ -85,7 +85,6 @@ import System.Process.Streaming
 >>> import qualified Pipes.Parse as P
 >>> import qualified Pipes.Attoparsec as P
 >>> import qualified Pipes.Text as T
->>> import qualified Pipes.Text.Encoding as T
 >>> import qualified Pipes.Text.IO as T
 >>> import qualified Pipes.Group as G
 >>> import qualified Pipes.Safe as S
@@ -99,15 +98,20 @@ import System.Process.Streaming
 
 {- $collstdout  
 
-This example uses the 'toLazyM' fold from @pipes-bytestring@.
+We can do this with the 'toLazyM' fold from @pipes-bytestring@:
 
->>> execute (pipeo (fromFold B.toLazyM)) (shell "echo ooo")
+>>> execute (pipeo intoLazyBytes) (shell "echo ooo")
+(ExitSuccess,"ooo\n")
+
+But the 'intoLazyBytes' function is easier to use:
+
+>>> execute (pipeo intoLazyBytes) (shell "echo ooo")
 (ExitSuccess,"ooo\n")
 
 'Siphon's are functors, so if we wanted to collect the output as a strict
 'ByteString', we could do
 
->>> execute (pipeo (BL.toStrict <$> fromFold B.toLazyM)) (shell "echo ooo")
+>>> execute (pipeo (BL.toStrict <$> intoLazyBytes)) (shell "echo ooo")
 (ExitSuccess,"ooo\n")
 
 Of course, collecting the output in this way breaks streaming. But this is OK
@@ -120,7 +124,7 @@ if the output is small.
 
 We can use 'pipeoe' collect @stdout@ and @stderr@ concurrently:
 
->>> execute (pipeoe (fromFold B.toLazyM) (fromFold B.toLazyM)) (shell "{ echo ooo ; echo eee 1>&2 ; }")
+>>> execute (pipeoe intoLazyBytes intoLazyBytes) (shell "{ echo ooo ; echo eee 1>&2 ; }")
 (ExitSuccess,("ooo\n","eee\n"))
 
 -}
@@ -129,17 +133,17 @@ We can use 'pipeoe' collect @stdout@ and @stderr@ concurrently:
 {- $collstdouttext  
 
 If we want to consume @stdout@ as text, we need to use the 'encoded'
-function. 'encoded' takes as parameters a decoding function (the example
-uses one from @pipes-text@) and a 'Siphon' that specifies how to handle the
-leftovers. It returns a function that converts a 'Siphon' for text
-into a 'Siphon' for bytes.
+function. 'encoded' takes as parameters a decoding function (here
+'decodeUtf8') and a 'Siphon' that specifies how to handle the leftovers. It
+returns a function that converts a 'Siphon' for text into a 'Siphon' for
+bytes.
 
 In the example we pass @pure id@ as the leftover-handling 'Siphon'. This
 means "drain all the undecoded data remaining in the stream and return
-unchanged the result of @(fromFold T.toLazyM)@". In other words: ignore any
+unchanged the result of 'intoLazyText'". In other words: ignore any
 leftovers.
 
->>> execute (pipeo (encoded T.decodeUtf8 (pure id) (fromFold T.toLazyM))) (shell "echo ooo")
+>>> execute (pipeo (encoded decodeUtf8 (pure id) intoLazyText)) (shell "echo ooo")
 (ExitSuccess,"ooo\n")
 
 But suppose we want to interrupt the execution of the program when we
@@ -150,12 +154,12 @@ leftovers remain. 'unwanted' uses the first leftovers that apear in the
 stream as the error value. So, in this example the error type will be
 'ByteString':
 
->>> executeFallibly (pipeo (encoded T.decodeUtf8 (unwanted id) (fromFold T.toLazyM))) (shell "echo ooo")
+>>> executeFallibly (pipeo (encoded decodeUtf8 (unwanted id) intoLazyText)) (shell "echo ooo")
 Right (ExitSuccess,"ooo\n")
 
 Notice also that we had to switch from 'execute' to 'executeFallibly'. This
 is because, for the first time in the tutorial, we actually have a need for
-the error type. 'execute' only works when the error type is 'Void'.
+the error type. 'execute' only works when the error type unified with 'Void'.
 
 Beware: even if the error type is 'Void', exceptions can still be thrown.
 -}
@@ -172,9 +176,9 @@ lines of text.
 
 >>> :{ 
    let 
-      lin = toLines T.decodeUtf8 (pure id) 
+      lin = toLines decodeUtf8 (pure id) 
       program = shell "{ echo ooo ; sleep 1 ; echo eee 1>&2 ; }"
-   in execute (pipeoec lin lin (fromFold T.toLazyM)) program
+   in execute (pipeoec lin lin intoLazyText) program
    :}
 (ExitSuccess,"ooo\neee\n")
 
@@ -182,11 +186,11 @@ We may wish to tag each line in the combined stream with its provenance. This ca
 
 >>> :{ 
    let 
-      lin = toLines T.decodeUtf8 (pure id) 
+      lin = toLines decodeUtf8 (pure id) 
       lin_stdout = tweakLines (\p -> P.yield "O" *> p) lin 
       lin_stderr = tweakLines (\p -> P.yield "E" *> p) lin 
       program = shell "{ echo ooo ; sleep 1 ; echo eee 1>&2 ; }"
-   in execute (pipeoec lin_stdout lin_stderr (fromFold T.toLazyM)) program
+   in execute (pipeoec lin_stdout lin_stderr intoLazyText) program
    :}
 (ExitSuccess,"Oooo\nEeee\n")
 
@@ -197,7 +201,7 @@ We may wish to tag each line in the combined stream with its provenance. This ca
 We can feed bytes to @stdin@ while we read @stdout@ or @stderr@. We use the
 'Pump' datatype for that.
 
->>> execute (pipeio (fromProducer (yield "iii")) (fromFold B.toLazyM)) (shell "cat")
+>>> execute (pipeio (fromLazyBytes "iii") intoLazyBytes) (shell "cat")
 (ExitSuccess,((),"iii"))
 -}
 

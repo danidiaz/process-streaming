@@ -8,7 +8,7 @@
 
 module System.Process.Streaming.Internal ( 
         Piping(..), 
-        Pap(..), 
+        Piap(..), 
         Pump(..),
         Siphon(..),
         runSiphon,
@@ -185,28 +185,28 @@ instance (Monoid a) => Monoid (Pump b e a) where
 
 {-|
     An alternative to `Piping` for defining what to do with the
-    standard streams. 'Pap' is an instance of 'Applicative', unlike
+    standard streams. 'Piap' is an instance of 'Applicative', unlike
     'Piping'. 
 
-    With 'Pap', the standard streams are always piped. The values of
-    @std_in@, @std_out@ and @std_err@ of the 'CreateProcess' record are
+    With 'Piap', the standard streams are always piped. The values of
+    @std_in@, @std_out@ and @std_err@ in the 'CreateProcess' record are
     ignored.
  -}
-newtype Pap e a = Pap { runPap :: (Consumer ByteString IO (), IO (), Producer ByteString IO (), Producer ByteString IO ()) -> IO (Either e a) } deriving (Functor)
+newtype Piap e a = Piap { runPiap :: (Consumer ByteString IO (), IO (), Producer ByteString IO (), Producer ByteString IO ()) -> IO (Either e a) } deriving (Functor)
 
-instance Bifunctor Pap where
-  bimap f g (Pap action) = Pap $ fmap (fmap (bimap f g)) action
+instance Bifunctor Piap where
+  bimap f g (Piap action) = Piap $ fmap (fmap (bimap f g)) action
 
 
 {-| 
-    'pure' creates a 'Pap' that writes nothing to @stdin@ and drains
+    'pure' creates a 'Piap' that writes nothing to @stdin@ and drains
     @stdout@ and @stderr@, discarding the data.
 
     '<*>' schedules the writes to @stdin@ sequentially, and the reads from
     @stdout@ and @stderr@ concurrently.
 -}
-instance Applicative (Pap e) where
-  pure a = Pap $ \(consumer, cleanup, producer1, producer2) -> do
+instance Applicative (Piap e) where
+  pure a = Piap $ \(consumer, cleanup, producer1, producer2) -> do
       let nullInput = runPump (pure ()) consumer `finally` cleanup
           drainOutput = runSiphonDumb (pure ()) producer1
           drainError = runSiphonDumb (pure ()) producer2
@@ -219,7 +219,7 @@ instance Applicative (Pap e) where
           <*>
           Conceit drainError
 
-  (Pap fa) <*> (Pap fb) = Pap $ \(consumer, cleanup, producer1, producer2) -> do
+  (Piap fa) <*> (Piap fb) = Piap $ \(consumer, cleanup, producer1, producer2) -> do
         latch <- newEmptyMVar :: IO (MVar ())
         (ioutbox, iinbox, iseal) <- spawn' Single
         (ooutbox, oinbox, oseal) <- spawn' Single
