@@ -10,11 +10,11 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 module System.Process.Streaming.Extended ( 
-       Pap
-    ,  papi
-    ,  papo
-    ,  pape
-    ,  papoe
+       Piap
+    ,  piapi
+    ,  piapo
+    ,  piape
+    ,  piapoe
     ,  samei
     ,  sameo
     ,  samee
@@ -74,14 +74,14 @@ import System.Exit
 import System.Process.Streaming
 import System.Process.Streaming.Internal
 
-toPiping :: Pap e a -> Piping e a  
-toPiping (Pap f) = PPInputOutputError f
+toPiping :: Piap e a -> Piping e a  
+toPiping (Piap f) = PPInputOutputError f
 
 {-|
     Do stuff with @stdout@.
 -}
-papo :: Siphon ByteString e a -> Pap e a
-papo s = Pap $ \(consumer, cleanup, producer1, producer2) -> do
+piapo :: Siphon ByteString e a -> Piap e a
+piapo s = Piap $ \(consumer, cleanup, producer1, producer2) -> do
     let nullInput = runPump (pure ()) consumer `finally` cleanup
         drainOutput = runSiphonDumb s producer1 
         drainError = runSiphonDumb (pure ()) producer2
@@ -97,8 +97,8 @@ papo s = Pap $ \(consumer, cleanup, producer1, producer2) -> do
 {-|
     Do stuff with @stderr@.
 -}
-pape :: Siphon ByteString e a -> Pap e a
-pape s = Pap $ \(consumer, cleanup, producer1, producer2) -> do
+piape :: Siphon ByteString e a -> Piap e a
+piape s = Piap $ \(consumer, cleanup, producer1, producer2) -> do
     let nullInput = runPump (pure ()) consumer `finally` cleanup
         drainOutput = runSiphonDumb (pure ()) producer1 
         drainError = runSiphonDumb s producer2
@@ -114,8 +114,8 @@ pape s = Pap $ \(consumer, cleanup, producer1, producer2) -> do
 {-|
     Do stuff with @stdin@.
 -}
-papi :: Pump ByteString e a -> Pap e a
-papi p = Pap $ \(consumer, cleanup, producer1, producer2) -> do
+piapi :: Pump ByteString e a -> Piap e a
+piapi p = Piap $ \(consumer, cleanup, producer1, producer2) -> do
     let nullInput = runPump p consumer `finally` cleanup
         drainOutput = runSiphonDumb (pure ()) producer1 
         drainError = runSiphonDumb (pure ()) producer2
@@ -131,8 +131,8 @@ papi p = Pap $ \(consumer, cleanup, producer1, producer2) -> do
 {-|
     Do stuff with @stdout@ and @stderr@ combined as 'Text'.  
 -}
-papoe :: Lines e -> Lines e -> Siphon Text e a -> Pap e a
-papoe policy1 policy2 s = Pap $ \(consumer, cleanup, producer1, producer2) -> do
+piapoe :: Lines e -> Lines e -> Siphon Text e a -> Piap e a
+piapoe policy1 policy2 s = Piap $ \(consumer, cleanup, producer1, producer2) -> do
     let nullInput = runPump (pure ()) consumer `finally` cleanup
         combination = combined policy1 policy2 (runSiphonDumb s) producer1 producer2 
     runConceit $ 
@@ -145,22 +145,22 @@ papoe policy1 policy2 s = Pap $ \(consumer, cleanup, producer1, producer2) -> do
 {-|
     Pipe @stdin@ to the created process' @stdin@.
 -}
-samei :: Pap e ()
-samei = papi $ pumpFromHandle System.IO.stdin
+samei :: Piap e ()
+samei = piapi $ pumpFromHandle System.IO.stdin
 
 {-|
     Pipe the created process' @stdout@ to @stdout@.
 -}
-sameo :: Pap e ()
-sameo = papo $ siphonToHandle System.IO.stdout
+sameo :: Piap e ()
+sameo = piapo $ siphonToHandle System.IO.stdout
 
 {-|
     Pipe the created process' @stderr@ to @stderr@.
 -}
-samee :: Pap e ()
-samee = pape $ siphonToHandle System.IO.stderr
+samee :: Piap e ()
+samee = piape $ siphonToHandle System.IO.stderr
 
-sameioe :: Pap e ()
+sameioe :: Piap e ()
 sameioe = samei *> sameo *> samee
 
 pumpFromHandle :: Handle -> Pump ByteString e ()
@@ -168,13 +168,3 @@ pumpFromHandle = fromProducer . fromHandle
 
 siphonToHandle :: Handle -> Siphon ByteString e ()
 siphonToHandle = fromConsumer . toHandle
-
--- not sure how to do this
--- siphonThrowIO :: Exception ex => (e -> ex) -> Siphon b e a -> Siphon b e' a
--- siphonThrowIO exgen = 
---   let elide f = \producer -> do
---          result <- f producer
---          case result of
---              Left e -> throwIO $ exgen e 
---              Right a -> return $ Right a
---   in Siphon . Other . Exhaustive . elide . runSiphon 
