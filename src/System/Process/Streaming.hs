@@ -16,6 +16,7 @@
 
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE ViewPatterns #-}
@@ -55,16 +56,18 @@ module System.Process.Streaming (
         , siphon'
         , fromFold
         , fromFold'
---        , fromFold'_
-        , fromFoldl
-        , fromFoldlIO
-        , fromFoldlM
+        , fromFold'_
         , fromConsumer
+        , fromConsumer'
         , fromConsumerM
+        , fromConsumerM'
         , fromSafeConsumer
         , fromFallibleConsumer
         , fromParser
         , fromParserM 
+        , fromFoldl
+        , fromFoldlIO
+        , fromFoldlM
         , intoLazyBytes
         , intoLazyText 
         , unwanted
@@ -78,7 +81,9 @@ module System.Process.Streaming (
         , prefixLines
         -- * Throwing exceptions
         , unwantedX
-        , byteX
+        , LeftoverException (..)
+        , leftoverX
+        , _leftoverX
         -- * Pipelines
         , executePipelineFallibly
         , executePipeline
@@ -108,6 +113,7 @@ import Data.Either
 import Data.Monoid
 import Data.Foldable
 import Data.Traversable
+import Data.Typeable
 import Data.Tree
 import Data.String
 import qualified Data.Text.Lazy as TL
@@ -427,7 +433,10 @@ fromFoldlM whittle aFoldM = siphon' $ \producer ->
     whittle $ L.impurely P.foldM' aFoldM (hoist liftIO producer)
 
 fromConsumer :: Consumer b IO () -> Siphon b e ()
-fromConsumer consumer = siphon $ \producer -> fmap pure $ runEffect $ producer >-> consumer 
+fromConsumer consumer = fromFold $ \producer -> runEffect $ producer >-> consumer 
+
+fromConsumer' :: Consumer b IO Void -> Siphon b e ()
+fromConsumer' consumer = fromFold'_$ \producer -> runEffect $ producer >-> fmap absurd consumer 
 
 fromConsumerM :: MonadIO m 
               => (m () -> IO (Either e a)) 
@@ -435,18 +444,23 @@ fromConsumerM :: MonadIO m
               -> Siphon b e a
 fromConsumerM whittle consumer = siphon $ \producer -> whittle $ runEffect $ (hoist liftIO producer) >-> consumer 
 
-fromSafeConsumer :: Consumer b (SafeT IO) () -> Siphon b e ()
-fromSafeConsumer = fromConsumerM (fmap pure . runSafeT)
+fromConsumerM' :: MonadIO m 
+               => (forall r. m r -> IO (Either e (a,r))) 
+               -> Consumer b m Void
+               -> Siphon b e a
+fromConsumerM' whittle consumer = siphon' $ \producer -> whittle $ runEffect $ (hoist liftIO producer) >-> fmap absurd consumer 
 
-fromFallibleConsumer :: Consumer b (ExceptT e IO) () -> Siphon b e ()
-fromFallibleConsumer = fromConsumerM runExceptT
+fromSafeConsumer :: Consumer b (SafeT IO) Void -> Siphon b e ()
+fromSafeConsumer = fromConsumerM' (fmap (\r -> Right ((),r)) . runSafeT)
+
+fromFallibleConsumer :: Consumer b (ExceptT e IO) Void -> Siphon b e ()
+fromFallibleConsumer = fromConsumerM' (fmap (fmap (\r -> ((), r))) . runExceptT)
 
 {-| 
   Turn a 'Parser' from @pipes-parse@ into a 'Sihpon'.
  -}
 fromParser :: Parser b IO (Either e a) -> Siphon b e a 
 fromParser parser = siphon $ Pipes.Parse.evalStateT parser 
-
 
 {-| 
   Turn a 'Parser' from @pipes-parse@ into a 'Sihpon'.
@@ -479,8 +493,30 @@ unwantedX f a = siphon' $ \producer -> do
         Left r -> return $ Right (a,r)
         Right (b,_) -> throwIO (f b)
 
-byteX :: Siphon ByteString e (a -> a)
-byteX = unwantedX (\b -> userError ("Encoding error: " <> show b)) id
+data LeftoverException b = LeftoverException String b deriving (Typeable)
+
+instance (Typeable b) => Exception (LeftoverException b)
+
+instance (Typeable b) => Show (LeftoverException b) where
+    show (LeftoverException msg b) = 
+        "[Leftovers of type " ++ typeName (Proxy::Data.Typeable.Proxy b) ++ "]" ++ msg
+      where
+        typeName p = showsTypeRep (typeRep p) []
+        msg' = case msg of
+                   [] -> []
+                   _ -> " " ++ msg
+
+leftoverX :: String -> Siphon ByteString e (a -> a)
+leftoverX msg = unwantedX (LeftoverException msg') id
+    where 
+      msg' = "leftoverX." ++ case msg of
+         "" -> ""
+         _ -> " " ++ msg
+
+_leftoverX :: Siphon ByteString e (a -> a)
+_leftoverX = unwantedX (LeftoverException msg) id
+    where 
+      msg = "_leftoverX."
 
 {-|
     See the section /Non-lens decoding functions/ in the documentation for the
