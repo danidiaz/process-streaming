@@ -138,8 +138,8 @@ import System.Exit
 import System.Process.Streaming.Internal
 
 {-|
-  A simplified version of 'executeFallibly' for when the error type is `Void`.
-  Note however that this function may still throw exceptions.
+  A simplified version of 'executeFallibly' for when the error type unifies
+  with `Void`.  Note however that this function may still throw exceptions.
  -}
 execute :: Piping Void a -> CreateProcess -> IO (ExitCode,a)
 execute pp cprocess = either absurd id <$> executeFallibly pp cprocess
@@ -474,6 +474,10 @@ unwanted a = siphon' $ \producer -> do
         Left r -> Right (a,r)
         Right (b,_) -> Left b
 
+{-|
+  Like 'unwanted', but throws an exception instead of using the explicit
+  error type.
+-}
 unwantedX :: Exception ex => (b -> ex) -> a -> Siphon b e a
 unwantedX f a = siphon' $ \producer -> do
     n <- next producer  
@@ -481,6 +485,9 @@ unwantedX f a = siphon' $ \producer -> do
         Left r -> return $ Right (a,r)
         Right (b,_) -> throwIO (f b)
 
+{-|
+  Exception that carries a message and a sample of the leftover data.  
+-}
 data LeftoverException b = LeftoverException String b deriving (Typeable)
 
 instance (Typeable b) => Exception (LeftoverException b)
@@ -494,13 +501,22 @@ instance (Typeable b) => Show (LeftoverException b) where
                    [] -> []
                    _ -> " " ++ msg
 
-leftoverX :: String -> Siphon ByteString e (a -> a)
+{-|
+    Throws 'LeftoverException' if any data comes out of the underlying
+    producer, and returns 'id' otherwise.
+-}
+leftoverX :: String 
+          -- ^ Error message
+          -> Siphon ByteString e (a -> a)
 leftoverX msg = unwantedX (LeftoverException msg') id
     where 
       msg' = "leftoverX." ++ case msg of
          "" -> ""
          _ -> " " ++ msg
 
+{-|
+    Like 'leftoverX', but doesn't take an error message.
+-}
 _leftoverX :: Siphon ByteString e (a -> a)
 _leftoverX = unwantedX (LeftoverException msg) id
     where 
@@ -633,8 +649,9 @@ toLines decoder lopo = Lines
 
 
 {-|
-  A simplified version of 'executePipelineFallibly' for when the error type is `Void`.
-  Note however that this function may still throw exceptions.
+  A simplified version of 'executePipelineFallibly' for when the error type
+  unified with `Void`.  Note however that this function may still throw
+  exceptions.
  -}
 executePipeline :: Piping Void a -> Tree (Stage Void) -> IO a 
 executePipeline pp pipeline = either absurd id <$> executePipelineFallibly pp pipeline
