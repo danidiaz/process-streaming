@@ -46,7 +46,7 @@ http://hackage.haskell.org/package/conduit-extra
 
 * System.IO.Streams.Process from io-streams (iostreams-based)
 
-http://hackage.haskell.org/package/io-streams-1.2.1.2
+http://hackage.haskell.org/package/io-streams
 
 * process-extras
 
