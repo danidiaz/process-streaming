@@ -100,32 +100,23 @@ module System.Process.Streaming (
         , T.decodeIso8859_1
     ) where
 
-import Data.Maybe
 import qualified Data.ByteString.Lazy as BL
-import Data.Bifunctor
-import Data.Functor.Identity
 import Data.Functor.Contravariant
 import Data.Functor.Contravariant.Divisible
-import Data.Either
 import Data.Monoid
 import Data.Foldable
-import Data.Traversable
 import Data.Typeable
 import Data.Tree
-import Data.String
 import qualified Data.Text.Lazy as TL
 import Data.Text 
 import Data.Text.Encoding hiding (decodeUtf8)
 import Data.Void
 import Data.List.NonEmpty
-import qualified Data.List.NonEmpty as N
 import Control.Applicative
 import Control.Applicative.Lift
 import Control.Monad
 import Control.Monad.Trans.Free hiding (Pure)
 import Control.Monad.Trans.Except
-import Control.Monad.Trans.State
-import Control.Monad.Trans.Writer.Strict
 import qualified Control.Foldl as L
 import Control.Exception
 import Control.Concurrent
@@ -133,16 +124,13 @@ import Control.Concurrent.Conceit
 import Pipes
 import qualified Pipes as P
 import qualified Pipes.Prelude as P
-import Pipes.Lift
 import Pipes.ByteString
 import Pipes.Parse
 import qualified Pipes.Text as T
-import Pipes.Text.Encoding (decodeUtf8)
 import qualified Pipes.Text.Encoding as T
 import Pipes.Concurrent
 import Pipes.Safe (SafeT, runSafeT)
 import System.IO
-import System.IO.Error
 import System.Process
 import System.Process.Lens
 import System.Exit
@@ -225,8 +213,8 @@ executeInternal :: CreateProcess
                 -> (t ->(IO (Either e a),IO ())) 
                 -> IO (Either e (ExitCode,a))
 executeInternal record somePrism allocator = mask $ \restore -> do
-    (min,mout,merr,phandle) <- createProcess record
-    case getFirst . getConst . somePrism (Const . First . Just) $ (min,mout,merr) of
+    (mi,mout,merr,phandle) <- createProcess record
+    case getFirst . getConst . somePrism (Const . First . Just) $ (mi,mout,merr) of
         Nothing -> 
             throwIO (userError "stdin/stdout/stderr handle unwantedly null")
             `finally`
@@ -237,10 +225,6 @@ executeInternal record somePrism allocator = mask $ \restore -> do
             -- operation may block if the external process has unflushed bytes in the stream.
             (restore (terminateOnError phandle action) `onException` terminateCarefully phandle) `finally` cleanup 
 
-exitCode :: (ExitCode,a) -> Either Int a
-exitCode (ec,a) = case ec of
-    ExitSuccess -> Right a 
-    ExitFailure i -> Left i
 
 terminateCarefully :: ProcessHandle -> IO ()
 terminateCarefully pHandle = do
@@ -291,8 +275,8 @@ pipeoe (runSiphonDumb -> siphonout) (runSiphonDumb -> siphonerr) =
     Pipe @stdout@ and @stderr@ and consume them combined as 'Text'.  
 -}
 pipeoec :: Lines e -> Lines e -> Siphon Text e a -> Piping e a
-pipeoec policy1 policy2 (runSiphonDumb -> siphon) = 
-    PPOutputError $ uncurry $ combined policy1 policy2 siphon  
+pipeoec policy1 policy2 (runSiphonDumb -> s) = 
+    PPOutputError $ uncurry $ combined policy1 policy2 s
 
 {-|
     Pipe @stdin@.
@@ -329,10 +313,10 @@ pipeioe (Pump feeder) (runSiphonDumb -> siphonout) (runSiphonDumb -> siphonerr) 
     Pipe @stdin@, @stdout@ and @stderr@, consuming the last two combined as 'Text'.
 -}
 pipeioec :: Pump ByteString e i -> Lines e -> Lines e -> Siphon Text e a -> Piping e (i,a)
-pipeioec (Pump feeder) policy1 policy2 (runSiphonDumb -> siphon) = PPInputOutputError $
+pipeioec (Pump feeder) policy1 policy2 (runSiphonDumb -> s) = PPInputOutputError $
     \(consumer,cleanup,outprod,errprod) -> 
              (conceit (feeder consumer `finally` cleanup) 
-                      (combined policy1 policy2 siphon outprod errprod))
+                      (combined policy1 policy2 s outprod errprod))
 
 separated :: (Producer ByteString IO () -> IO (Either e a))
           -> (Producer ByteString IO () -> IO (Either e b))
@@ -502,8 +486,8 @@ data LeftoverException b = LeftoverException String b deriving (Typeable)
 instance (Typeable b) => Exception (LeftoverException b)
 
 instance (Typeable b) => Show (LeftoverException b) where
-    show (LeftoverException msg b) = 
-        "[Leftovers of type " ++ typeName (Proxy::Data.Typeable.Proxy b) ++ "]" ++ msg
+    show (LeftoverException msg _) = 
+        "[Leftovers of type " ++ typeName (Proxy::Data.Typeable.Proxy b) ++ "]" ++ msg'
       where
         typeName p = showsTypeRep (typeRep p) []
         msg' = case msg of
@@ -610,21 +594,6 @@ instance Monoid a => Decidable (SiphonOp e a) where
             Left () -> Right mempty
             Right (b,_) -> Right (absurd (f b))
 
-allowLefts :: Monad m => Pipe (Either b a) b m r
-allowLefts = do
-    e <- await
-    case e of 
-        Left l -> Pipes.yield l >> allowLefts
-        Right _ -> allowLefts
-                                           
-allowRights :: Monad m => Pipe (Either b a) a m r
-allowRights = do
-    e <- await
-    case e of 
-        Right r -> Pipes.yield r >> allowRights
-        Left _ -> allowRights
-
-
 {-|
     Specifies a transformation that will be applied to each line of text,
     represented as a 'Producer'.
@@ -653,13 +622,13 @@ toLines :: DecodingFunction ByteString Text
         -- '_leftoverX' to throw a 'LeftoverException' if leftovers remain.
         -> Lines e 
 toLines decoder lopo = Lines
-    (\tweaker teardown producer -> do
+    (\tweaker tear producer -> do
         let freeLines = transFreeT tweaker 
                       . viewLines 
                       . decoder
                       $ producer
             viewLines = getConst . T.lines Const
-        teardown freeLines >>= runSiphonDumb (fmap ($()) lopo))
+        tear freeLines >>= runSiphonDumb (fmap ($()) lopo))
     id 
 
 
@@ -693,18 +662,18 @@ executePipelineFallibly :: Piping e a
                         -- its parent in the tree.
                         -> IO (Either e a)
 executePipelineFallibly policy (Node (Stage cp lpol ecpol _) []) = case policy of
-          PPNone a -> blende ecpol <$> executeFallibly policy cp 
-          PPOutput action -> blende ecpol <$> executeFallibly policy cp 
+          PPNone _ -> blende ecpol <$> executeFallibly policy cp 
+          PPOutput _ -> blende ecpol <$> executeFallibly policy cp 
           PPError action -> do
-                (eoutbox, einbox, eseal) <- spawn' Single
+                (eoutbox, einbox, eseal) <- spawn' (bounded 1)
                 errf <- errorSiphonUTF8 <$> newMVar eoutbox
                 runConceit $  
                     (Conceit $ action $ fromInput einbox)
                     <*
                     (Conceit $ blende ecpol <$> executeFallibly (pipee (errf lpol)) cp `finally` atomically eseal)
           PPOutputError action -> do 
-                (outbox, inbox, seal) <- spawn' Single
-                (eoutbox, einbox, eseal) <- spawn' Single
+                (outbox, inbox, seal) <- spawn' (bounded 1)
+                (eoutbox, einbox, eseal) <- spawn' (bounded 1)
                 errf <- errorSiphonUTF8 <$> newMVar eoutbox
                 runConceit $  
                     (Conceit $ action $ (fromInput inbox,fromInput einbox))
@@ -713,11 +682,11 @@ executePipelineFallibly policy (Node (Stage cp lpol ecpol _) []) = case policy o
                                     (pipeoe (fromConsumer.toOutput $ outbox) (errf lpol)) cp
                                `finally` atomically seal `finally` atomically eseal
                     )
-          PPInput action -> blende ecpol <$> executeFallibly policy cp
-          PPInputOutput action -> blende ecpol <$> executeFallibly policy cp
+          PPInput _ -> blende ecpol <$> executeFallibly policy cp
+          PPInputOutput _ -> blende ecpol <$> executeFallibly policy cp
           PPInputError action -> do
-                (outbox, inbox, seal) <- spawn' Single
-                (eoutbox, einbox, eseal) <- spawn' Single
+                (outbox, inbox, seal) <- spawn' (bounded 1)
+                (eoutbox, einbox, eseal) <- spawn' (bounded 1)
                 errf <- errorSiphonUTF8 <$> newMVar eoutbox
                 runConceit $  
                     (Conceit $ action (toOutput outbox,atomically seal,fromInput einbox))
@@ -727,9 +696,9 @@ executePipelineFallibly policy (Node (Stage cp lpol ecpol _) []) = case policy o
                                `finally` atomically seal `finally` atomically eseal
                     )
           PPInputOutputError action -> do
-                (ioutbox, iinbox, iseal) <- spawn' Single
-                (ooutbox, oinbox, oseal) <- spawn' Single
-                (eoutbox, einbox, eseal) <- spawn' Single
+                (ioutbox, iinbox, iseal) <- spawn' (bounded 1)
+                (ooutbox, oinbox, oseal) <- spawn' (bounded 1)
+                (eoutbox, einbox, eseal) <- spawn' (bounded 1)
                 errf <- errorSiphonUTF8 <$> newMVar eoutbox
                 runConceit $  
                     (Conceit $ action (toOutput ioutbox,atomically iseal,fromInput oinbox,fromInput einbox))
@@ -753,7 +722,7 @@ executePipelineFallibly policy (Node s (s':ss)) =
                     (\i _ -> mute $ pipei i) 
                     pipeline
           PPOutput action -> do
-                (outbox, inbox, seal) <- spawn' Single
+                (outbox, inbox, seal) <- spawn' (bounded 1)
                 runConceit $  
                     (Conceit $ action $ fromInput inbox)
                     <* 
@@ -766,7 +735,7 @@ executePipelineFallibly policy (Node s (s':ss)) =
                                `finally` atomically seal
                     ) 
           PPError action -> do
-                (eoutbox, einbox, eseal) <- spawn' Single
+                (eoutbox, einbox, eseal) <- spawn' (bounded 1)
                 errf <- errorSiphonUTF8 <$> newMVar eoutbox
                 runConceit $  
                     (Conceit $ action $ fromInput einbox)
@@ -779,8 +748,8 @@ executePipelineFallibly policy (Node s (s':ss)) =
                                 pipeline
                                 `finally` atomically eseal)
           PPOutputError action -> do
-                (outbox, inbox, seal) <- spawn' Single
-                (eoutbox, einbox, eseal) <- spawn' Single
+                (outbox, inbox, seal) <- spawn' (bounded 1)
+                (eoutbox, einbox, eseal) <- spawn' (bounded 1)
                 errf <- errorSiphonUTF8 <$> newMVar eoutbox
                 runConceit $  
                     (Conceit $ action $ (fromInput inbox,fromInput einbox))
@@ -794,7 +763,7 @@ executePipelineFallibly policy (Node s (s':ss)) =
                                `finally` atomically seal `finally` atomically eseal
                     )
           PPInput action -> do
-                (outbox, inbox, seal) <- spawn' Single
+                (outbox, inbox, seal) <- spawn' (bounded 1)
                 runConceit $  
                     (Conceit $ action (toOutput outbox,atomically seal))
                     <* 
@@ -807,8 +776,8 @@ executePipelineFallibly policy (Node s (s':ss)) =
                                `finally` atomically seal
                     )
           PPInputOutput action -> do
-                (ioutbox, iinbox, iseal) <- spawn' Single
-                (ooutbox, oinbox, oseal) <- spawn' Single
+                (ioutbox, iinbox, iseal) <- spawn' (bounded 1)
+                (ooutbox, oinbox, oseal) <- spawn' (bounded 1)
                 runConceit $  
                     (Conceit $ action (toOutput ioutbox,atomically iseal,fromInput oinbox))
                     <* 
@@ -821,8 +790,8 @@ executePipelineFallibly policy (Node s (s':ss)) =
                                `finally` atomically iseal `finally` atomically oseal
                     )
           PPInputError action -> do
-                (outbox, inbox, seal) <- spawn' Single
-                (eoutbox, einbox, eseal) <- spawn' Single
+                (outbox, inbox, seal) <- spawn' (bounded 1)
+                (eoutbox, einbox, eseal) <- spawn' (bounded 1)
                 errf <- errorSiphonUTF8 <$> newMVar eoutbox
                 runConceit $  
                     (Conceit $ action (toOutput outbox,atomically seal,fromInput einbox))
@@ -836,9 +805,9 @@ executePipelineFallibly policy (Node s (s':ss)) =
                                `finally` atomically seal `finally` atomically eseal
                     )
           PPInputOutputError action -> do
-                (ioutbox, iinbox, iseal) <- spawn' Single
-                (ooutbox, oinbox, oseal) <- spawn' Single
-                (eoutbox, einbox, eseal) <- spawn' Single
+                (ioutbox, iinbox, iseal) <- spawn' (bounded 1)
+                (ooutbox, oinbox, oseal) <- spawn' (bounded 1)
+                (eoutbox, einbox, eseal) <- spawn' (bounded 1)
                 errf <- errorSiphonUTF8 <$> newMVar eoutbox
                 runConceit $  
                     (Conceit $ action (toOutput ioutbox,atomically iseal,fromInput oinbox,fromInput einbox))
@@ -899,14 +868,14 @@ executePipelineInternal :: (Siphon ByteString e () -> Lines e -> Piping e ())
 executePipelineInternal ppinitial ppmiddle ppend ppend' (CreatePipeline (Stage cp lpol ecpol _) a) =      
     blende ecpol <$> executeFallibly (ppinitial (runNonEmpty ppend ppend' a) lpol) cp
   where 
-    runTree ppend ppend' (Node (Stage cp lpol ecpol pipe) forest) = case forest of
+    runTree _ppend _ppend' (Node (Stage _cp _lpol _ecpol pipe) forest) = case forest of
         [] -> siphon $ \producer ->
-            blende ecpol <$> executeFallibly (ppend (fromFallibleProducer $ pipe producer) lpol) cp
+            blende _ecpol <$> executeFallibly (_ppend (fromFallibleProducer $ pipe producer) _lpol) _cp
         c1 : cs -> siphon $ \producer ->
-           blende ecpol <$> executeFallibly (ppmiddle (fromFallibleProducer $ pipe producer) (runNonEmpty ppend ppend' (c1 :| cs)) lpol) cp
+           blende _ecpol <$> executeFallibly (ppmiddle (fromFallibleProducer $ pipe producer) (runNonEmpty _ppend _ppend' (c1 :| cs)) _lpol) _cp
 
-    runNonEmpty ppend ppend' (b :| bs) = 
-        runTree ppend ppend' b <* Prelude.foldr (<*) (pure ()) (runTree ppend' ppend' <$> bs) 
+    runNonEmpty _ppend _ppend' (b :| bs) = 
+        runTree _ppend _ppend' b <* Prelude.foldr (<*) (pure ()) (runTree _ppend' _ppend' <$> bs) 
     
 blende :: (ExitCode -> Either e ()) -> Either e (ExitCode,a) -> Either e a
 blende f r = r >>= \(ec,a) -> f ec *> pure a
