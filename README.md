@@ -32,7 +32,7 @@ http://hackage.haskell.org/package/pipes-cliff
 
 http://hackage.haskell.org/package/pipes-shell
 
-* shelly (conduit-based, shell programming)
+* shelly (shell programming)
 
 http://hackage.haskell.org/package/shelly
 
