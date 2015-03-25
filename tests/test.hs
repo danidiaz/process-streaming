@@ -37,7 +37,7 @@ import System.IO
 import System.IO.Error
 import System.Exit
 import System.Directory
-import System.Process.Streaming
+import System.Process.Streaming.Extended
 
 main = defaultMain tests
 
@@ -57,6 +57,7 @@ tests = testGroup "Tests"
             , testAlternatingWithCombined 
             , testDecodeFailure
             , testDecodeFailureX
+            , testPiapIn 
             ]
 
 -------------------------------------------------------------------------------
@@ -359,6 +360,26 @@ decodeFailureX = execute
     (pipeio (fromLazyBytes ("aaaaaaaa" <> nonAscii)) 
             (encoded decodeAscii _leftoverX intoLazyText)) 
     (shell "cat")
+
+-------------------------------------------------------------------------------
+
+testPiapIn :: TestTree
+testPiapIn = localOption (mkTimeout $ 5*(10^6)) $
+    testCase "piapIn" $ do
+        r <- piapIn
+        case r of
+            (ExitSuccess,"aaabbb") -> return ()
+            _ -> assertFailure "oops"
+
+piapIn :: IO (ExitCode, BL.ByteString)
+piapIn = execute piping (shell "cat")
+  where 
+    piping = toPiping $ 
+      piapi (fromLazyBytes "aaa")  
+      *>
+      piapi (fromLazyBytes "bbb")  
+      *>
+      piapo intoLazyBytes 
 
 -------------------------------------------------------------------------------
 
