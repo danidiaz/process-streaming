@@ -100,10 +100,10 @@ import System.Process.Streaming
 
 We can do this with the 'toLazyM' fold from @pipes-bytestring@:
 
->>> execute (pipeo intoLazyBytes) (shell "echo ooo")
+>>> execute (pipeo (fromFold B.toLazyM)) (shell "echo ooo")
 (ExitSuccess,"ooo\n")
 
-But the 'intoLazyBytes' function is easier to use:
+But the 'intoLazyBytes' 'Siphon' is easier to use:
 
 >>> execute (pipeo intoLazyBytes) (shell "echo ooo")
 (ExitSuccess,"ooo\n")

@@ -371,9 +371,9 @@ siphon' :: (forall r. Producer b IO r -> IO (Either e (a,r))) -> Siphon b e a
 siphon' f = Siphon (Other (Exhaustive f))
 
 {-| 
-    Useful in combination with 'Pipes.Text.toLazyM' from @pipes-text@ and
-    'Pipes.ByteString.toLazyM' from @pipes-bytestring@, when the user
-    wants to collect all the output. 
+    Useful in combination with folds from the pipes prelude or more
+    specialized folds like 'Pipes.Text.toLazyM' from @pipes-text@ and
+    'Pipes.ByteString.toLazyM' from @pipes-bytestring@. 
 -}
 fromFold :: (Producer b IO () -> IO a) -> Siphon b e a 
 fromFold aFold = siphon $ fmap (fmap pure) $ aFold 

@@ -13,12 +13,14 @@ import Data.List.NonEmpty
 import Data.ByteString
 import Data.ByteString.Lazy as BL
 import Data.Text.Lazy as TL
+import Data.Text.Lazy.Encoding as TL
 import Data.Typeable
 import Data.Tree
 import qualified Data.Attoparsec.Text as A
 import Control.Applicative
 import Control.Monad
 import Control.Monad.Trans.Except
+import Control.Exception
 import Control.Lens (view)
 import Pipes
 import qualified Pipes.ByteString as B
@@ -53,6 +55,8 @@ tests = testGroup "Tests"
             , testBranchingPipeline 
             , testDrainageDeadlock
             , testAlternatingWithCombined 
+            , testDecodeFailure
+            , testDecodeFailureX
             ]
 
 -------------------------------------------------------------------------------
@@ -319,4 +323,42 @@ alternatingWithCombined2 = execute
     lp = toLines T.decodeIso8859_1 (pure id) 
     countLines = fromFold $ P.sum . G.folds const () (const 1) . view T.lines
 
+-------------------------------------------------------------------------------
+
+testDecodeFailure :: TestTree
+testDecodeFailure  = localOption (mkTimeout $ 20*(10^6)) $
+    testCase "testDecodeFailure" $ do
+        r <- decodeFailure
+        case r of 
+            Left nonAscii -> return ()
+            _ -> assertFailure "oops"
+
+nonAscii :: BL.ByteString
+nonAscii = TL.encodeUtf8 "\x4e2d"
+
+decodeFailure :: IO (Either T.ByteString (ExitCode,((),TL.Text)))
+decodeFailure = executeFallibly 
+    (pipeio (fromLazyBytes ("aaaaaaaa" <> nonAscii)) 
+            (encoded decodeAscii (unwanted id) intoLazyText)) 
+    (shell "cat")
+
+
+testDecodeFailureX :: TestTree
+testDecodeFailureX  = localOption (mkTimeout $ 20*(10^6)) $
+    testCase "testDecodeFailureX" $ do
+        r <- tryLeftoverB decodeFailureX
+        case r of 
+            Left (LeftoverException _ nonAscii) -> return ()
+            _ -> assertFailure "oops"
+
+tryLeftoverB :: IO a -> IO (Either (LeftoverException Data.ByteString.ByteString) a)
+tryLeftoverB = Control.Exception.try
+
+decodeFailureX :: IO (ExitCode,((),TL.Text))
+decodeFailureX = execute
+    (pipeio (fromLazyBytes ("aaaaaaaa" <> nonAscii)) 
+            (encoded decodeAscii _leftoverX intoLazyText)) 
+    (shell "cat")
+
+-------------------------------------------------------------------------------
 
