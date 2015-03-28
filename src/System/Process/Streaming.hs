@@ -100,6 +100,7 @@ module System.Process.Streaming (
         , T.decodeIso8859_1
     ) where
 
+import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
 import Data.Functor.Contravariant
 import Data.Functor.Contravariant.Divisible
@@ -346,9 +347,16 @@ fromLazyBytes :: BL.ByteString -> Pump ByteString e ()
 fromLazyBytes = fromProducer . fromLazy 
 
                                            
+{-| 
+    Collects incoming 'BS.ByteString' values into a lazy 'BL.ByteString'.
+-}
 intoLazyBytes :: Siphon ByteString e BL.ByteString 
 intoLazyBytes = fromFold toLazyM  
 
+
+{-| 
+    Collects incoming 'Data.Text' values into a lazy 'TL.Text'.
+-}
 intoLazyText :: Siphon Text e TL.Text
 intoLazyText = fromFold T.toLazyM  
 
@@ -366,12 +374,14 @@ siphon f = Siphon (Other (Nonexhaustive f))
 {-| 
    Builds a 'Siphon' out of a computation that drains a 'Producer' completely,
 but may fail with an error of type @e@.
+
+   This functions incurs in less overhead than 'siphon'.
 -}
 siphon' :: (forall r. Producer b IO r -> IO (Either e (a,r))) -> Siphon b e a 
 siphon' f = Siphon (Other (Exhaustive f))
 
 {-| 
-    Useful in combination with folds from the pipes prelude or more
+    Useful in combination with folds from the pipes prelude, or more
     specialized folds like 'Pipes.Text.toLazyM' from @pipes-text@ and
     'Pipes.ByteString.toLazyM' from @pipes-bytestring@. 
 -}
@@ -416,6 +426,10 @@ fromFoldlM whittle aFoldM = siphon' $ \producer ->
 fromConsumer :: Consumer b IO () -> Siphon b e ()
 fromConsumer consumer = fromFold $ \producer -> runEffect $ producer >-> consumer 
 
+{-| 
+    Builds a 'Siphon' out of a 'Consumer' with a polymorphic return type
+    (one example is 'toHandle' from @pipes-bytestring@).
+-}
 fromConsumer' :: Consumer b IO Void -> Siphon b e ()
 fromConsumer' consumer = fromFold'_$ \producer -> runEffect $ producer >-> fmap absurd consumer 
 
@@ -438,7 +452,7 @@ fromFallibleConsumer :: Consumer b (ExceptT e IO) Void -> Siphon b e ()
 fromFallibleConsumer = fromConsumerM' (fmap (fmap (\r -> ((), r))) . runExceptT)
 
 {-| 
-  Turn a 'Parser' from @pipes-parse@ into a 'Sihpon'.
+  Turn a 'Parser' from @pipes-parse@ into a 'Siphon'.
  -}
 fromParser :: Parser b IO (Either e a) -> Siphon b e a 
 fromParser parser = siphon' $ \producer -> drainage $ Pipes.Parse.runStateT parser producer
@@ -451,7 +465,7 @@ fromParser parser = siphon' $ \producer -> drainage $ Pipes.Parse.runStateT pars
             Right a' -> return (Right (a',r)) 
 
 {-| 
-  Turn a 'Parser' from @pipes-parse@ into a 'Sihpon'.
+  Turn a 'Parser' from @pipes-parse@ into a 'Siphon'.
  -}
 fromParserM :: MonadIO m 
             => (forall r. m (a,r) -> IO (Either e (c,r))) 

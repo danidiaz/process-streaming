@@ -1,3 +1,7 @@
+0.7.0.2
+-------
+- Bumped conceit dependency to make it work with GHC 7.10.
+
 0.7.0.0
 -------
 - Changed signature of toLines to make it more consistent with that of encoded

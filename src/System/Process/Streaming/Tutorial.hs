@@ -159,7 +159,7 @@ Right (ExitSuccess,"ooo\n")
 
 Notice also that we had to switch from 'execute' to 'executeFallibly'. This
 is because, for the first time in the tutorial, we actually have a need for
-the error type. 'execute' only works when the error type unified with 'Void'.
+the error type. 'execute' only works when the error type unifies with 'Void'.
 
 Beware: even if the error type is 'Void', exceptions can still be thrown.
 -}

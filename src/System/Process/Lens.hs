@@ -2,6 +2,9 @@
 -- |
 -- Lenses and traversals for 'CreateProcess' and related types.
 --
+-- These are provided as a convenience and aren't required to use the other
+-- modules of the package.
+--
 -----------------------------------------------------------------------------
 
 {-# LANGUAGE DeriveDataTypeable #-}
