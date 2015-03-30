@@ -351,14 +351,13 @@ fromLazyBytes = fromProducer . fromLazy
     Collects incoming 'BS.ByteString' values into a lazy 'BL.ByteString'.
 -}
 intoLazyBytes :: Siphon ByteString e BL.ByteString 
-intoLazyBytes = fromFold toLazyM  
-
+intoLazyBytes = fromFoldl (fmap BL.fromChunks L.list)
 
 {-| 
     Collects incoming 'Data.Text' values into a lazy 'TL.Text'.
 -}
 intoLazyText :: Siphon Text e TL.Text
-intoLazyText = fromFold T.toLazyM  
+intoLazyText = fromFoldl (fmap TL.fromChunks L.list)
 
 {-| 
    Builds a 'Siphon' out of a computation that does something with
