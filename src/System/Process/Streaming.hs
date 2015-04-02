@@ -663,7 +663,7 @@ toLines decoder lopo = Lines
 
 {-|
   A simplified version of 'executePipelineFallibly' for when the error type
-  unified with `Void`.  Note however that this function may still throw
+  unifies with `Void`.  Note however that this function may still throw
   exceptions.
  -}
 executePipeline :: Piping Void a -> Tree (Stage Void) -> IO a 

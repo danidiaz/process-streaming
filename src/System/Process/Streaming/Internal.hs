@@ -119,6 +119,9 @@ instance Bifunctor Piping where
             fmap (fmap (bimap f g)) action
 
 
+{-| 
+    'Pump's are actions that write data into a process' @stdin@. 
+ -}
 newtype Pump b e a = Pump { runPump :: Consumer b IO () -> IO (Either e a) } deriving Functor
 
 {-| 
@@ -127,6 +130,12 @@ newtype Pump b e a = Pump { runPump :: Consumer b IO () -> IO (Either e a) } der
 instance Bifunctor (Pump b) where
   bimap f g (Pump x) = Pump $ fmap (liftM  (bimap f g)) x
 
+
+{-| 
+    'pure' writes nothing to @stdin@.
+
+    '<*>' sequences the writes to @stdin@.
+-}
 instance Applicative (Pump b e) where
   pure = Pump . pure . pure . pure
   Pump fs <*> Pump as = 
@@ -238,9 +247,8 @@ instance Applicative (Piap e) where
 
 
 {-| 
-    A 'Siphon' represents a computation that completely drains a producer, but
-may fail early with an error of type @e@. 
-
+    A 'Siphon' represents a computation that completely drains
+    a 'Producer', but which may fail early with an error of type @e@. 
  -}
 newtype Siphon b e a = Siphon (Lift (Siphon_ b e) a) deriving (Functor)
 
