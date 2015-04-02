@@ -1,3 +1,7 @@
+0.7.1.0
+-------
+- prefilter, prefilterM, nestM, _nestM added to Extended.
+
 0.7.0.2
 -------
 - Bumped conceit dependency to make it work with GHC 7.10.
