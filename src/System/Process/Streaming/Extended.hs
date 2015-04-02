@@ -1,4 +1,3 @@
-
 {-|
 -}
 
@@ -22,10 +21,6 @@ module System.Process.Streaming.Extended (
     ,  toPiping
     ,  pumpFromHandle 
     ,  siphonToHandle 
-    ,  prefilter
-    ,  prefilterM
-    ,  _nestM
-    ,  nestM
     ,  module System.Process.Streaming
     ) where
 
@@ -141,38 +136,26 @@ pumpFromHandle = fromProducer . fromHandle
 siphonToHandle :: Handle -> Siphon ByteString e ()
 siphonToHandle = fromConsumer . toHandle
 
-{-|
-    Useful to weed out unwanted inputs to a 'Siphon'.
--}
-prefilter :: (a -> [b]) -> Siphon b e r -> Siphon a e r
-prefilter unwinder = prefilterM (each . unwinder)
 
-prefilterM :: (a -> Producer b IO ()) -> Siphon b e r -> Siphon a e r
-prefilterM unwinder s = 
-    siphon' $ func . flip for unwinder 
-  where
-    func = runSiphon s
-
-{-|
-    More general than '_nestM' in that the 'Siphon's that consume each
-    stream of @b@s can depend on the @a@s, but come on! Who could ever
-    need this?
--}
-nestM :: (a -> Producer b IO ()) -> (a -> Client (Siphon b e ()) a (ExceptT e IO) Void) -> Siphon a e () 
-nestM unwinder siphonClient = siphon' $ \producer -> runExceptT . runEffect $ fmap ((,) ()) $
-    hoist lift producer >>~ (retag >~> (fmap absurd . siphonClient))
-  where
-    retag a = do
-        s <- respond a
-        _ <- lift . ExceptT $ runSiphonDumb s (unwinder a) 
-        request () >>= retag
-
-
-{-|
-    For each incoming @a@, use a different 'Siphon' to consume the
-    corresponding stream of @b@s. 
--}
-_nestM :: (a -> Producer b IO ()) -> Producer (Siphon b e ()) (ExceptT e IO) Void -> Siphon a e () 
-_nestM unwinder siphonProducer = siphon' $ \producer -> runExceptT . runEffect $ fmap ((,) ()) $
-    for (P.zip (hoist lift producer) (fmap absurd siphonProducer)) $ \(a, siph) ->
-       lift . ExceptT $ runSiphonDumb siph (unwinder a) 
+--{-|
+--    More general than '_nestEnumerable' in that the 'Siphon's that consume each
+--    stream of @b@s can depend on the @a@s.
+---}
+--nestEnumerable :: Enumerable t => (a -> t IO b) -> (a -> Client (SiphonOp e () b) a (ExceptT e IO) Void) -> SiphonOp e () a
+--nestEnumerable unwinder siphonClient = SiphonOp $ siphon' $ \producer -> runExceptT . runEffect $ fmap ((,) ()) $
+--    hoist lift producer >>~ (retag >~> (fmap absurd . siphonClient))
+--  where
+--    retag a = do
+--        s <- respond a
+--        _ <- lift . ExceptT $ runSiphonDumb (getSiphonOp s) (enumerate . toListT . unwinder $ a) 
+--        request () >>= retag
+--
+--
+--{-|
+--    For each incoming @a@, use a different 'Siphon' to consume the
+--    corresponding stream of @b@s. 
+---}
+--_nestEnumerable :: Enumerable t => (a -> t IO b) -> Producer (SiphonOp e () b) (ExceptT e IO) Void -> SiphonOp e () a 
+--_nestEnumerable unwinder siphonProducer = SiphonOp $ siphon' $ \producer -> runExceptT . runEffect $ fmap ((,) ()) $
+--    for (P.zip (hoist lift producer) (fmap absurd siphonProducer)) $ \(a, siph) ->
+--       lift . ExceptT $ runSiphonDumb (getSiphonOp siph) (enumerate . toListT . unwinder $ a) 

@@ -74,6 +74,8 @@ module System.Process.Streaming (
         , DecodingFunction
         , encoded
         , SiphonOp (..)
+        , contramapFoldable
+        , contramapEnumerable
         -- * Handling lines
         , Lines
         , toLines
@@ -622,6 +624,16 @@ instance Monoid a => Decidable (SiphonOp e a) where
         return $ case n of 
             Left () -> Right mempty
             Right (b,_) -> Right (absurd (f b))
+
+{-|
+    Useful to weed out unwanted inputs to a 'Siphon'.
+-}
+contramapFoldable :: Foldable f => (a -> f b) -> SiphonOp e r b -> SiphonOp e r a
+contramapFoldable unwinder = contramapEnumerable (Select . each . unwinder)
+
+contramapEnumerable :: Enumerable t => (a -> t IO b) -> SiphonOp e r b -> SiphonOp e r a
+contramapEnumerable unwinder (getSiphonOp -> s) = SiphonOp $
+    siphon' $ runSiphon s . flip for (enumerate . toListT . unwinder) 
 
 {-|
     Specifies a transformation that will be applied to each line of text,

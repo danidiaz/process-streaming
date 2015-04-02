@@ -1,6 +1,6 @@
 0.7.1.0
 -------
-- prefilter, prefilterM, nestM, _nestM added to Extended.
+- contramapFoldable, contramapEnumerable.
 
 0.7.0.2
 -------
