@@ -76,6 +76,7 @@ module System.Process.Streaming (
         , SiphonOp (..)
         , contramapFoldable
         , contramapEnumerable
+        , tweakSiphonOp
         -- * Handling lines
         , Lines
         , toLines
@@ -638,6 +639,9 @@ contramapFoldable unwinder = contramapEnumerable (Select . each . unwinder)
 contramapEnumerable :: Enumerable t => (a -> t IO b) -> SiphonOp e r b -> SiphonOp e r a
 contramapEnumerable unwinder (getSiphonOp -> s) = SiphonOp $
     siphon' $ runSiphon s . flip for (enumerate . toListT . unwinder) 
+
+tweakSiphonOp :: (forall r. Producer a IO r -> Producer b IO r) -> SiphonOp e r b -> SiphonOp e r a
+tweakSiphonOp f (getSiphonOp -> s) = SiphonOp $ siphon' $ runSiphon s . f
 
 {-|
     Specifies a transformation that will be applied to each line of text,
