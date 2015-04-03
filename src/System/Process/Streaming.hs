@@ -565,6 +565,10 @@ encoded decoder (Siphon (unLift -> policy)) (Siphon (unLift -> activity)) =
         pure (f a,r)
 
 
+{-|
+    A newtype wrapper with functions for working on the inputs of
+    a 'Siphon', instead of the outputs. 
+ -}
 newtype SiphonOp e a b = SiphonOp { getSiphonOp :: Siphon b e a } 
 
 -- | 'contramap' carn turn a 'SiphonOp' for bytes into a 'SiphonOp' for text.
@@ -626,7 +630,7 @@ instance Monoid a => Decidable (SiphonOp e a) where
             Right (b,_) -> Right (absurd (f b))
 
 {-|
-    Useful to weed out unwanted inputs to a 'Siphon'.
+    Useful to weed out unwanted inputs to a 'Siphon', by returning @[]@.
 -}
 contramapFoldable :: Foldable f => (a -> f b) -> SiphonOp e r b -> SiphonOp e r a
 contramapFoldable unwinder = contramapEnumerable (Select . each . unwinder)
