@@ -70,6 +70,7 @@ module System.Process.Streaming (
         , fromFoldlM
         , intoLazyBytes
         , intoLazyText 
+        , intoList
         , unwanted
         , DecodingFunction
         , encoded
@@ -77,6 +78,11 @@ module System.Process.Streaming (
         , contramapFoldable
         , contramapEnumerable
         , tweakSiphonOp
+        , encodedOp
+        , entwine
+        , entwineFallibly
+        , nest
+        , nestFallibly
         -- * Handling lines
         , Lines
         , toLines
@@ -118,6 +124,7 @@ import Data.Void
 import Data.List.NonEmpty
 import Control.Applicative
 import Control.Applicative.Lift
+import Control.Comonad.Cofree
 import Control.Monad
 import Control.Monad.Trans.Free hiding (Pure)
 import Control.Monad.Trans.Except
@@ -362,6 +369,9 @@ intoLazyBytes = fromFoldl (fmap BL.fromChunks L.list)
 intoLazyText :: Siphon Text e TL.Text
 intoLazyText = fromFoldl (fmap TL.fromChunks L.list)
 
+intoList :: Siphon b e [b]
+intoList = fromFoldl L.list
+
 {-| 
    Builds a 'Siphon' out of a computation that does something with
    a 'Producer', but may fail with an error of type @e@.
@@ -565,6 +575,31 @@ encoded decoder (Siphon (unLift -> policy)) (Siphon (unLift -> activity)) =
         (f,r) <- ExceptT $ exhaustive policy leftovers 
         pure (f a,r)
 
+
+encodedOp :: DecodingFunction bytes text
+        -- ^ A decoding function.
+        -> Siphon bytes e (a -> a)
+        -- ^ A 'Siphon' that determines how to handle decoding leftovers.
+        -- Pass @pure id@ to ignore leftovers. Pass @unwanted id@ to abort
+        -- the computation with an explicit error if leftovers remain. Pass
+        -- '_leftoverX' to throw a 'LeftoverException' if leftovers remain.
+        -> SiphonOp e a text
+        -> SiphonOp e a bytes 
+encodedOp decoder leftovers (SiphonOp siph) = SiphonOp $ 
+    encoded decoder leftovers siph
+
+entwine :: (forall r. Producer b m r -> FreeT (Producer b m) m r) -> Cofree (Siphon b Void) a -> SiphonOp e r a -> SiphonOp e r b
+entwine = entwine
+
+
+entwineFallibly :: (forall r. Producer b m r -> FreeT (Producer b m) m r) -> Cofree (Siphon b e) a -> SiphonOp e r a -> SiphonOp e r b
+entwineFallibly = undefined
+
+nest :: (forall r. Producer b m r -> FreeT (Producer b m) m r) -> Siphon b Void a -> SiphonOp e r a -> SiphonOp e r b
+nest = undefined
+
+nestFallibly :: (forall r. Producer b m r -> FreeT (Producer b m) m r) -> Siphon b e a -> SiphonOp e r a -> SiphonOp e r b
+nestFallibly = undefined
 
 {-|
     A newtype wrapper with functions for working on the inputs of
