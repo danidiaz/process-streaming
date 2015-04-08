@@ -79,7 +79,7 @@ module System.Process.Streaming (
         , contramapFoldable
         , contramapEnumerable
         , contraproduce
-        , contraencode
+        , contraencoded
         , SplittingFunction
         , splitIntoLines
         , entwine
@@ -580,7 +580,7 @@ encoded decoder (Siphon (unLift -> policy)) (Siphon (unLift -> activity)) =
         pure (f a,r)
 
 
-contraencode :: DecodingFunction bytes text
+contraencoded :: DecodingFunction bytes text
         -- ^ A decoding function.
         -> Siphon bytes e (a -> a)
         -- ^ A 'Siphon' that determines how to handle decoding leftovers.
@@ -589,7 +589,7 @@ contraencode :: DecodingFunction bytes text
         -- '_leftoverX' to throw a 'LeftoverException' if leftovers remain.
         -> SiphonOp e a text
         -> SiphonOp e a bytes 
-contraencode decoder leftovers (SiphonOp siph) = SiphonOp $ 
+contraencoded decoder leftovers (SiphonOp siph) = SiphonOp $ 
     encoded decoder leftovers siph
 
 
