@@ -79,10 +79,10 @@ module System.Process.Streaming (
         , contramapEnumerable
         , tweakSiphonOp
         , encodedOp
+        , SplittingFunction
+        , splitIntoLines
         , entwine
-        , entwineFallibly
         , nest
-        , nestFallibly
         -- * Handling lines
         , Lines
         , toLines
@@ -588,18 +588,18 @@ encodedOp :: DecodingFunction bytes text
 encodedOp decoder leftovers (SiphonOp siph) = SiphonOp $ 
     encoded decoder leftovers siph
 
-entwine :: (forall r. Producer b m r -> FreeT (Producer b m) m r) -> Cofree (Siphon b Void) a -> SiphonOp e r a -> SiphonOp e r b
-entwine = entwine
 
+type SplittingFunction text = forall r. Producer text IO r -> FreeT (Producer text IO) IO r
 
-entwineFallibly :: (forall r. Producer b m r -> FreeT (Producer b m) m r) -> Cofree (Siphon b e) a -> SiphonOp e r a -> SiphonOp e r b
-entwineFallibly = undefined
+splitIntoLines :: SplittingFunction T.Text 
+splitIntoLines = getConst . T.lines Const
 
-nest :: (forall r. Producer b m r -> FreeT (Producer b m) m r) -> Siphon b Void a -> SiphonOp e r a -> SiphonOp e r b
+entwine :: SplittingFunction b -> Cofree (Siphon b e) a -> SiphonOp e r a -> SiphonOp e r b
+entwine = undefined
+
+nest :: SplittingFunction b -> Siphon b e a -> SiphonOp e r a -> SiphonOp e r b
 nest = undefined
 
-nestFallibly :: (forall r. Producer b m r -> FreeT (Producer b m) m r) -> Siphon b e a -> SiphonOp e r a -> SiphonOp e r b
-nestFallibly = undefined
 
 {-|
     A newtype wrapper with functions for working on the inputs of
