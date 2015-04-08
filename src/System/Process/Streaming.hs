@@ -78,8 +78,8 @@ module System.Process.Streaming (
         , SiphonOp (..)
         , contramapFoldable
         , contramapEnumerable
-        , tweakSiphonOp
-        , encodedOp
+        , contraproduce
+        , contraencode
         , SplittingFunction
         , splitIntoLines
         , entwine
@@ -580,7 +580,7 @@ encoded decoder (Siphon (unLift -> policy)) (Siphon (unLift -> activity)) =
         pure (f a,r)
 
 
-encodedOp :: DecodingFunction bytes text
+contraencode :: DecodingFunction bytes text
         -- ^ A decoding function.
         -> Siphon bytes e (a -> a)
         -- ^ A 'Siphon' that determines how to handle decoding leftovers.
@@ -589,7 +589,7 @@ encodedOp :: DecodingFunction bytes text
         -- '_leftoverX' to throw a 'LeftoverException' if leftovers remain.
         -> SiphonOp e a text
         -> SiphonOp e a bytes 
-encodedOp decoder leftovers (SiphonOp siph) = SiphonOp $ 
+contraencode decoder leftovers (SiphonOp siph) = SiphonOp $ 
     encoded decoder leftovers siph
 
 
@@ -679,8 +679,8 @@ contramapEnumerable :: Enumerable t => (a -> t IO b) -> SiphonOp e r b -> Siphon
 contramapEnumerable unwinder (getSiphonOp -> s) = SiphonOp $
     siphon' $ runSiphon s . flip for (enumerate . toListT . unwinder) 
 
-tweakSiphonOp :: (forall r. Producer a IO r -> Producer b IO r) -> SiphonOp e r b -> SiphonOp e r a
-tweakSiphonOp f (getSiphonOp -> s) = SiphonOp $ siphon' $ runSiphon s . f
+contraproduce :: (forall r. Producer a IO r -> Producer b IO r) -> SiphonOp e r b -> SiphonOp e r a
+contraproduce f (getSiphonOp -> s) = SiphonOp $ siphon' $ runSiphon s . f
 
 {-|
     Specifies a transformation that will be applied to each line of text,
