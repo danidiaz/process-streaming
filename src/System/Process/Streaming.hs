@@ -73,6 +73,7 @@ module System.Process.Streaming (
         , intoList
         , unwanted
         , DecodingFunction
+        , parserDecoder
         , encoded
         , SiphonOp (..)
         , contramapFoldable
@@ -553,6 +554,9 @@ _leftoverX = unwantedX (LeftoverException msg) id
 @pipes-text@ package.  
 -}
 type DecodingFunction bytes text = forall r. Producer bytes IO r -> Producer text IO (Producer bytes IO r)
+
+parserDecoder :: Parser b IO (Either () a) -> DecodingFunction b a 
+parserDecoder = undefined
 
 {-|
     Constructs a 'Siphon' that works on encoded values out of a 'Siphon' that
