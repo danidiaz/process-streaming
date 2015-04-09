@@ -73,7 +73,6 @@ module System.Process.Streaming (
         , intoList
         , unwanted
         , DecodingFunction
-        , parserDecoder
         , encoded
         , SiphonOp (..)
         , contramapFoldable
@@ -555,9 +554,6 @@ _leftoverX = unwantedX (LeftoverException msg) id
 -}
 type DecodingFunction bytes text = forall r. Producer bytes IO r -> Producer text IO (Producer bytes IO r)
 
-parserDecoder :: Parser b IO (Either () a) -> DecodingFunction b a 
-parserDecoder = undefined
-
 {-|
     Constructs a 'Siphon' that works on encoded values out of a 'Siphon' that
 works on decoded values. 
@@ -598,8 +594,13 @@ type SplittingFunction text = forall r. Producer text IO r -> FreeT (Producer te
 splitIntoLines :: SplittingFunction T.Text 
 splitIntoLines = getConst . T.lines Const
 
-entwine :: SplittingFunction b -> Cofree (Siphon b e) a -> SiphonOp e r a -> SiphonOp e r b
-entwine = undefined
+entwine :: forall e b r a. SplittingFunction b -> Cofree (Siphon b e) a -> SiphonOp e r a -> SiphonOp e r b
+entwine splitter (x :< sx) (runSiphon . getSiphonOp -> original) = 
+    let 
+        hoistedSplitter :: (Producer b IO r -> FreeT (Producer b IO) IO r) -> Producer b IO r -> FreeT (Producer b (ExceptT e IO)) (ExceptT e (StateT () IO)) r
+        hoistedSplitter sf = transFreeT (hoist lift) . hoistFreeT (lift . lift) . sf
+    in
+    SiphonOp $ siphon' $ \producer -> undefined
 
 nest :: SplittingFunction b -> Siphon b e a -> SiphonOp e r a -> SiphonOp e r b
 nest = undefined
