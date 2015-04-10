@@ -16,6 +16,7 @@ module System.Process.Streaming.Internal (
         Siphon_(..),
         exhaustive,
         Lines(..),
+        Splitter(..),
         combined,
         manyCombined,
         Stage(..)
@@ -383,6 +384,8 @@ data Lines e = Lines
 instance Functor Lines where
   fmap f (Lines func lt) = Lines (\x y z -> fmap (bimap f id) $ func x y z) lt
 
+
+newtype Splitter b = Splitter { getSplitter :: forall r. Producer b IO r -> FreeT (Producer b IO) IO r } 
 
 
 {-|

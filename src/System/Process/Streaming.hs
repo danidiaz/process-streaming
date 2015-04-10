@@ -79,8 +79,11 @@ module System.Process.Streaming (
         , contramapEnumerable
         , contraproduce
         , contraencoded
-        , SplittingFunction
+        , Splitter 
+        , splitter
         , splitIntoLines
+        , tweakSplits
+        , rejoin 
         , nest
         -- * Handling lines
         , Lines
@@ -125,6 +128,7 @@ import Control.Applicative
 import Control.Applicative.Lift
 import Control.Monad
 import Control.Monad.Trans.Free hiding (Pure)
+import qualified Control.Monad.Trans.Free as FREE
 import Control.Monad.Trans.Except
 import qualified Control.Foldl as L
 import Control.Exception
@@ -589,15 +593,32 @@ contraencoded :: DecodingFunction bytes text
 contraencoded decoder leftovers (SiphonOp siph) = SiphonOp $ 
     encoded decoder leftovers siph
 
+splitter :: (forall r. Producer b IO r -> FreeT (Producer b IO) IO r) -> Splitter b
+splitter = Splitter
 
-type SplittingFunction text = forall r. Producer text IO r -> FreeT (Producer text IO) IO r
+tweakSplits :: (forall r. Producer b IO r -> Producer b IO r) -> Splitter b -> Splitter b
+tweakSplits f (Splitter s) = Splitter $ fmap (transFreeT f) s
 
-splitIntoLines :: SplittingFunction T.Text 
-splitIntoLines = getConst . T.lines Const
 
-nest :: SplittingFunction b -> Siphon b Void a -> SiphonOp e r a -> SiphonOp e r b
-nest splitter nested = 
-    contraproduce $ \producer -> iterT runRow (hoistFreeT lift $ splitter producer)
+-- code copied from the "concats" function from the pipes-group package
+rejoin :: forall b r. Splitter b -> Producer b IO r -> Producer b IO r
+rejoin (Splitter f) = go . f 
+  where
+    go f = do
+        x <- lift (runFreeT f)
+        case x of
+            FREE.Pure r -> return r
+            Free p -> do
+                f' <- p
+                go f'
+
+
+splitIntoLines :: Splitter T.Text 
+splitIntoLines = splitter $ getConst . T.lines Const
+
+nest :: Splitter b -> Siphon b Void a -> SiphonOp e r a -> SiphonOp e r b
+nest (Splitter sp) nested = 
+    contraproduce $ \producer -> iterT runRow (hoistFreeT lift $ sp producer)
   where
     runRow p = do
         (r, innerprod) <- lift $ fmap (either absurd id) (runSiphon nested p)
