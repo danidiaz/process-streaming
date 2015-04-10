@@ -81,7 +81,6 @@ module System.Process.Streaming (
         , contraencoded
         , SplittingFunction
         , splitIntoLines
-        , entwine
         , nest
         -- * Handling lines
         , Lines
@@ -124,7 +123,6 @@ import Data.Void
 import Data.List.NonEmpty
 import Control.Applicative
 import Control.Applicative.Lift
-import Control.Comonad.Cofree
 import Control.Monad
 import Control.Monad.Trans.Free hiding (Pure)
 import Control.Monad.Trans.Except
@@ -576,6 +574,9 @@ encoded decoder (Siphon (unLift -> policy)) (Siphon (unLift -> activity)) =
         pure (f a,r)
 
 
+{-|
+    Like encoded, but works on 'SiphonOp's and never changes the return type. 
+ -}
 contraencoded :: DecodingFunction bytes text
         -- ^ A decoding function.
         -> Siphon bytes e (a -> a)
@@ -594,17 +595,13 @@ type SplittingFunction text = forall r. Producer text IO r -> FreeT (Producer te
 splitIntoLines :: SplittingFunction T.Text 
 splitIntoLines = getConst . T.lines Const
 
-entwine :: forall e b r a. SplittingFunction b -> Cofree (Siphon b e) a -> SiphonOp e r a -> SiphonOp e r b
-entwine splitter (x :< sx) (runSiphon . getSiphonOp -> original) = 
-    let 
-        hoistedSplitter :: (Producer b IO r -> FreeT (Producer b IO) IO r) -> Producer b IO r -> FreeT (Producer b (ExceptT e IO)) (ExceptT e (StateT () IO)) r
-        hoistedSplitter sf = transFreeT (hoist lift) . hoistFreeT (lift . lift) . sf
-    in
-    SiphonOp $ siphon' $ \producer -> undefined
-
-nest :: SplittingFunction b -> Siphon b e a -> SiphonOp e r a -> SiphonOp e r b
-nest = undefined
-
+nest :: SplittingFunction b -> Siphon b Void a -> SiphonOp e r a -> SiphonOp e r b
+nest splitter nested = 
+    contraproduce $ \producer -> iterT runRow (hoistFreeT lift $ splitter producer)
+  where
+    runRow p = do
+        (r, innerprod) <- lift $ fmap (either absurd id) (runSiphon nested p)
+        innerprod <* P.yield r
 
 {-|
     A newtype wrapper with functions for working on the inputs of
