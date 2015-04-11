@@ -579,31 +579,48 @@ encoded decoder (Siphon (unLift -> policy)) (Siphon (unLift -> activity)) =
 
 
 {-|
-    Like encoded, but works on 'SiphonOp's and never changes the return type. 
+    Like encoded, but works on 'SiphonOp's. 
  -}
 contraencoded :: DecodingFunction bytes text
         -- ^ A decoding function.
-        -> Siphon bytes e (a -> a)
+        -> Siphon bytes e (a -> b)
         -- ^ A 'Siphon' that determines how to handle decoding leftovers.
         -- Pass @pure id@ to ignore leftovers. Pass @unwanted id@ to abort
         -- the computation with an explicit error if leftovers remain. Pass
         -- '_leftoverX' to throw a 'LeftoverException' if leftovers remain.
         -> SiphonOp e a text
-        -> SiphonOp e a bytes 
+        -> SiphonOp e b bytes 
 contraencoded decoder leftovers (SiphonOp siph) = SiphonOp $ 
     encoded decoder leftovers siph
 
+
+{-|
+    Build a 'Splitter' out of a function that splits a 'Producer' while
+    preserving streaming.
+
+    See the section /FreeT Transformations/ in the documentation for the
+    /pipes-text/ package, and also the documentation for the /pipes-group/
+    package.
+-}
 splitter :: (forall r. Producer b IO r -> FreeT (Producer b IO) IO r) -> Splitter b
 splitter = Splitter
 
+{-|
+    Specifies a transformation that will be applied to each individual
+    split, represented as a 'Producer'.
+-}
 tweakSplits :: (forall r. Producer b IO r -> Producer b IO r) -> Splitter b -> Splitter b
 tweakSplits f (Splitter s) = Splitter $ fmap (transFreeT f) s
 
 
--- code copied from the "concats" function from the pipes-group package
+{-|
+    Flattens the 'Splitter', returning a function from 'Producer' to
+    'Producer' which can be passed to functions like 'contraproduce'.
+-}
 rejoin :: forall b r. Splitter b -> Producer b IO r -> Producer b IO r
 rejoin (Splitter f) = go . f 
   where
+    -- code copied from the "concats" function from the pipes-group package
     go f = do
         x <- lift (runFreeT f)
         case x of
@@ -616,6 +633,10 @@ rejoin (Splitter f) = go . f
 splitIntoLines :: Splitter T.Text 
 splitIntoLines = splitter $ getConst . T.lines Const
 
+
+{-|
+    Process each individual split created by a 'Splitter' using a 'Siphon'.
+ -}
 nest :: Splitter b -> Siphon b Void a -> SiphonOp e r a -> SiphonOp e r b
 nest (Splitter sp) nested = 
     contraproduce $ \producer -> iterT runRow (hoistFreeT lift $ sp producer)
