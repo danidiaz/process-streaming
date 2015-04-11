@@ -643,7 +643,7 @@ nest (Splitter sp) nested =
   where
     runRow p = do
         (r, innerprod) <- lift $ fmap (either absurd id) (runSiphon nested p)
-        innerprod <* P.yield r
+        P.yield r >> innerprod
 
 {-|
     A newtype wrapper with functions for working on the inputs of

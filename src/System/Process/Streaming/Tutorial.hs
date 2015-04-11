@@ -65,6 +65,9 @@ module System.Process.Streaming.Tutorial (
 
     -- * Early termination
     -- $earlytermination
+
+    -- * Collecting @stdout@ as lines of Text
+    -- $collstdouttextlines
     ) where
 
 import System.Process.Streaming
@@ -214,3 +217,22 @@ computation and terminates the external program.
 >>> executeFallibly (pipeo (siphon (\_ -> return (Left "oops")))) (shell "sleep infinity")
 Left "oops"
 -}
+
+
+{- $collstdouttextlines  
+
+
+>>> :{ 
+   let 
+      osiphon
+          = getSiphonOp 
+          $ contraencoded decodeUtf8 (pure id) 
+          $ nest splitIntoLines intoLazyText 
+          $ SiphonOp intoList
+   in 
+   execute (pipeo osiphon) (shell "{ echo aa ; echo bb ; }")
+   :}
+(ExitSuccess,["aa","bb"])
+-}
+
+
