@@ -25,19 +25,12 @@ module System.Process.Streaming.Extended (
     ) where
 
 import Data.Text 
-import Data.Void
-import Data.Monoid
 import Control.Applicative
 import Control.Exception
 import Control.Concurrent.Conceit
-import Control.Monad
-import Control.Monad.Trans.Except
 import Pipes.ByteString
 import System.IO
 
-import Pipes
-import Pipes.Core
-import qualified Pipes.Prelude as P
 import System.Process.Streaming
 import System.Process.Streaming.Internal
 

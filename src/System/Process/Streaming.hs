@@ -111,7 +111,6 @@ module System.Process.Streaming (
         , T.decodeIso8859_1
     ) where
 
-import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
 import Data.Functor.Contravariant
 import Data.Functor.Contravariant.Divisible
@@ -232,18 +231,27 @@ executeInternal record somePrism allocator = mask $ \restore -> do
             throwIO (userError "stdin/stdout/stderr handle unwantedly null")
             `finally`
             terminateCarefully phandle 
-        Just t -> 
-            let (action,cleanup) = allocator t in
+        Just t -> do
+            latch <- newEmptyMVar
+            let (action,cleanup) = allocator t
+                innerRace = _runConceit $
+                    (_Conceit (takeMVar latch >> terminateOnError phandle action))
+                    <|>   
+                    (_Conceit (onException (putMVar latch () >> _runConceit Control.Applicative.empty) 
+                                           (terminateCarefully phandle))) 
             -- Handles must be closed *after* terminating the process, because a close
             -- operation may block if the external process has unflushed bytes in the stream.
-            (restore (terminateOnError phandle action) `onException` terminateCarefully phandle) `finally` cleanup 
+            (restore innerRace `onException` terminateCarefully phandle) `finally` cleanup 
+
 
 
 terminateCarefully :: ProcessHandle -> IO ()
 terminateCarefully pHandle = do
     mExitCode <- getProcessExitCode pHandle   
     case mExitCode of 
-        Nothing -> terminateProcess pHandle  
+        Nothing -> catch 
+            (terminateProcess pHandle) 
+            (\(_::IOException) -> return ())
         Just _ -> return ()
 
 terminateOnError :: ProcessHandle 

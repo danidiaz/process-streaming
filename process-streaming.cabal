@@ -1,5 +1,5 @@
 name:          process-streaming
-version:       0.7.2.0
+version:       0.7.2.1
 license:       BSD3
 license-file:  LICENSE
 data-files:    
@@ -44,7 +44,7 @@ Library
         void >= 0.6 && < 1.0,
         containers >= 0.4,
         semigroups >= 0.15 && < 0.20,
-        conceit >= 0.2.2.1 && < 0.3.0.0,
+        conceit >= 0.3.1.0 && < 0.4.0.0,
         contravariant >= 1.2,
         foldl >= 1.0.7
 
