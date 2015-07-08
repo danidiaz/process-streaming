@@ -1,5 +1,5 @@
 name:          process-streaming
-version:       0.7.2.1
+version:       0.7.2.2
 license:       BSD3
 license-file:  LICENSE
 data-files:    
@@ -31,20 +31,20 @@ Library
         transformers >= 0.2 && < 0.5,
         transformers-compat >= 0.3,
         free >= 4.2 && < 5,
-        bifunctors >= 4.1 && < 5,
+        bifunctors >= 4.1 && < 6,
         process >= 1.2.0 && < 1.3,
         pipes >= 4.1.3 && < 4.2,
         pipes-bytestring >= 2.1.0 && < 2.2,
         pipes-text >= 0.0.0.10 && < 0.0.2,
         bytestring,
-        text >= 0.11.2 && < 1.2.1,
+        text >= 0.11.2 && < 1.3,
         pipes-concurrency >= 2.0.2 && < 3,
         pipes-safe >= 2.2.0 && < 3,
         pipes-parse >=3.0.1 && <3.1,
         void >= 0.6 && < 1.0,
         containers >= 0.4,
         semigroups >= 0.15 && < 0.20,
-        conceit >= 0.3.1.0 && < 0.4.0.0,
+        conceit >= 0.3.2.0 && < 0.4.0.0,
         contravariant >= 1.2,
         foldl >= 1.0.7
 
@@ -63,12 +63,12 @@ Test-suite test
       , transformers >= 0.2 && < 0.5
       , transformers-compat >= 0.3
       , free >= 4.2 && < 5
-      , bifunctors >= 4.1 && < 5
+      , bifunctors >= 4.1 && < 6
       , process >= 1.2.0 && < 1.3
       , pipes >= 4.1.2 && < 4.2
       , pipes-bytestring >= 2.1.0 && < 2.2
       , pipes-text >= 0.0.0.10 && < 0.0.2
-      , text >= 0.11.2 && < 1.2.1
+      , text >= 0.11.2 && < 1.3
       , pipes-concurrency >= 2.0.3 && < 3
       , pipes-safe >= 2.2.0 && < 3
       , pipes-parse >=3.0.1 && <3.1
@@ -95,20 +95,20 @@ test-suite doctests
   build-depends:
         base >= 4.4 && < 5
       , transformers >= 0.2 && < 0.5
-      , transformers-compat == 0.3
+      , transformers-compat >= 0.3
       , free >= 4.2 && < 5
-      , bifunctors >= 4.1 && < 5
+      , bifunctors >= 4.1 && < 6
       , process >= 1.2.0 && < 1.3
       , pipes >= 4.1.2 && < 4.2
       , pipes-bytestring >= 2.1.0 && < 2.2
       , pipes-text >= 0.0.0.10 && < 0.0.2
-      , text >= 0.11.2 && < 1.2
+      , text >= 0.11.2 && < 1.3
       , pipes-concurrency >= 2.0.3 && < 3
       , pipes-safe >= 2.2.0 && < 3
       , pipes-parse >=3.0.1 && <3.1
       , exceptions >= 0.6.0 && < 1
-      , void >= 0.6 && < 0.7
-      , semigroups >= 0.15 && < 0.16
+      , void >= 0.6 && < 1.0
+      , semigroups >= 0.15 && < 0.20
       , containers >= 0.4
       , process-streaming
       , tasty >= 0.9
