@@ -1397,18 +1397,18 @@ executeInternal' record (Streams streams) = mask $ \restore -> do
     (mstdin,mstdout,mstderr,phandle) <- createProcess record
     let (clientx,cleanupx) = case mstdin of
             Nothing -> (pure (),pure ())
-            Just handle -> (toHandle handle, hClose handle) 
-        producer1x = case mstdout of
-            Nothing -> pure ()
-            Just handle -> fromHandle handle
-        producer2x = case mstderr of
-            Nothing -> pure ()
-            Just handle -> fromHandle handle
+            Just handle -> (toHandle handle,hClose handle) 
+        (producer1x,cleanup1) = case mstdout of
+            Nothing -> (pure (),pure())
+            Just handle -> (fromHandle handle,hClose handle)
+        (producer2x,cleanup2) = case mstderr of
+            Nothing -> (pure (),pure ())
+            Just handle -> (fromHandle handle,hClose handle)
         streams' = 
               runConceit
             . dap
             . trans2 (\f -> Conceit (fmap (fmap (\(x,_,_) -> x)) (Pipes.Transduce.fold2Fallibly f producer1x producer2x)))
-            . trans1 (\f -> Conceit (feed1Fallibly f clientx <* cleanupx))
+            . trans1 (\f -> Conceit (feed1Fallibly f clientx `finally` cleanupx))
             $ streams 
     latch <- newEmptyMVar
     let innerAction = _runConceit $
@@ -1416,7 +1416,7 @@ executeInternal' record (Streams streams) = mask $ \restore -> do
             <|>   
             (_Conceit (onException (putMVar latch () >> _runConceit Control.Applicative.empty) 
                                    (terminateCarefully phandle))) 
-    (restore innerAction `onException` terminateCarefully phandle) `finally` cleanupx 
+    (restore innerAction `onException` terminateCarefully phandle) `finally` cleanup1 `finally` cleanup2
 --    let (clientx,cleanupx,producer1x,producer2x) = 
 --            case (mstdin,mstdout,mstderr) of
 --                (Just stdinHandle,Just stdoutHandle,Just stderrHandle) ->
