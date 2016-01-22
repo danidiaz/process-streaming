@@ -147,6 +147,8 @@ import Pipes.Safe (SafeT, runSafeT)
 import System.IO
 import System.Process
 import System.Process.Lens
+import Pipes.Transduce (Fold1,Fold2)
+import qualified Pipes.Transduce
 import System.Exit
 
 {-|
@@ -1313,5 +1315,141 @@ instance Functor (Stage) where
     fmap f (Stage a b c d) = Stage a (fmap f b) (bimap f id . c) (hoist (mapExceptT $ liftM (bimap f id)) . d)
 
 
+---
 
+newtype Feed1 b e a = Feed1 (Lift (Feed1_ b e) a) deriving (Functor)
 
+newtype Feed1_ b e a = Feed1_ { runFeed1_ :: Consumer b IO () -> IO (Either e a) } deriving Functor
+
+feed1Fallibly :: Feed1 b e a -> Consumer b IO () -> IO (Either e a)
+feed1Fallibly (Feed1 (unLift -> s)) = runFeed1_ s
+
+feed1 :: Feed1 b Void a -> Consumer b IO () -> IO a
+feed1 (Feed1 (unLift -> s)) = liftM (either absurd id) . runFeed1_ s
+
+instance Bifunctor (Feed1_ b) where
+  bimap f g (Feed1_ x) = Feed1_ $ fmap (liftM  (bimap f g)) x
+
+{-| 
+    'first' is useful to massage errors.
+-}
+instance Bifunctor (Feed1 b) where
+    bimap f g (Feed1 x) = Feed1 (case x of
+        Pure a -> Pure (g a)
+        Other o -> Other (bimap f g o))
+
+instance Applicative (Feed1 b e) where
+    pure a = Feed1 (pure a)
+    Feed1 fa <*> Feed1 a = Feed1 (fa <*> a)
+
+{-| 
+    'pure' writes nothing to @stdin@.
+    '<*>' sequences the writes to @stdin@.
+-}
+instance Applicative (Feed1_ b e) where
+  pure = Feed1_ . pure . pure . pure
+  Feed1_ fs <*> Feed1_ as = 
+      Feed1_ $ \consumer -> do
+          (outbox1,inbox1,seal1) <- spawn' (bounded 1)
+          (outbox2,inbox2,seal2) <- spawn' (bounded 1)
+          runConceit $ 
+              Conceit (runExceptT $ do
+                           r1 <- ExceptT $ (fs $ toOutput outbox1) 
+                                               `finally` atomically seal1
+                           r2 <- ExceptT $ (as $ toOutput outbox2) 
+                                               `finally` atomically seal2
+                           return $ r1 r2 
+                      )
+              <* 
+              Conceit (do
+                         (runEffect $
+                             (fromInput inbox1 >> fromInput inbox2) >-> consumer)
+                            `finally` atomically seal1
+                            `finally` atomically seal2
+                         runExceptT $ pure ()
+                      )
+
+instance (Monoid a) => Monoid (Feed1 b e a) where
+   mempty = pure mempty
+   mappend s1 s2 = (<>) <$> s1 <*> s2
+
+withProducer :: Producer b IO r -> Feed1 b e ()
+withProducer producer = Feed1 . Other . Feed1_ $ \consumer -> fmap pure $ runEffect (void producer >-> consumer) 
+
+withProducerM :: MonadIO m => (m () -> IO (Either e a)) -> Producer b m r -> Feed1 b e a 
+withProducerM whittle producer = Feed1 . Other . Feed1_ $ \consumer -> whittle $ runEffect (void producer >-> hoist liftIO consumer) 
+
+withSafeProducer :: Producer b (SafeT IO) r -> Feed1 b e ()
+withSafeProducer = withProducerM (fmap pure . runSafeT)
+
+withFallibleProducer :: Producer b (ExceptT e IO) r -> Feed1 b e ()
+withFallibleProducer = withProducerM runExceptT
+
+newtype Streams e r = Streams { 
+        getStreams :: Day (Feed1 ByteString e) (Fold2 ByteString ByteString e) r 
+    } deriving (Functor)
+
+executeInternal' :: 
+       CreateProcess 
+    -> Streams e a
+    -> IO (Either e (ExitCode,a))
+executeInternal' record (Streams streams) = mask $ \restore -> do
+    (mstdin,mstdout,mstderr,phandle) <- createProcess record
+    let (clientx,cleanupx) = case mstdin of
+            Nothing -> (pure (),pure ())
+            Just handle -> (toHandle handle, hClose handle) 
+        producer1x = case mstdout of
+            Nothing -> pure ()
+            Just handle -> fromHandle handle
+        producer2x = case mstderr of
+            Nothing -> pure ()
+            Just handle -> fromHandle handle
+        streams' = 
+              runConceit
+            . dap
+            . trans2 (\f -> Conceit (fmap (fmap (\(x,_,_) -> x)) (Pipes.Transduce.fold2Fallibly f producer1x producer2x)))
+            . trans1 (\f -> Conceit (feed1Fallibly f clientx <* cleanupx))
+            $ streams 
+    latch <- newEmptyMVar
+    let innerAction = _runConceit $
+            (_Conceit (takeMVar latch >> terminateOnError phandle streams'))
+            <|>   
+            (_Conceit (onException (putMVar latch () >> _runConceit Control.Applicative.empty) 
+                                   (terminateCarefully phandle))) 
+    (restore innerAction `onException` terminateCarefully phandle) `finally` cleanupx 
+--    let (clientx,cleanupx,producer1x,producer2x) = 
+--            case (mstdin,mstdout,mstderr) of
+--                (Just stdinHandle,Just stdoutHandle,Just stderrHandle) ->
+--                    (toHandle stdinHandle,hClose stdinHandle,fromHandle stdoutHandle,fromHandle stderrHandle)
+--                (Just stdinHandle,Just stdoutHandle,Nothing          ) ->
+--                    (toHandle stdinHandle,hClose stdinHandle,fromHandle stdoutHandle,pure ())
+--                (Just stdinHandle,Nothing          ,Just stderrHandle) ->
+--                    (toHandle stdinHandle,hClose stdinHandle,pure (),fromHandle stderrHandle)
+--                (Just stdinHandle,Nothing          ,Nothing          ) ->
+--                    (toHandle stdinHandle,hClose stdinHandle,pure (),pure ())
+--                (Nothing         ,Just stdoutHandle,Just stderrHandle) ->
+--                    (pure (),pure(),fromHandle stdoutHandle,fromHandle stderrHandle)
+--                (Nothing         ,Just stdoutHandle,Nothing          ) ->
+--                    (pure (),pure(),fromHandle stdoutHandle,pure ())
+--                (Nothing         ,Nothing          ,Just stderrHandle) ->
+--                    (pure (),pure(),pure (),fromHandle stderrHandle)
+--                (Nothing         ,Nothing          ,Nothing          ) -> 
+--                    (pure (),pure(),pure (),pure ())
+
+--        (Just stdinHandle
+--    case getFirst . getConst . somePrism (Const . First . Just) $ (mi,mout,merr) of
+--        Nothing -> 
+--            throwIO (userError "stdin/stdout/stderr handle unwantedly null")
+--            `finally`
+--            terminateCarefully phandle 
+--        Just t -> do
+--            latch <- newEmptyMVar
+--            let (action,cleanup) = allocator t
+--                innerRace = _runConceit $
+--                    (_Conceit (takeMVar latch >> terminateOnError phandle action))
+--                    <|>   
+--                    (_Conceit (onException (putMVar latch () >> _runConceit Control.Applicative.empty) 
+--                                           (terminateCarefully phandle))) 
+--            -- Handles must be closed *after* terminating the process, because a close
+--            -- operation may block if the external process has unflushed bytes in the stream.
+--            (restore innerRace `onException` terminateCarefully phandle) `finally` cleanup 
