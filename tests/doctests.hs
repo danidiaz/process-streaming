@@ -8,4 +8,4 @@ import System.FilePath
 import Test.DocTest
 
 main :: IO ()
-main = doctest ["src/System/Process/Streaming/Tutorial.hs"]
+main = doctest ["src/System/Process/Streaming.hs"]

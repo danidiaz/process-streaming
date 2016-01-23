@@ -343,43 +343,5 @@ decodeFailure = executeFallibly
             (encoded decodeAscii (unwanted id) intoLazyText)) 
     (shell "cat")
 
-
-testDecodeFailureX :: TestTree
-testDecodeFailureX  = localOption (mkTimeout $ 20*(10^6)) $
-    testCase "testDecodeFailureX" $ do
-        r <- tryLeftoverB decodeFailureX
-        case r of 
-            Left (LeftoverException _ nonAscii) -> return ()
-            _ -> assertFailure "oops"
-
-tryLeftoverB :: IO a -> IO (Either (LeftoverException Data.ByteString.ByteString) a)
-tryLeftoverB = Control.Exception.try
-
-decodeFailureX :: IO (ExitCode,((),TL.Text))
-decodeFailureX = execute
-    (pipeio (fromLazyBytes ("aaaaaaaa" <> nonAscii)) 
-            (encoded decodeAscii _leftoverX intoLazyText)) 
-    (shell "cat")
-
--------------------------------------------------------------------------------
-
-testPiapIn :: TestTree
-testPiapIn = localOption (mkTimeout $ 5*(10^6)) $
-    testCase "piapIn" $ do
-        r <- piapIn
-        case r of
-            (ExitSuccess,"aaabbb") -> return ()
-            _ -> assertFailure "oops"
-
-piapIn :: IO (ExitCode, BL.ByteString)
-piapIn = execute piping (shell "cat")
-  where 
-    piping = toPiping $ 
-      piapi (fromLazyBytes "aaa")  
-      *>
-      piapi (fromLazyBytes "bbb")  
-      *>
-      piapo intoLazyBytes 
-
 -------------------------------------------------------------------------------
 

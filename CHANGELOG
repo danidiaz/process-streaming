@@ -1,3 +1,11 @@
+0.8.0.0
+-------
+- All Siphon functionality has been moved to new package pipes-transduce.
+- Siphons correspond to the "Fold1" datatype in pipes-transduce.
+- "Piping" is now the "Streams" Applicative.
+- Exit code handling has been merged into the "Streams" Applicative. 
+- Removed pipeline functions.
+
 0.7.2.1
 -------
 - Asynchronous cancellation now works on Windows (issue #8)
