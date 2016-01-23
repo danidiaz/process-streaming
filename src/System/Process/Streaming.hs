@@ -19,7 +19,6 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE ViewPatterns #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE FlexibleInstances #-}
 
 
@@ -56,47 +55,34 @@ module System.Process.Streaming (
         , module System.Process
     ) where
 
-import qualified Data.ByteString.Lazy as BL
-import Data.Functor.Contravariant
-import Data.Functor.Contravariant.Divisible
+import qualified Data.ByteString.Lazy
 import Data.Monoid
 import Data.Foldable
-import Data.Typeable
 import Data.Bifunctor
-import qualified Data.Text
-import qualified Data.Text.Encoding
-import qualified Data.Text.Lazy
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding
 import Data.Text 
-import Data.Text.Encoding hiding (decodeUtf8)
+import qualified Data.Text.Encoding 
+import qualified Data.Text.Lazy
+import qualified Data.Text.Lazy.Encoding
 import Data.Void
-import Data.Functor.Day
+import Data.Functor.Day 
 import Data.Profunctor (Star(..))
 import Control.Applicative
 import Control.Applicative.Lift
 import Control.Monad
-import Control.Monad.Trans.Free hiding (Pure)
 import Control.Monad.Trans.Except
-import qualified Control.Foldl as L
-import Control.Exception
+import Control.Exception (onException,catch,IOException,mask,finally)
 import Control.Concurrent
 import Control.Concurrent.Conceit
 import Pipes
-import qualified Pipes as P
-import qualified Pipes.Prelude as P
+import qualified Pipes.Prelude
 import Pipes.ByteString
-import Pipes.Parse
-import qualified Pipes.Text as T
-import qualified Pipes.Text.Encoding as T
 import Pipes.Concurrent
 import Pipes.Safe (SafeT,runSafeT)
-import System.IO
-import System.Process
-import System.Process.Lens
 import Pipes.Transduce (Fold1,Fold2)
 import qualified Pipes.Transduce
 import qualified Pipes.Transduce.ByteString
+import System.IO
+import System.Process
 import System.Exit
 
 {-|
@@ -138,9 +124,6 @@ newtype Feed1_ b e a = Feed1_ { runFeed1_ :: Consumer b IO () -> IO (Either e a)
 
 feed1Fallibly :: Feed1 b e a -> Consumer b IO () -> IO (Either e a)
 feed1Fallibly (Feed1 (unLift -> s)) = runFeed1_ s
-
-feed1 :: Feed1 b Void a -> Consumer b IO () -> IO a
-feed1 (Feed1 (unLift -> s)) = liftM (either absurd id) . runFeed1_ s
 
 instance Bifunctor (Feed1_ b) where
   bimap f g (Feed1_ x) = Feed1_ $ fmap (liftM  (bimap f g)) x
@@ -224,13 +207,13 @@ liftFold2 f2 = Streams $
 feedBytes :: Foldable f => f ByteString -> Streams e ()
 feedBytes = feedProducer . each
 
-feedLazyBytes :: BL.ByteString -> Streams e ()
+feedLazyBytes :: Data.ByteString.Lazy.ByteString -> Streams e ()
 feedLazyBytes = feedProducer . fromLazy 
 
 feedUtf8 :: Foldable f => f Text -> Streams e ()
-feedUtf8 = feedProducer . (\p -> p >-> P.map Data.Text.Encoding.encodeUtf8) . each
+feedUtf8 = feedProducer . (\p -> p >-> Pipes.Prelude.map Data.Text.Encoding.encodeUtf8) . each
 
-feedLazyUtf8 :: TL.Text -> Streams e ()
+feedLazyUtf8 :: Data.Text.Lazy.Text -> Streams e ()
 feedLazyUtf8 = feedProducer . fromLazy . Data.Text.Lazy.Encoding.encodeUtf8
 
 feedProducer :: Producer ByteString IO () -> Streams e ()
@@ -248,9 +231,7 @@ feedFallibleProducer = feedProducerM runExceptT
 feedCont :: (Consumer ByteString IO () -> IO (Either e a)) -> Streams e a
 feedCont = liftFeed1 . Feed1 . Other . Feed1_
 
-newtype Streams e r = Streams { 
-        getStreams :: Day (Day (Feed1 ByteString e) (Fold2 ByteString ByteString e)) (Star (ExceptT e IO) ExitCode) r 
-    } deriving (Functor)
+newtype Streams e r = Streams (Day (Day (Feed1 ByteString e) (Fold2 ByteString ByteString e)) (Star (ExceptT e IO) ExitCode) r) deriving (Functor)
 
 instance Bifunctor Streams where
     bimap f g (Streams d)  = Streams $ fmap g $
