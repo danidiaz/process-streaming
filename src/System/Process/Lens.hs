@@ -41,7 +41,7 @@ import System.Process
     > _cmdspec :: Lens' CreateProcess CmdSpec 
 -}
 _cmdspec :: forall f. Functor f => (CmdSpec -> f CmdSpec) -> CreateProcess -> f CreateProcess 
-_cmdspec f c = setCmdSpec c <$> f (cmdspec c)
+_cmdspec f x = setCmdSpec x <$> f (cmdspec x)
     where
     setCmdSpec c cmdspec' = c { cmdspec = cmdspec' } 
 
@@ -72,7 +72,7 @@ _RawCommand f quad = case impure quad of
     > _cwd :: Lens' CreateProcess (Maybe FilePath)
 -}
 _cwd :: forall f. Functor f => (Maybe FilePath -> f (Maybe FilePath)) -> CreateProcess -> f CreateProcess 
-_cwd f c = setCwd c <$> f (cwd c)
+_cwd f x = setCwd x <$> f (cwd x)
     where
     setCwd c cwd' = c { cwd = cwd' } 
 
@@ -80,7 +80,7 @@ _cwd f c = setCwd c <$> f (cwd c)
     > _env :: Lens' CreateProcess (Maybe [(String,String)])
 -}
 _env :: forall f. Functor f => (Maybe [(String, String)] -> f (Maybe [(String, String)])) -> CreateProcess -> f CreateProcess 
-_env f c = setEnv c <$> f (env c)
+_env f x = setEnv x <$> f (env x)
     where
     setEnv c env' = c { env = env' } 
 
@@ -90,7 +90,7 @@ _env f c = setEnv c <$> f (env c)
     > std_streams :: Lens' CreateProcess (StdStream,StdStream,StdStream)
 -}
 std_streams :: forall f. Functor f => ((StdStream,StdStream,StdStream) -> f (StdStream,StdStream,StdStream)) -> CreateProcess -> f CreateProcess 
-std_streams f c = setStreams c <$> f (getStreams c)
+std_streams f x = setStreams x <$> f (getStreams x)
     where 
         getStreams c = (std_in c,std_out c, std_err c)
         setStreams c (s1,s2,s3) = c { std_in  = s1 
@@ -99,52 +99,52 @@ std_streams f c = setStreams c <$> f (getStreams c)
                                     } 
 
 _std_in :: forall f. Functor f => (StdStream -> f (StdStream)) -> CreateProcess -> f CreateProcess 
-_std_in f c = setStreams c <$> f (getStreams c)
+_std_in f x = setStreams x <$> f (getStreams x)
     where 
         getStreams c = std_in c
         setStreams c s1 = c { std_in  = s1 } 
 
 _std_out :: forall f. Functor f => (StdStream -> f (StdStream)) -> CreateProcess -> f CreateProcess 
-_std_out f c = setStreams c <$> f (getStreams c)
+_std_out f x = setStreams x <$> f (getStreams x)
     where 
         getStreams c = std_out c
         setStreams c s1 = c { std_out  = s1 } 
 
 _std_err :: forall f. Functor f => (StdStream -> f (StdStream)) -> CreateProcess -> f CreateProcess 
-_std_err f c = setStreams c <$> f (getStreams c)
+_std_err f x = setStreams x <$> f (getStreams x)
     where 
         getStreams c = std_err c
         setStreams c s1 = c { std_err = s1 } 
 
 _close_fds :: forall f. Functor f => (Bool -> f Bool) -> CreateProcess -> f CreateProcess 
-_close_fds f c = set_close_fds c <$> f (close_fds c)
+_close_fds f x = set_close_fds x <$> f (close_fds x)
     where
     set_close_fds c v = c { close_fds = v } 
 
 
 _create_group :: forall f. Functor f => (Bool -> f Bool) -> CreateProcess -> f CreateProcess 
-_create_group f c = set_create_group c <$> f (create_group c)
+_create_group f x = set_create_group x <$> f (create_group x)
     where
     set_create_group c v = c { create_group = v } 
 
 _delegate_ctlc :: forall f. Functor f => (Bool -> f Bool) -> CreateProcess -> f CreateProcess 
-_delegate_ctlc f c = set_delegate_ctlc c <$> f (delegate_ctlc c)
+_delegate_ctlc f x = set_delegate_ctlc x <$> f (delegate_ctlc x)
     where
     set_delegate_ctlc c v = c { delegate_ctlc = v } 
 
 #if MIN_VERSION_process(1,3,0)
 _detach_console :: forall f. Functor f => (Bool -> f Bool) -> CreateProcess -> f CreateProcess 
-_detach_console f c = set_detach_console c <$> f (detach_console c)
+_detach_console f x = set_detach_console x <$> f (detach_console x)
     where
     set_detach_console c v = c { detach_console = v } 
 
 _create_new_console :: forall f. Functor f => (Bool -> f Bool) -> CreateProcess -> f CreateProcess 
-_create_new_console f c = set_create_new_console c <$> f (create_new_console c)
+_create_new_console f x = set_create_new_console x <$> f (create_new_console x)
     where
     set_create_new_console c v = c { create_new_console = v } 
 
 _new_session :: forall f. Functor f => (Bool -> f Bool) -> CreateProcess -> f CreateProcess 
-_new_session f c = set_new_session c <$> f (new_session c)
+_new_session f x = set_new_session x <$> f (new_session x)
     where
     set_new_session c v = c { new_session = v } 
 #endif
@@ -152,12 +152,12 @@ _new_session f c = set_new_session c <$> f (new_session c)
 
 #if MIN_VERSION_process(1,4,0)
 _child_group :: forall f. Functor f => (GroupID -> f GroupID) -> CreateProcess -> f CreateProcess 
-_child_group f c = set_child_group c <$> f (child_group c)
+_child_group f x = set_child_group x <$> f (child_group x)
     where
     set_child_group c v = c { child_group = v } 
 
 _child_user :: forall f. Functor f => (UserID -> f UserID) -> CreateProcess -> f CreateProcess 
-_child_user f c = set_child_user c <$> f (child_user c)
+_child_user f x = set_child_user x <$> f (child_user x)
     where
     set_child_user c v = c { child_user = v } 
 #endif
