@@ -125,6 +125,7 @@ import Data.Text.Encoding hiding (decodeUtf8)
 import Data.Void
 import Data.List.NonEmpty
 import Data.Functor.Day
+import Data.Profunctor (Star(..))
 import Control.Applicative
 import Control.Applicative.Lift
 import Control.Monad
@@ -1386,13 +1387,13 @@ withFallibleProducer :: Producer b (ExceptT e IO) r -> Feed1 b e ()
 withFallibleProducer = withProducerM runExceptT
 
 newtype Streams e r = Streams { 
-        getStreams :: Day (Feed1 ByteString e) (Fold2 ByteString ByteString e) r 
+        getStreams :: Day (Day (Feed1 ByteString e) (Fold2 ByteString ByteString e)) (Star (ExceptT e IO) ExitCode) r 
     } deriving (Functor)
 
 executeInternal' :: 
        CreateProcess 
     -> Streams e a
-    -> IO (Either e (ExitCode,a))
+    -> IO (Either e a)
 executeInternal' record (Streams streams) = mask $ \restore -> do
     (mstdin,mstdout,mstderr,phandle) <- createProcess record
     let (clientx,cleanupx) = case mstdin of
@@ -1405,14 +1406,23 @@ executeInternal' record (Streams streams) = mask $ \restore -> do
             Nothing -> (pure (),pure ())
             Just handle -> (fromHandle handle,hClose handle)
         streams' = 
-              runConceit
-            . dap
-            . trans2 (\f -> Conceit (fmap (fmap (\(x,_,_) -> x)) (Pipes.Transduce.fold2Fallibly f producer1x producer2x)))
-            . trans1 (\f -> Conceit (feed1Fallibly f clientx `finally` cleanupx))
+              dap
+            . trans1
+                ( 
+                  flip catchE (\e -> liftIO (terminateCarefully phandle) *> throwE e)
+                . ExceptT
+                . runConceit
+                . dap
+                . trans1 (\f -> Conceit (feed1Fallibly f clientx `finally` cleanupx))
+                . trans2 (\f -> Conceit (fmap (fmap (\(x,_,_) -> x)) (Pipes.Transduce.fold2Fallibly f producer1x producer2x)))
+                )
+            . trans2 (\exitCodeHandler -> do 
+                 c <- liftIO (waitForProcess phandle)
+                 runStar exitCodeHandler c)
             $ streams 
     latch <- newEmptyMVar
     let innerAction = _runConceit $
-            (_Conceit (takeMVar latch >> terminateOnError phandle streams'))
+            (_Conceit (takeMVar latch >> runExceptT streams'))
             <|>   
             (_Conceit (onException (putMVar latch () >> _runConceit Control.Applicative.empty) 
                                    (terminateCarefully phandle))) 
