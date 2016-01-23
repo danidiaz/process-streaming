@@ -72,7 +72,7 @@ testCollectStdoutStderrAsByteString = testCase "collectStdoutStderrAsByteString"
 collectStdoutStderrAsByteString :: IO (BL.ByteString,BL.ByteString)
 collectStdoutStderrAsByteString = 
     execute
-    (shell "{ echo ooo ; echo eee 1>&2 ; echo ppp ;  echo ffff 1>&2 ; }")
+    (pipedShell "{ echo ooo ; echo eee 1>&2 ; echo ppp ;  echo ffff 1>&2 ; }")
     (liftA2 (,) (fold1Out intoLazyBytes) (fold1Err intoLazyBytes))
 
 
@@ -87,7 +87,7 @@ testFeedStdinCollectStdoutAsText = testCase "feedStdinCollectStdoutAsText" $ do
 feedStdinCollectStdoutAsText :: IO Text
 feedStdinCollectStdoutAsText = 
     execute
-    (shell "cat")
+    (pipedShell "cat")
     (feedUtf8 (Just "aaaaaa\naaaaa") *> fold1Out (transduce1 utf8x intoLazyText))
 
 -- -------------------------------------------------------------------------------
@@ -112,7 +112,7 @@ feedStdinCollectStdoutAsText =
 --     (pipeoec (toLines T.decodeIso8859_1 (pure id))
 --              (tweakLines annotate $ toLines T.decodeIso8859_1 (pure id))    
 --              (withFold T.toLazyM))
---     (shell "{ echo ooo ; echo eee 1>&2 ; echo ppp ;  echo ffff 1>&2 ; }")
+--     (pipedShell "{ echo ooo ; echo eee 1>&2 ; echo ppp ;  echo ffff 1>&2 ; }")
 --   where
 --     annotate x = P.yield "errprefix: " *> x  
 -- 
@@ -129,7 +129,7 @@ feedStdinCollectStdoutAsText =
 -- interruptExecution :: IO (Either String (ExitCode,()))
 -- interruptExecution = executeFallibly
 --     (pipeo . siphon $ \_ -> runExceptT . throwE $ "interrupted")
---     (shell "sleep 100s")
+--     (pipedShell "sleep 100s")
 -- 
 -- -------------------------------------------------------------------------------
 -- 
@@ -144,7 +144,7 @@ feedStdinCollectStdoutAsText =
 -- failIfAnythingShowsInStderr :: IO (Either T.ByteString (ExitCode,()))
 -- failIfAnythingShowsInStderr = executeFallibly
 --     (pipee (unwanted ()))
---     (shell "{ echo morestuff 1>&2 ; sleep 100s ; }")
+--     (pipedShell "{ echo morestuff 1>&2 ; sleep 100s ; }")
 -- 
 -- -------------------------------------------------------------------------------
 -- 
@@ -167,7 +167,7 @@ feedStdinCollectStdoutAsText =
 -- twoTextParsersInParallel = executeFallibly
 --     (pipeo (encoded T.decodeIso8859_1 (pure id) $ 
 --                 (,) <$> adapt parser1 <*> adapt parser2))
---     (shell "{ echo ooaaoo ; echo aaooaoa; }")
+--     (pipedShell "{ echo ooaaoo ; echo aaooaoa; }")
 --   where
 --     adapt p = fromParser $ do
 --         r <- P.parse p
@@ -188,7 +188,7 @@ feedStdinCollectStdoutAsText =
 -- countWords = execute
 --     (pipeo (encoded T.decodeIso8859_1 (pure id) $
 --                 withFold $ P.sum . G.folds const () (const 1) . view T.words))
---     (shell "{ echo aaa ; echo bbb ; echo ccc ; }")
+--     (pipedShell "{ echo aaa ; echo bbb ; echo ccc ; }")
 -- 
 -- -------------------------------------------------------------------------------
 -- testSingletonPipeline :: TestTree
@@ -203,7 +203,7 @@ feedStdinCollectStdoutAsText =
 --     (pipeoe (withFold B.toLazyM) 
 --             (withFold B.toLazyM)) 
 --     (pure $ stage (toLines T.decodeUtf8 (pure id)) pipefail $ 
---          shell "{ echo ooo ; echo eee 1>&2 ; echo ppp ;  echo ffff 1>&2 ; }"
+--          pipedShell "{ echo ooo ; echo eee 1>&2 ; echo ppp ;  echo ffff 1>&2 ; }"
 --     )     
 -- 
 -- -------------------------------------------------------------------------------
@@ -219,7 +219,7 @@ feedStdinCollectStdoutAsText =
 --     (pipeio (fromProducer $ yield "aaabbb\naaaccc\nxxxccc") 
 --             (withFold B.toLazyM)) 
 --     (fmap (stage (toLines T.decodeUtf8 (pure id)) pipefail) $   
---         Node (shell "grep aaa") [Node (shell "grep ccc") []] )
+--         Node (pipedShell "grep aaa") [Node (pipedShell "grep ccc") []] )
 -- 
 -- -------------------------------------------------------------------------------
 -- 
@@ -252,35 +252,35 @@ feedStdinCollectStdoutAsText =
 --     rootStage :: Stage Int 
 --     rootStage = stage (toLines T.decodeIso8859_1 (pure id))                 
 --                       pipefail
---                       (shell "{ echo oooaaa ; echo eee 1>&2 ; echo xxx ;  echo ffff 1>&2 ; }")
+--                       (pipedShell "{ echo oooaaa ; echo eee 1>&2 ; echo xxx ;  echo ffff 1>&2 ; }")
 -- 
 --     branch1 :: Stage Int 
 --     branch1 = stage (toLines T.decodeIso8859_1 (pure id))                 
 --                     pipefail
---                     (shell "grep ooo")
+--                     (pipedShell "grep ooo")
 --     branch2 :: Stage Int 
 --     branch2 = stage (toLines T.decodeIso8859_1 (pure id))                 
 --                     pipefail
---                     (shell "grep xxx")
+--                     (pipedShell "grep xxx")
 -- 
 --     terminalStage1 :: Stage Int 
 --     terminalStage1 = inbound (\p -> p >-> succStage) $
 --         stage (toLines T.decodeIso8859_1 (pure id))                 
 --               pipefail
---               (shell "tr -d b")
+--               (pipedShell "tr -d b")
 -- 
 --     terminalStage2 :: Stage Int
 --     terminalStage2 = inbound (\p -> p >-> succStage) $
 --         stage (toLines T.decodeIso8859_1 (pure id))                 
 --               pipefail
---               (shell $ "cat > " ++ branchingPipelineFile)
+--               (pipedShell $ "cat > " ++ branchingPipelineFile)
 -- 
 -- -------------------------------------------------------------------------------
 -- 
 -- testDrainageDeadlock :: TestTree
 -- testDrainageDeadlock = localOption (mkTimeout $ 20*(10^6)) $
 --     testCase "drainageDeadlock" $ do
---         execute nopiping $ shell "chmod u+x tests/alternating.sh"
+--         execute nopiping $ pipedShell "chmod u+x tests/alternating.sh"
 --         r <- drainageDeadlock
 --         case r of
 --             (ExitSuccess,((),())) -> return ()
@@ -291,7 +291,7 @@ feedStdinCollectStdoutAsText =
 -- drainageDeadlock :: IO (ExitCode,((),()))
 -- drainageDeadlock = execute
 --     (pipeoe (pure ()) (withFold $ \producer -> next producer >> pure ()))
---     (proc "tests/alternating.sh" [])
+--     (pipedProc "tests/alternating.sh" [])
 -- 
 -- 
 -- -------------------------------------------------------------------------------
@@ -299,7 +299,7 @@ feedStdinCollectStdoutAsText =
 -- testAlternatingWithCombined :: TestTree
 -- testAlternatingWithCombined = localOption (mkTimeout $ 20*(10^6)) $
 --     testCase "testAlternatingWithCombined" $ do
---         execute nopiping $ shell "chmod u+x tests/alternating.sh"
+--         execute nopiping $ pipedShell "chmod u+x tests/alternating.sh"
 --         r <- alternatingWithCombined  
 --         case r of 
 --             (ExitSuccess,80000) -> return ()
@@ -312,7 +312,7 @@ feedStdinCollectStdoutAsText =
 -- alternatingWithCombined :: IO (ExitCode,Integer)
 -- alternatingWithCombined = execute
 --     (pipeoec lp lp countLines)
---     (proc "tests/alternating.sh" [])
+--     (pipedProc "tests/alternating.sh" [])
 --   where
 --     lp = toLines T.decodeIso8859_1 (pure id) 
 --     countLines = withFold $ P.sum . G.folds const () (const 1) . view T.lines
@@ -321,7 +321,7 @@ feedStdinCollectStdoutAsText =
 -- alternatingWithCombined2 :: IO (ExitCode,(Integer,Integer))
 -- alternatingWithCombined2 = execute
 --     (pipeoec lp lp $ (,) <$> countLines <*> countLines)
---     (proc "tests/alternating.sh" [])
+--     (pipedProc "tests/alternating.sh" [])
 --   where
 --     lp = toLines T.decodeIso8859_1 (pure id) 
 --     countLines = withFold $ P.sum . G.folds const () (const 1) . view T.lines
@@ -343,7 +343,7 @@ feedStdinCollectStdoutAsText =
 -- decodeFailure = executeFallibly 
 --     (pipeio (fromLazyBytes ("aaaaaaaa" <> nonAscii)) 
 --             (encoded decodeAscii (unwanted id) intoLazyText)) 
---     (shell "cat")
+--     (pipedShell "cat")
 -- 
 -- -------------------------------------------------------------------------------
 -- 
