@@ -5,6 +5,7 @@
 - "Piping" is now the "Streams" Applicative.
 - Exit code handling has been merged into the "Streams" Applicative. 
 - Removed pipeline functions.
+- Removed some lenses, added others.
 
 0.7.2.1
 -------

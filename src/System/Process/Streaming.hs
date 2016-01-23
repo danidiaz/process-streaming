@@ -222,10 +222,10 @@ feedProducer producer = liftFeed1 . Feed1 . Other . Feed1_ $ \consumer -> fmap p
 feedProducerM :: MonadIO m => (m () -> IO (Either e a)) -> Producer ByteString m r -> Streams e a
 feedProducerM whittle producer = liftFeed1 . Feed1 . Other . Feed1_ $ \consumer -> whittle $ runEffect (void producer >-> hoist liftIO consumer) 
 
-feedSafeProducer :: Producer ByteString (SafeT IO) r -> Streams e ()
+feedSafeProducer :: Producer ByteString (SafeT IO) () -> Streams e ()
 feedSafeProducer = feedProducerM (fmap pure . runSafeT)
 
-feedFallibleProducer :: Producer ByteString (ExceptT e IO) r -> Streams e ()
+feedFallibleProducer :: Producer ByteString (ExceptT e IO) () -> Streams e ()
 feedFallibleProducer = feedProducerM runExceptT
 
 feedCont :: (Consumer ByteString IO () -> IO (Either e a)) -> Streams e a
