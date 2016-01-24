@@ -57,7 +57,7 @@ tests = testGroup "Tests"
             , testCountWords 
             , testDrainageDeadlock
             , testAlternatingWithCombined 
---            , testDecodeFailure
+            , testDecodeFailure
             ]
 
 -------------------------------------------------------------------------------
@@ -243,24 +243,25 @@ alternatingWithCombined2 =
     lp = PT.lines PT.utf8x
     countLines = withCont $ P.sum . G.folds const () (const 1) . view T.lines
 
--- -------------------------------------------------------------------------------
--- 
--- testDecodeFailure :: TestTree
--- testDecodeFailure  = localOption (mkTimeout $ 20*(10^6)) $
---     testCase "testDecodeFailure" $ do
---         r <- decodeFailure
---         case r of 
---             Left nonAscii -> return ()
---             _ -> assertFailure "oops"
--- 
--- nonAscii :: BL.ByteString
--- nonAscii = TL.encodeUtf8 "\x4e2d"
--- 
--- decodeFailure :: IO (Either T.ByteString (ExitCode,((),TL.Text)))
--- decodeFailure = executeFallibly 
---     (pipeio (fromLazyBytes ("aaaaaaaa" <> nonAscii)) 
---             (encoded decodeAscii (unwanted id) intoLazyText)) 
---     (pipedShell "cat")
--- 
--- -------------------------------------------------------------------------------
--- 
+-------------------------------------------------------------------------------
+
+testDecodeFailure :: TestTree
+testDecodeFailure  = localOption (mkTimeout $ 20*(10^6)) $
+    testCase "testDecodeFailure" $ do
+        r <- decodeFailure
+        case r of 
+            Left _ -> return ()
+            _ -> assertFailure "oops"
+
+nonAscii :: BL.ByteString
+nonAscii = TL.encodeUtf8 "\x4e2d"
+
+decodeFailure :: IO (Either T.ByteString TL.Text)
+decodeFailure = 
+    executeFallibly 
+    (pipedShell "cat")
+    (feedLazyBytes ("aaaaaaaa" <> nonAscii) *>
+        foldOut (transduce1 (decoder T.decodeAscii) intoLazyText))
+
+-------------------------------------------------------------------------------
+
