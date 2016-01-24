@@ -72,7 +72,7 @@ collectStdoutStderrAsByteString :: IO (BL.ByteString,BL.ByteString)
 collectStdoutStderrAsByteString = 
     execute
     (pipedShell "{ echo ooo ; echo eee 1>&2 ; echo ppp ;  echo ffff 1>&2 ; }")
-    (liftA2 (,) (fold1Out intoLazyBytes) (fold1Err intoLazyBytes))
+    (liftA2 (,) (foldOut intoLazyBytes) (foldErr intoLazyBytes))
 
 
 -------------------------------------------------------------------------------
@@ -87,7 +87,7 @@ feedStdinCollectStdoutAsText :: IO Text
 feedStdinCollectStdoutAsText = 
     execute
     (pipedShell "cat")
-    (feedUtf8 (Just "aaaaaa\naaaaa") *> fold1Out (transduce1 utf8x intoLazyText))
+    (feedUtf8 (Just "aaaaaa\naaaaa") *> foldOut (transduce1 utf8x intoLazyText))
 
 -------------------------------------------------------------------------------
 
@@ -108,7 +108,7 @@ testCombinedStdoutStderr = testCase "testCombinedStdoutStderr"  $ do
 combinedStdoutStderr :: IO TL.Text
 combinedStdoutStderr = execute
     (pipedShell "{ echo ooo ; echo eee 1>&2 ; echo ppp ;  echo ffff 1>&2 ; }")
-    (fold2OutErr (combined (PT.lines utf8x) (groups annotate . PT.lines $ utf8x) intoLazyText))
+    (foldOutErr (combined (PT.lines utf8x) (groups annotate . PT.lines $ utf8x) intoLazyText))
   where
     annotate x = P.yield "errprefix: " *> x  
 
@@ -125,7 +125,7 @@ testInterruptExecution = localOption (mkTimeout $ 5*(10^6)) $
 interruptExecution :: IO (Either String ())
 interruptExecution = executeFallibly
     (pipedShell "sleep 100s")
-    (fold1Out $ withFallibleCont $ \_ -> runExceptT . throwE $ "interrupted")
+    (foldOut $ withFallibleCont $ \_ -> runExceptT . throwE $ "interrupted")
 
 -------------------------------------------------------------------------------
 
@@ -140,7 +140,7 @@ testFailIfAnythingShowsInStderr = localOption (mkTimeout $ 5*(10^6)) $
 failIfAnythingShowsInStderr :: IO (Either T.ByteString ())
 failIfAnythingShowsInStderr = executeFallibly
     (pipedShell "{ echo morestuff 1>&2 ; sleep 100s ; }")
-    (fold1Err trip)
+    (foldErr trip)
 
 -------------------------------------------------------------------------------
 
@@ -165,7 +165,7 @@ twoTextParsersInParallel :: IO (Either String ([Char], [Char]))
 twoTextParsersInParallel = 
     executeFallibly
     (pipedShell "{ echo ooaaoo ; echo aaooaoa; }")
-    (fold1Out (transduce1 utf8x $ 
+    (foldOut (transduce1 utf8x $ 
                 (,) <$> adapt parser1 <*> adapt parser2))
   where
     adapt p = withParser $ do
@@ -187,7 +187,7 @@ countWords :: IO Int
 countWords = 
     execute
     (pipedShell "{ echo aaa ; echo bbb ; echo ccc ; }")
-    (fold1Out (transduce1 PT.utf8x $
+    (foldOut (transduce1 PT.utf8x $
                 withCont $ P.sum . G.folds const () (const 1) . view T.words))
 
 -------------------------------------------------------------------------------
@@ -207,7 +207,7 @@ drainageDeadlock :: IO ExitCode
 drainageDeadlock = 
     execute
     (pipedProc "tests/alternating.sh" [])
-    (fold1Err (withCont $ \producer -> next producer >> pure ()) *> exitCode)
+    (foldErr (withCont $ \producer -> next producer >> pure ()) *> exitCode)
 
 -------------------------------------------------------------------------------
 
@@ -228,7 +228,7 @@ alternatingWithCombined :: IO Integer
 alternatingWithCombined = 
     execute
     (pipedProc "tests/alternating.sh" [])
-    (fold2OutErr (combined lp lp countLines))
+    (foldOutErr (combined lp lp countLines))
   where
     lp = PT.lines PT.utf8x
     countLines = withCont $ P.sum . G.folds const () (const 1) . view T.lines
@@ -238,7 +238,7 @@ alternatingWithCombined2 :: IO (Integer,Integer)
 alternatingWithCombined2 = 
     execute
     (pipedProc "tests/alternating.sh" [])
-    (fold2OutErr (combined lp lp (liftA2 (,) countLines countLines)))
+    (foldOutErr (combined lp lp (liftA2 (,) countLines countLines)))
   where
     lp = PT.lines PT.utf8x
     countLines = withCont $ P.sum . G.folds const () (const 1) . view T.lines

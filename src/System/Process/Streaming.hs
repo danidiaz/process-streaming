@@ -42,10 +42,10 @@ module System.Process.Streaming (
         , feedFallibleProducer
         , feedCont
         -- * Consuming stdout and stderr
-        , fold1Out
-        , fold1Err
+        , foldOut
+        , foldErr
         , Pipes.Transduce.ByteString.intoLazyBytes
-        , fold2OutErr
+        , foldOutErr
         -- * Handling exit codes
         , exitCode
         , validateExitCode
@@ -297,14 +297,14 @@ executeFallibly record (Streams streams) = mask $ \restore -> do
                                    (terminateCarefully phandle))) 
     (restore innerAction `onException` terminateCarefully phandle) `finally` cleanup1 `finally` cleanup2
 
-fold1Out :: Fold1 ByteString e r -> Streams e r
-fold1Out =  liftFold2 . Pipes.Transduce.liftFirst
+foldOut :: Fold1 ByteString e r -> Streams e r
+foldOut =  liftFold2 . Pipes.Transduce.liftFirst
 
-fold1Err :: Fold1 ByteString e r -> Streams e r
-fold1Err =  liftFold2 . Pipes.Transduce.liftSecond
+foldErr :: Fold1 ByteString e r -> Streams e r
+foldErr =  liftFold2 . Pipes.Transduce.liftSecond
 
-fold2OutErr :: Fold2 ByteString ByteString e r -> Streams e r
-fold2OutErr =  liftFold2
+foldOutErr :: Fold2 ByteString ByteString e r -> Streams e r
+foldOutErr =  liftFold2
 
 {- $reexports
  
