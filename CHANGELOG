@@ -1,4 +1,4 @@
-0.8.0.0
+0.9.0.0
 -------
 - All Siphon functionality has been moved to new package pipes-transduce.
 - Siphons correspond to the "Fold1" datatype in pipes-transduce.

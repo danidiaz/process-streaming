@@ -53,6 +53,7 @@ module System.Process.Streaming (
         -- * Re-exports
         -- $reexports
         , module System.Process
+        , module Pipes.Transduce
     ) where
 
 import qualified Data.ByteString.Lazy
@@ -78,8 +79,7 @@ import qualified Pipes.Prelude
 import Pipes.ByteString
 import Pipes.Concurrent
 import Pipes.Safe (SafeT,runSafeT)
-import Pipes.Transduce (Fold1,Fold2)
-import qualified Pipes.Transduce
+import Pipes.Transduce
 import qualified Pipes.Transduce.ByteString
 import System.IO
 import System.Process
@@ -309,5 +309,7 @@ foldOutErr =  liftFold2
 {- $reexports
  
 "System.Process" is re-exported for convenience.
+
+"Pipes.Transduce" is re-exported for convenience.
 
 -} 

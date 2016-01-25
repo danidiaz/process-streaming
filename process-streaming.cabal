@@ -1,5 +1,5 @@
 name:          process-streaming
-version:       0.8.0.0
+version:       0.9.0.0
 license:       BSD3
 license-file:  LICENSE
 data-files:    
@@ -20,6 +20,7 @@ Library
     hs-source-dirs: src
     exposed-modules: 
         System.Process.Streaming
+        System.Process.Streaming.Text
         System.Process.Lens
     other-modules: 
     ghc-options: -Wall -threaded -O2
@@ -41,7 +42,7 @@ Library
       , pipes-concurrency >= 2.0.2
       , pipes-bytestring >=2.1.0
       , pipes-text >= 0.0.0.10
-      , pipes-transduce >= 0.3.1.0
+      , pipes-transduce >= 0.3.2.0
       , conceit >= 0.3.2.0
 
 Test-suite test
@@ -73,7 +74,7 @@ Test-suite test
       , pipes-text >= 0.0.0.10
       , pipes-group >= 1.0.1
       , pipes-attoparsec >= 0.5
-      , pipes-transduce >= 0.3.1.0
+      , pipes-transduce >= 0.3.2.0
       , exceptions >= 0.6.0 && < 1.0
       , semigroups >= 0.15 && < 0.20
       , containers >= 0.4
@@ -108,7 +109,7 @@ test-suite doctests
       , pipes-text >= 0.0.0.10
       , pipes-group >= 1.0.1
       , pipes-attoparsec >= 0.5
-      , pipes-transduce >= 0.3.1.0
+      , pipes-transduce >= 0.3.2.0
       , exceptions >= 0.6.0 
       , semigroups >= 0.15 
       , containers >= 0.4
