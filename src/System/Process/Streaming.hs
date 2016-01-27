@@ -6,7 +6,7 @@
 -- external processes.
 --
 -- 'Consumer's from @pipes@, 'Parser's from @pipes-parse@ and 'Fold's from
--- @foldl@ can be used to consume the output streams of an external process, by
+-- @foldl@ can be used to consume the standard streams, by
 -- means of the auxiliary 'Fold1' datatype which is re-exported from the
 -- @pipes-transduce@ package.
 -----------------------------------------------------------------------------
