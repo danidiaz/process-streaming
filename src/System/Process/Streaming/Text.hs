@@ -8,7 +8,7 @@ import Pipes.Transduce.Text
 
 {- $reexports
  
-"Pipes.Transduce.Text" is re-exported for convenience.
+"Pipes.Transduce.Text" from the @pipes-transduce@ package is re-exported in its entirety.
 
 -} 
 
