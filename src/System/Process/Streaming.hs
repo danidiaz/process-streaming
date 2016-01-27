@@ -7,7 +7,8 @@
 --
 -- 'Consumer's from @pipes@, 'Parser's from @pipes-parse@ and 'Fold's from
 -- @foldl@ can be used to consume the output streams of an external process, by
--- means of the intermediate 'Fold1' datatype.
+-- means of the auxiliary 'Fold1' datatype which is re-exported from the
+-- @pipes-transduce@ package.
 -----------------------------------------------------------------------------
 
 {-# LANGUAGE DeriveFunctor #-}
@@ -117,17 +118,27 @@ foo
 >>> execute (pipedShell "echo foo") (foldOut (withCont (\_ -> throwIO (userError "oops"))))
 *** Exception: user error (oops)
 
-   But care is taken to automatically terminate the external process, if an 
+   However, care is taken to automatically terminate the external process if an 
    exception (including asynchronous ones) or other type of error happens. 
-   This means we can terminate the external process by throwing an exception 
-   to the thread that is running 'execute'.
+   This means we can terminate the external process by killing 
+   the thread that is running 'execute':
+
+>>> forkIO (execute (pipedShell "sleep infinity") (pure ())) >>= killThread
 
  -}
 execute :: CreateProcess -> Streams Void a -> IO a
 execute cprocess pp = either absurd id <$> executeFallibly cprocess pp
 
 
-{-| 
+{-| Like 'execute', but allows the handlers in the 'Streams' Applicative to interrupt the execution of the external process by returning a 'Left' value, in addition to throwing exceptions. This is sometimes more convenient:
+
+>>> executeFallibly (pipedShell "sleep infinity") (foldOut (withFallibleCont (\_ -> pure (Left "oops"))))
+Left "oops"
+
+>>> executeFallibly (pipedShell "exit 1") validateExitCode
+Left 1
+
+    The first type parameter of 'Streams' is the error type. If it is never used, it remain polymorphic and may unify with 'Void' (as required by 'execute').
 
 -}
 executeFallibly :: 
