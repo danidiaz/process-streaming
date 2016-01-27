@@ -9,8 +9,10 @@ The basic goals:
 
 - ...all the while preventing deadlocks caused by mishandling of the streams. 
 
-- Easy integration with consumers from [pipes](http://hackage.haskell.org/package/pipes), parsers from [pipes-parse](http://hackage.haskell.org/package/pipes-parse) and
-  folds from [foldl](http://hackage.haskell.org/package/foldl).
+- Easy integration with consumers from
+  [pipes](http://hackage.haskell.org/package/pipes), parsers from
+  [pipes-parse](http://hackage.haskell.org/package/pipes-parse) and folds from
+  [foldl](http://hackage.haskell.org/package/foldl).
 
 - Facilitate the use of sum types to signal failures, when desired.
 
