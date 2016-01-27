@@ -58,6 +58,8 @@ tests = testGroup "Tests"
             , testDrainageDeadlock
             , testAlternatingWithCombined 
             , testDecodeFailure
+            , testMultipleFeeds
+            , testMultipleFeedsNoPiped
             ]
 
 -------------------------------------------------------------------------------
@@ -265,3 +267,41 @@ decodeFailure =
 
 -------------------------------------------------------------------------------
 
+testMultipleFeeds :: TestTree
+testMultipleFeeds = testCase "testMultipleFeeds" $ do
+    r <- multipleFeeds
+    case r of
+        "firstline1secondline2thirdline3" -> return ()
+        _ -> assertFailure (show r)
+
+multipleFeeds :: IO BL.ByteString
+multipleFeeds = 
+    execute
+    (pipedShell "cat")
+    (feedBytes ["first","line1"] 
+     *>
+     feedBytes ["second","line2"] 
+     *>
+     feedBytes ["third","line3"] 
+     *>
+     foldOut intoLazyBytes)
+
+testMultipleFeedsNoPiped :: TestTree
+testMultipleFeedsNoPiped = localOption (mkTimeout $ 1*(10^6)) $ 
+    testCase "testMultipleFeedsNoPiped" $ do
+        r <- multipleFeedsNoPiped
+        case r of
+            "foo\n" -> return ()
+            _ -> assertFailure (show r)
+
+multipleFeedsNoPiped :: IO BL.ByteString
+multipleFeedsNoPiped = 
+    execute
+    ((pipedShell "echo foo") { std_in = Inherit })
+    (feedBytes ["first","line1"] 
+     *>
+     feedBytes ["second","line2"] 
+     *>
+     feedBytes ["third","line3"] 
+     *>
+     foldOut intoLazyBytes)
