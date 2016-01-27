@@ -1,22 +1,25 @@
 process-streaming
 =================
 
-Exploring how to interact with system processes using a streaming library
-(pipes).
+A library for interacting with system processes in a streaming fashion.
 
 The basic goals:
 
-- Concurrent, streaming access to stdin, stdout and stderr.
+- Concurrent, streaming access to stdin, stdout and stderr...
 
-- Easy integration with regular consumers, parsers from pipes-parse and various
-  folds.
+- ...all the while preventing deadlocks caused by mishandling of the streams. 
 
-- Avoid launching exceptions: use Either or similar solution to signal non-IO
-  related error conditions.
+- Easy integration with consumers from [pipes](http://hackage.haskell.org/package/pipes), parsers from [pipes-parse](http://hackage.haskell.org/package/pipes-parse) and
+  folds from [foldl](http://hackage.haskell.org/package/foldl).
 
-Relevant thread in the Haskell Pipes Google Group:
+- Facilitate the use of sum types to signal failures, when desired.
 
-https://groups.google.com/forum/#!searchin/haskell-pipes/pipes$20process/haskell-pipes/JFfyquj5HAg/Lxz7p50JOh4J
+- No fussing around with process handles: wait for the process by waiting for
+  the IO action, terminate the process by killing the thread executing the IO
+  action.
+
+A [relevant thread](https://groups.google.com/forum/#!searchin/haskell-pipes/pipes$20process/haskell-pipes/JFfyquj5HAg/Lxz7p50JOh4J) in the Haskell Pipes Google Group.
+
 
 ## Possible alternatives in Hackage
 
