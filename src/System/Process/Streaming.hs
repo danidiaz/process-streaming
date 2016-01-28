@@ -138,7 +138,7 @@ Left "oops"
 >>> executeFallibly (pipedShell "exit 1") validateExitCode
 Left 1
 
-    The first type parameter of 'Streams' is the error type. If it is never used, it remain polymorphic and may unify with 'Void' (as required by 'execute').
+    The first type parameter of 'Streams' is the error type. If it is never used, it remains polymorphic and may unify with 'Void' (as required by 'execute').
 
 -}
 executeFallibly :: 
