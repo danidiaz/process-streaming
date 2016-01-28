@@ -339,8 +339,16 @@ liftExitCodeValidation v = Streams $
             (const <$> v)
             (pure ()))
 
+{-| The type of handlers that write to piped @stdin@, consume piped @stdout@ and
+    @stderr@ and work with the process exit code, eventually returning a value of
+    type @a@, except when an error @e@ interrups the execution early.
+
+-}
 newtype Streams e r = Streams (Day (Day (Feed1 ByteString e) (Fold2 ByteString ByteString e)) (Star (ExceptT e IO) ExitCode) r) deriving (Functor)
 
+{-| 'first' is useful to massage errors.		
+
+-}
 instance Bifunctor Streams where
     bimap f g (Streams d)  = Streams $ fmap g $
           trans1
@@ -351,6 +359,11 @@ instance Bifunctor Streams where
         $ d
 
 
+{-| 
+    'pure' writes nothing to @stdin@, discards the data coming from @stdout@ and @stderr@, and ignores the exit code.
+
+    '<*>' combines handlers by sequencing the writes to @stdin@, and making concurrent reads from @stdout@ and @stderr@.
+-}
 instance Applicative (Streams e) where
     pure a = Streams (pure a)
 
