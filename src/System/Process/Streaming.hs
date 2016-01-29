@@ -7,8 +7,11 @@
 --
 -- 'Consumer's from @pipes@, 'Parser's from @pipes-parse@ and 'Fold's from
 -- @foldl@ can be used to consume the standard streams, by
--- means of the auxiliary 'Fold1' datatype which is re-exported from
--- @pipes-transduce@.
+-- means of the auxiliary 'Fold1' datatype from @pipes-transduce@.
+--
+-- The entirety of "System.Process" and "Pipes.Transduce" is re-exported for
+-- convenience.
+--
 -----------------------------------------------------------------------------
 
 {-# LANGUAGE DeriveFunctor #-}
@@ -50,8 +53,6 @@ module System.Process.Streaming (
         , withExitCode
         -- * A GHCi idiom
         -- $ghci
-        -- * Re-exports
-        -- $reexports
         , module System.Process
         , module Pipes.Transduce
     ) where
@@ -466,10 +467,4 @@ ghci> killThread r
 
 -} 
 
-{- $reexports
  
-"System.Process" is re-exported in its entirety.
-
-"Pipes.Transduce" from the @pipes-transduce@ package is re-exported in its entirety.
-
--} 

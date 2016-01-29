@@ -1,6 +1,7 @@
 {-| 
-    This module re-exports functions useful for treating the @stdout@ and @stderr@
-    streams as text.
+    This module re-exports the entirety of "Pipes.Transduce.Text" from the
+@pipes-transduce@ package. It provides functions useful for treating the
+@stdout@ and @stderr@ streams as text.
    
     It is better to import it qualified:
  
@@ -10,8 +11,6 @@
 module System.Process.Streaming.Text ( 
         -- * Examples
         -- $examples
-        -- * Re-exports
-        -- $reexports
         module Pipes.Transduce.Text
     ) where
 
@@ -91,9 +90,5 @@ Right "foo\n"
 
 -}
 
-{- $reexports
  
-"Pipes.Transduce.Text" from the @pipes-transduce@ package is re-exported in its entirety.
-
--} 
 
