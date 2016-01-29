@@ -39,6 +39,7 @@ module System.Process.Streaming (
         , feedFallibleProducer
         , feedCont
         -- * Consuming stdout and stderr
+        -- $folds
         , foldOut
         , foldErr
         , Pipes.Transduce.ByteString.intoLazyBytes
@@ -259,15 +260,28 @@ instance (Monoid a) => Monoid (Feed1 b e a) where
 feed1Fallibly :: Feed1 b e a -> Consumer b IO () -> IO (Either e a)
 feed1Fallibly (Feed1 (unLift -> s)) = runFeed1_ s
 
+{-| Feed any 'Foldable' container of strict 'Data.ByteString's to @stdin@.		
+
+-}
 feedBytes :: Foldable f => f ByteString -> Streams e ()
 feedBytes = feedProducer . each
 
+{-| Feed a lazy 'Data.Lazy.ByteString' to @stdin@.		
+
+-}
 feedLazyBytes :: Data.ByteString.Lazy.ByteString -> Streams e ()
 feedLazyBytes = feedProducer . fromLazy 
 
+{-| Feed any 'Foldable' container of strict 'Data.Texts's to @stdin@, encoding
+    the texts as UTF8.		
+
+-}
 feedUtf8 :: Foldable f => f Text -> Streams e ()
 feedUtf8 = feedProducer . (\p -> p >-> Pipes.Prelude.map Data.Text.Encoding.encodeUtf8) . each
 
+{-| Feed a lazy 'Data.Lazy.Text' to @stdin@, encoding it as UTF8.		
+
+-}
 feedLazyUtf8 :: Data.Text.Lazy.Text -> Streams e ()
 feedLazyUtf8 = feedProducer . fromLazy . Data.Text.Lazy.Encoding.encodeUtf8
 
@@ -282,21 +296,52 @@ feedSafeProducer = feedProducerM (fmap pure . runSafeT)
 feedFallibleProducer :: Producer ByteString (ExceptT e IO) () -> Streams e ()
 feedFallibleProducer = feedProducerM runExceptT
 
+
+{-| Feed @stdin@ by running a pipes 'Consumer'. This allows bracketing
+    functions like 'withFile' inside the handler.		
+
+-}
 feedCont :: (Consumer ByteString IO () -> IO (Either e a)) -> Streams e a
 feedCont = liftFeed1 . Feed1 . Other . Feed1_
 
+{- $folds
+
+    These functions take as parameters the 'Fold1' and 'Fold2' datatypes 
+    defined in the @pipes-transduce@ package.
+
+    A convenience 'intoLazyBytes' 'Fold1' that collects a stream into a 
+    lazy 'Data.ByteString.Lazy.ByteString' is re-exported.
+-}
+
+{-| Consume standard output.		
+
+-}
 foldOut :: Fold1 ByteString e r -> Streams e r
 foldOut =  liftFold2 . Pipes.Transduce.liftFirst
 
+{-| Consume standard error.		
+
+-}
 foldErr :: Fold1 ByteString e r -> Streams e r
 foldErr =  liftFold2 . Pipes.Transduce.liftSecond
 
+{-| Consume standard output and error together.	See also the 'combine' function
+    re-exported from "Pipes.Transduce".
+
+-}
 foldOutErr :: Fold2 ByteString ByteString e r -> Streams e r
 foldOutErr =  liftFold2
 
+{-| Simply returns the 'ExitCode'.		
+
+-}
 exitCode :: Streams e ExitCode
 exitCode  = liftExitCodeValidation (Star pure)
 
+
+{-| Fails with the error code when 'ExitCode' is not 'ExitSuccess'.
+
+-}
 validateExitCode :: Streams Int ()
 validateExitCode =  liftExitCodeValidation . Star . fmap ExceptT . fmap pure $ validation
     where
@@ -329,7 +374,7 @@ liftExitCodeValidation v = Streams $
 
 {-| The type of handlers that write to piped @stdin@, consume piped @stdout@ and
     @stderr@, and work with the process exit code, eventually returning a value of
-    type @a@, except when an error @e@ interrups the execution early.
+    type @a@, except when an error @e@ interrups the execution.
 
     Example of a complex handler:
 
