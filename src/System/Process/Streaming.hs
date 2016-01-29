@@ -25,8 +25,7 @@ module System.Process.Streaming (
           execute
         , executeFallibly
         -- * CreateProcess helpers
-        , pipedShell
-        , pipedProc
+        , piped
         -- * The Streams Applicative
         , Streams
         -- * Feeding stdin
@@ -70,7 +69,7 @@ import Control.Applicative
 import Control.Applicative.Lift
 import Control.Monad
 import Control.Monad.Trans.Except
-import Control.Exception (onException,catch,IOException,mask,finally,throwIO)
+import Control.Exception (onException,catch,IOException,mask,finally)
 import Control.Concurrent
 import Control.Concurrent.Conceit
 import Pipes
@@ -84,6 +83,14 @@ import System.IO
 import System.Process
 import System.Exit
 
+{- $setup
+
+>>> :set -XOverloadedStrings
+>>> import Control.Exception (throwIO)
+>>> import qualified System.Process.Streaming.Text as PT
+
+-}
+
 {-|
   Execute an external program described by the 'CreateProcess' record. 
 
@@ -91,31 +98,31 @@ import System.Exit
   streams and the exit code. Since 'Streams' is an Applicative, a simple
   invocation of 'execute' could be
 
->>> execute (pipedShell "echo foo") (pure ())
+>>> execute (piped (shell "echo foo")) (pure ())
 
   which would discard the program's stdout and stderr, and ignore the exit
   code. To actually get the exit code:
 
->>> execute (pipedShell "echo foo") exitCode
+>>> execute (piped (shell "echo foo")) exitCode
 ExitSuccess
 
-  To get stdout as a lazy 'Data.ByteString.Lazy.ByteString', along with the
+  To collect stdout as a lazy 'Data.ByteString.Lazy.ByteString' along with the
   exit code:
 
->>> execute (pipedShell "echo foo") (liftA2 (,) (foldOut intoLazyBytes) exitCode)
+>>> execute (piped (shell "echo foo")) (liftA2 (,) (foldOut intoLazyBytes) exitCode)
 ("foo\n",ExitSuccess)
 
   'execute' respects all the fields of the 'CreateProcess' record. If stdout is
   not piped, but a handler is defined for it, the handler will see an empty
   stream:
 
->>> execute ((pipedShell "echo foo"){ std_out = Inherit }) (foldOut intoLazyBytes)
+>>> execute ((shell "echo foo"){ std_out = Inherit }) (foldOut intoLazyBytes)
 foo
 ""
 
    No effort is made to catch exceptions thrown during execution:
 
->>> execute (pipedShell "echo foo") (foldOut (withCont (\_ -> throwIO (userError "oops"))))
+>>> execute (piped (shell "echo foo")) (foldOut (withCont (\_ -> throwIO (userError "oops"))))
 *** Exception: user error (oops)
 
    However, care is taken to automatically terminate the external process if an 
@@ -123,7 +130,7 @@ foo
    This means we can terminate the external process by killing 
    the thread that is running 'execute':
 
->>> forkIO (execute (pipedShell "sleep infinity") (pure ())) >>= killThread
+>>> forkIO (execute (piped (shell "sleep infinity")) (pure ())) >>= killThread
 
  -}
 execute :: CreateProcess -> Streams Void a -> IO a
@@ -132,10 +139,10 @@ execute cprocess pp = either absurd id <$> executeFallibly cprocess pp
 
 {-| Like 'execute', but allows the handlers in the 'Streams' Applicative to interrupt the execution of the external process by returning a 'Left' value, in addition to throwing exceptions. This is sometimes more convenient:
 
->>> executeFallibly (pipedShell "sleep infinity") (foldOut (withFallibleCont (\_ -> pure (Left "oops"))))
+>>> executeFallibly (piped (shell "sleep infinity")) (foldOut (withFallibleCont (\_ -> pure (Left "oops"))))
 Left "oops"
 
->>> executeFallibly (pipedShell "exit 1") validateExitCode
+>>> executeFallibly (piped (shell "exit 1")) validateExitCode
 Left 1
 
     The first type parameter of 'Streams' is the error type. If it is never used, it remains polymorphic and may unify with 'Void' (as required by 'execute').
@@ -188,35 +195,16 @@ terminateCarefully pHandle = do
             (\(_::IOException) -> return ())
         Just _ -> return ()
 
-{-| Same as 'System.Proces.shell', but sets 'std_in', 'std_out' and 'std_err' to 'CreatePipe'.		
+{-| Sets 'std_in', 'std_out' and 'std_err' in the 'CreateProcess' record to
+    'CreatePipe'. 
+
+    Any unpiped stream will appear to the 'Streams' handlers as empty.		
 
 -}
-pipedShell :: String -> CreateProcess
-pipedShell cmd = (shell cmd) { std_in = CreatePipe,
-                               std_out = CreatePipe,
-                               std_err = CreatePipe }
-
-{-| Same as 'System.Proces.proc', but sets 'std_in', 'std_out' and 'std_err' to 'CreatePipe'.		
-
--}
-pipedProc :: FilePath -> [String] -> CreateProcess
-pipedProc path cmd = (proc path cmd) { std_in = CreatePipe,
-                                       std_out = CreatePipe,
-                                       std_err = CreatePipe }
-
-{-|
-   Executes an external process. The standard streams are piped and consumed in
-a way defined by the 'Piping' argument. 
-
-   This function re-throws any 'IOException's it encounters.
-
-   Besides exceptions, if the consumption of the standard streams fails
-   with @e@, the whole computation is immediately aborted and @e@ is
-   returned. 
-
-   If an exception or an error @e@ happen, the external process is
-terminated.
- -}
+piped :: CreateProcess -> CreateProcess
+piped cmd = cmd { std_in = CreatePipe,
+                  std_out = CreatePipe,
+                  std_err = CreatePipe }
 
 newtype Feed1 b e a = Feed1 (Lift (Feed1_ b e) a) deriving (Functor)
 
@@ -340,8 +328,28 @@ liftExitCodeValidation v = Streams $
             (pure ()))
 
 {-| The type of handlers that write to piped @stdin@, consume piped @stdout@ and
-    @stderr@ and work with the process exit code, eventually returning a value of
+    @stderr@, and work with the process exit code, eventually returning a value of
     type @a@, except when an error @e@ interrups the execution early.
+
+    Example of a complex handler:
+
+>>> :{ 
+    execute (piped (shell "{ cat ; echo eee 1>&2 ; }")) $ 
+        (\_ _ o e oe ec -> (o,e,oe,ec)) 
+        <$>
+        feedBytes (Just "aaa") 
+        <*> 
+        feedBytes (Just "bbb") 
+        <*> 
+        foldOut intoLazyBytes 
+        <*>
+        foldErr intoLazyBytes 
+        <*>
+        foldOutErr (combined (PT.lines PT.utf8x) (PT.lines PT.utf8x) PT.intoLazyText)
+        <*>
+        exitCode
+    :}
+("aaabbb","eee\n","aaabbb\neee\n",ExitSuccess)
 
 -}
 newtype Streams e r = Streams (Day (Day (Feed1 ByteString e) (Fold2 ByteString ByteString e)) (Star (ExceptT e IO) ExitCode) r) deriving (Functor)

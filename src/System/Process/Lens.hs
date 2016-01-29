@@ -28,10 +28,6 @@ module System.Process.Lens (
        , _create_new_console 
        , _new_session 
 #endif
-#if MIN_VERSION_process(1,4,0)
-       , _child_group
-       , _child_user
-#endif
     ) where
 
 import Control.Applicative
@@ -147,18 +143,5 @@ _new_session :: forall f. Functor f => (Bool -> f Bool) -> CreateProcess -> f Cr
 _new_session f x = set_new_session x <$> f (new_session x)
     where
     set_new_session c v = c { new_session = v } 
-#endif
-
-
-#if MIN_VERSION_process(1,4,0)
-_child_group :: forall f. Functor f => (GroupID -> f GroupID) -> CreateProcess -> f CreateProcess 
-_child_group f x = set_child_group x <$> f (child_group x)
-    where
-    set_child_group c v = c { child_group = v } 
-
-_child_user :: forall f. Functor f => (UserID -> f UserID) -> CreateProcess -> f CreateProcess 
-_child_user f x = set_child_user x <$> f (child_user x)
-    where
-    set_child_user c v = c { child_user = v } 
 #endif
 

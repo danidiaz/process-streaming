@@ -73,7 +73,7 @@ testCollectStdoutStderrAsByteString = testCase "collectStdoutStderrAsByteString"
 collectStdoutStderrAsByteString :: IO (BL.ByteString,BL.ByteString)
 collectStdoutStderrAsByteString = 
     execute
-    (pipedShell "{ echo ooo ; echo eee 1>&2 ; echo ppp ;  echo ffff 1>&2 ; }")
+    (piped (shell "{ echo ooo ; echo eee 1>&2 ; echo ppp ;  echo ffff 1>&2 ; }"))
     (liftA2 (,) (foldOut intoLazyBytes) (foldErr intoLazyBytes))
 
 
@@ -88,7 +88,7 @@ testFeedStdinCollectStdoutAsText = testCase "feedStdinCollectStdoutAsText" $ do
 feedStdinCollectStdoutAsText :: IO Text
 feedStdinCollectStdoutAsText = 
     execute
-    (pipedShell "cat")
+    (piped (shell "cat"))
     (feedUtf8 (Just "aaaaaa\naaaaa") *> foldOut (transduce1 utf8x intoLazyText))
 
 -------------------------------------------------------------------------------
@@ -109,7 +109,7 @@ testCombinedStdoutStderr = testCase "testCombinedStdoutStderr"  $ do
 
 combinedStdoutStderr :: IO TL.Text
 combinedStdoutStderr = execute
-    (pipedShell "{ echo ooo ; echo eee 1>&2 ; echo ppp ;  echo ffff 1>&2 ; }")
+    (piped (shell "{ echo ooo ; echo eee 1>&2 ; echo ppp ;  echo ffff 1>&2 ; }"))
     (foldOutErr (combined (PT.lines utf8x) (groups annotate . PT.lines $ utf8x) intoLazyText))
   where
     annotate x = P.yield "errprefix: " *> x  
@@ -126,7 +126,7 @@ testInterruptExecution = localOption (mkTimeout $ 5*(10^6)) $
 
 interruptExecution :: IO (Either String ())
 interruptExecution = executeFallibly
-    (pipedShell "sleep 100s")
+    (piped (shell "sleep 100s"))
     (foldOut $ withFallibleCont $ \_ -> runExceptT . throwE $ "interrupted")
 
 -------------------------------------------------------------------------------
@@ -141,7 +141,7 @@ testFailIfAnythingShowsInStderr = localOption (mkTimeout $ 5*(10^6)) $
 
 failIfAnythingShowsInStderr :: IO (Either T.ByteString ())
 failIfAnythingShowsInStderr = executeFallibly
-    (pipedShell "{ echo morestuff 1>&2 ; sleep 100s ; }")
+    (piped (shell "{ echo morestuff 1>&2 ; sleep 100s ; }"))
     (foldErr trip)
 
 -------------------------------------------------------------------------------
@@ -166,7 +166,7 @@ parser2 = parseChars 'a'
 twoTextParsersInParallel :: IO (Either String ([Char], [Char]))
 twoTextParsersInParallel = 
     executeFallibly
-    (pipedShell "{ echo ooaaoo ; echo aaooaoa; }")
+    (piped (shell "{ echo ooaaoo ; echo aaooaoa; }"))
     (foldOut (transduce1 utf8x $ 
                 (,) <$> adapt parser1 <*> adapt parser2))
   where
@@ -188,7 +188,7 @@ testCountWords = testCase "testCountWords" $ do
 countWords :: IO Int
 countWords = 
     execute
-    (pipedShell "{ echo aaa ; echo bbb ; echo ccc ; }")
+    (piped (shell "{ echo aaa ; echo bbb ; echo ccc ; }"))
     (foldOut (transduce1 PT.utf8x $
                 withCont $ P.sum . G.folds const () (const 1) . view T.words))
 
@@ -197,7 +197,7 @@ countWords =
 testDrainageDeadlock :: TestTree
 testDrainageDeadlock = localOption (mkTimeout $ 20*(10^6)) $
     testCase "drainageDeadlock" $ do
-        execute (pipedShell "chmod u+x tests/alternating.sh") (pure ())
+        execute (piped (shell "chmod u+x tests/alternating.sh")) (pure ())
         r <- drainageDeadlock
         case r of
             ExitSuccess -> return ()
@@ -208,7 +208,7 @@ testDrainageDeadlock = localOption (mkTimeout $ 20*(10^6)) $
 drainageDeadlock :: IO ExitCode
 drainageDeadlock = 
     execute
-    (pipedProc "tests/alternating.sh" [])
+    (piped (proc "tests/alternating.sh" []))
     (foldErr (withCont $ \producer -> next producer >> pure ()) *> exitCode)
 
 -------------------------------------------------------------------------------
@@ -216,7 +216,7 @@ drainageDeadlock =
 testAlternatingWithCombined :: TestTree
 testAlternatingWithCombined = localOption (mkTimeout $ 20*(10^6)) $
     testCase "testAlternatingWithCombined" $ do
-        execute (pipedShell "chmod u+x tests/alternating.sh") (pure ())
+        execute (piped (shell "chmod u+x tests/alternating.sh")) (pure ())
         r <- alternatingWithCombined  
         case r of 
             80000 -> return ()
@@ -229,7 +229,7 @@ testAlternatingWithCombined = localOption (mkTimeout $ 20*(10^6)) $
 alternatingWithCombined :: IO Integer
 alternatingWithCombined = 
     execute
-    (pipedProc "tests/alternating.sh" [])
+    (piped (proc "tests/alternating.sh" []))
     (foldOutErr (combined lp lp countLines))
   where
     lp = PT.lines PT.utf8x
@@ -239,7 +239,7 @@ alternatingWithCombined =
 alternatingWithCombined2 :: IO (Integer,Integer)
 alternatingWithCombined2 = 
     execute
-    (pipedProc "tests/alternating.sh" [])
+    (piped (proc "tests/alternating.sh" []))
     (foldOutErr (combined lp lp (liftA2 (,) countLines countLines)))
   where
     lp = PT.lines PT.utf8x
@@ -261,7 +261,7 @@ nonAscii = TL.encodeUtf8 "\x4e2d"
 decodeFailure :: IO (Either T.ByteString TL.Text)
 decodeFailure = 
     executeFallibly 
-    (pipedShell "cat")
+    (piped (shell "cat"))
     (feedLazyBytes ("aaaaaaaa" <> nonAscii) *>
         foldOut (transduce1 (decoder T.decodeAscii) intoLazyText))
 
@@ -277,7 +277,7 @@ testMultipleFeeds = testCase "testMultipleFeeds" $ do
 multipleFeeds :: IO BL.ByteString
 multipleFeeds = 
     execute
-    (pipedShell "cat")
+    (piped (shell "cat"))
     (feedBytes ["first","line1"] 
      *>
      feedBytes ["second","line2"] 
@@ -297,7 +297,7 @@ testMultipleFeedsNoPiped = localOption (mkTimeout $ 1*(10^6)) $
 multipleFeedsNoPiped :: IO BL.ByteString
 multipleFeedsNoPiped = 
     execute
-    ((pipedShell "echo foo") { std_in = Inherit })
+    ((piped (shell "echo foo")) { std_in = Inherit })
     (feedBytes ["first","line1"] 
      *>
      feedBytes ["second","line2"] 
