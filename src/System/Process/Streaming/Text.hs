@@ -63,7 +63,7 @@ Right "foo\n"
     stream. We can do this with 'System.Process.Streaming.foldOutErr' and the 'Pipes.Transduce.combined' function.
 
     'combined' takes one 'Pipes.Transduce.Transducer' for @stdout@ and another
-    for @stderr@, that known how to decode each stream into text, then break
+    for @stderr@, that know how to decode each stream into text, then break
     the text into lines.  
     
     The resulting lines are consumed using a 'Fold1': 
