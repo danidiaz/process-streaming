@@ -391,7 +391,7 @@ liftExitCodeValidation v = Streams $
 
 {-| The type of handlers that write to piped @stdin@, consume piped @stdout@ and
     @stderr@, and work with the process exit code, eventually returning a value of
-    type @a@, except when an error @e@ interrups the execution.
+    type @r@, except when an error @e@ interrups the execution.
 
     Example of a complex handler:
 
