@@ -48,6 +48,8 @@ module System.Process.Streaming (
         , exitCode
         , validateExitCode
         , withExitCode
+        -- * A GHCi idiom
+        -- $ghci
         -- * Re-exports
         -- $reexports
         , module System.Process
@@ -320,10 +322,10 @@ feedCont = liftFeed1 . Feed1 . Other . Feed1_
 
 {- $folds
 
-    These functions take as parameters the 'Fold1' and 'Fold2' datatypes 
-    defined in the @pipes-transduce@ package.
+    These functions take as parameters the 'Pipes.Transduce.Fold1' and
+    'Pipes.Transduce.Fold2' datatypes defined in the @pipes-transduce@ package.
 
-    A convenience 'intoLazyBytes' 'Fold1' that collects a stream into a 
+    A convenience 'intoLazyBytes' 'Pipes.Transduce.Fold1' that collects a stream into a 
     lazy 'Data.ByteString.Lazy.ByteString' is re-exported.
 -}
 
@@ -444,6 +446,25 @@ instance Applicative (Streams e) where
 instance (Monoid a) => Monoid (Streams e a) where
    mempty = pure mempty
    mappend s1 s2 = (<>) <$> s1 <*> s2
+
+{- $ghci
+
+Within GHCi, it's easy to use this module to launch external programs.
+
+If the program is long-running, do it in a new thread to avoid locking GHCi,
+and keep track of the thread id:
+
+@
+ghci> r <- forkIO $ execute (piped (proc "C:\/Program Files (x86)\/Vim\/vim74\/gvim.exe" [])) (pure ())
+@
+
+Kill the thread to kill the long-running process:
+
+@
+ghci> killThread r
+@
+
+-} 
 
 {- $reexports
  
