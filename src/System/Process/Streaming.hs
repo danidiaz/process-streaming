@@ -95,7 +95,7 @@ import System.Exit
 {-|
   Execute an external program described by the 'CreateProcess' record. 
 
-  The 'Streams' Applicative is used to specify how to handle the standard
+  The 'Streams' Applicative specifies how to handle the standard
   streams and the exit code. Since 'Streams' is an Applicative, a simple
   invocation of 'execute' could be
 
@@ -179,13 +179,27 @@ executeFallibly record (Streams streams) = mask $ \restore -> do
                  c <- liftIO (waitForProcess phandle)
                  runStar exitCodeHandler c)
             $ streams 
+    -- The following is a workaround for the fact that, in Windows, IO actions
+    -- are not interruptible: https://ghc.haskell.org/trac/ghc/ticket/7353
+    --
+    -- This is annoying because we want to kill the external process in case
+    -- of an asynchronous exception.
+    --
+    -- What we do is create a thread with the sole purpose of being a "soft
+    -- target" for the asychronous exception. That thread installs an exception
+    -- handler that kills the external process.
+    -- 
+    -- We must be sure that the handler is installed before anything is read
+    -- form a standard stream, that's why we use the a MVar.
     latch <- newEmptyMVar
-    let innerAction = _runConceit $
+    let killable = _runConceit $
             (_Conceit (takeMVar latch >> runExceptT streams'))
             <|>   
             (_Conceit (onException (putMVar latch () >> _runConceit Control.Applicative.empty) 
                                    (terminateCarefully phandle))) 
-    (restore innerAction `onException` terminateCarefully phandle) `finally` cleanup1 `finally` cleanup2
+    -- Handles must be closed *after* terminating the process, because a close
+    -- operation may block if the external process has unflushed bytes in the stream.
+    (restore killable `onException` terminateCarefully phandle) `finally` cleanup1 `finally` cleanup2
 
 terminateCarefully :: ProcessHandle -> IO ()
 terminateCarefully pHandle = do
@@ -397,7 +411,12 @@ liftExitCodeValidation v = Streams $
 ("aaabbb","eee\n","aaabbb\neee\n",ExitSuccess)
 
 -}
-newtype Streams e r = Streams (Day (Day (Feed1 ByteString e) (Fold2 ByteString ByteString e)) (Star (ExceptT e IO) ExitCode) r) deriving (Functor)
+newtype Streams e r = 
+    Streams (Day (Day (Feed1 ByteString e) 
+                      (Fold2 ByteString ByteString e)) 
+                 (Star (ExceptT e IO) ExitCode) 
+                 r) 
+    deriving (Functor)
 
 {-| 'first' is useful to massage errors.		
 
