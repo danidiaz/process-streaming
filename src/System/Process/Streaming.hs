@@ -27,6 +27,9 @@ module System.Process.Streaming (
         -- * Execution
           execute
         , executeFallibly
+        -- ** Unbuffered stdin
+        , executeInteractive
+        , executeInteractiveFallibly
         -- * CreateProcess helpers
         , piped
         -- * The Streams Applicative
@@ -140,6 +143,11 @@ foo
 execute :: CreateProcess -> Streams Void a -> IO a
 execute cprocess pp = either absurd id <$> executeFallibly cprocess pp
 
+{-| Like 'execute', but 'std_in' will be unbuffered if piped.		
+
+-}
+executeInteractive :: CreateProcess -> Streams Void a -> IO a
+executeInteractive cprocess pp = either absurd id <$> executeInteractiveFallibly cprocess pp
 
 {-| Like 'execute', but allows the handlers in the 'Streams' Applicative to interrupt the execution of the external process by returning a 'Left' value, in addition to throwing exceptions. This is sometimes more convenient:
 
@@ -156,8 +164,25 @@ executeFallibly ::
        CreateProcess 
     -> Streams e a
     -> IO (Either e a)
-executeFallibly record (Streams streams) = mask $ \restore -> do
+executeFallibly = executeFalliblyInternal (\_ -> return ())
+
+{-| Like 'executeFallibly', but 'std_in' will be unbuffered if piped.		
+
+-}
+executeInteractiveFallibly :: 
+       CreateProcess 
+    -> Streams e a
+    -> IO (Either e a)
+executeInteractiveFallibly = executeFalliblyInternal (\h -> hSetBuffering h NoBuffering)
+
+executeFalliblyInternal :: 
+       (Handle -> IO ())
+    -> CreateProcess 
+    -> Streams e a
+    -> IO (Either e a)
+executeFalliblyInternal adapter record (Streams streams) = mask $ \restore -> do
     (mstdin,mstdout,mstderr,phandle) <- createProcess record
+    forM_ mstdin adapter
     let (clientx,cleanupx) = case mstdin of
             Nothing -> (pure (),pure ())
             Just handle -> (toHandle handle,hClose handle) 

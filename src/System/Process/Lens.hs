@@ -5,6 +5,9 @@
 -- These are provided as a convenience and aren't at all required to use the
 -- other modules of this package.
 --
+-- For basic lens functionality with few dependencies, the @microlens@ package
+-- is a good option.
+--
 -----------------------------------------------------------------------------
 
 {-# LANGUAGE RankNTypes #-}
@@ -16,6 +19,7 @@ module System.Process.Lens (
        , _RawCommand
        , _cwd
        , _env
+       , envAt
        , std_streams
        , _std_in
        , _std_out
@@ -79,6 +83,28 @@ _env :: forall f. Functor f => (Maybe [(String, String)] -> f (Maybe [(String, S
 _env f x = setEnv x <$> f (env x)
     where
     setEnv c env' = c { env = env' } 
+
+
+{-| An improper lens to get and insert values in an association list. It
+    assumes that there are no duplicate keys in the list.
+
+-}
+envAt :: (Eq k,Applicative f)
+      => k 
+      -> (Maybe v -> f (Maybe v)) 
+      -> ([(k,v)] -> f [(k,v)])
+envAt key f [] =
+    let listize Nothing  = []
+        listize (Just i) = [(key,i)]
+    in
+    listize <$> f Nothing
+envAt key f (entry@(k,v):entries)
+    | key == k =
+        let listize Nothing   = entries
+            listize (Just v') = (k,v') : entries
+        in
+        listize <$> f (Just v)
+    | otherwise = (entry:) <$> envAt key f entries
 
 {-| 
     A lens for the @(std_in,std_out,std_err)@ triplet.  

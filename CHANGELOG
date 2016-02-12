@@ -1,3 +1,8 @@
+0.9.1.0
+-------
+- Added executeInteractive and executeInteractiveFallibly
+- Added envAt lens for tweaking the environment.
+
 0.9.0.0
 -------
 - All Siphon functionality has been moved to new package pipes-transduce.
