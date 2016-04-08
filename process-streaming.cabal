@@ -1,5 +1,5 @@
 name:          process-streaming
-version:       0.9.1.0
+version:       0.9.1.1
 license:       BSD3
 license-file:  LICENSE
 data-files:    
@@ -14,6 +14,7 @@ Description:   Concurrent, streaming access to the input and outputs of system p
 Extra-Source-Files:
     README.md
     CHANGELOG
+    tests/alternating.sh
 
 Library
     default-language: Haskell2010
