@@ -219,11 +219,11 @@ testAlternatingWithCombined = localOption (mkTimeout $ 20*(10^6)) $
         execute (piped (shell "chmod u+x tests/alternating.sh")) (pure ())
         r <- alternatingWithCombined  
         case r of 
-            80000 -> return ()
+            40000 -> return ()
             _ -> assertFailure $ "unexpected lines (1) " ++ show r
         r <- alternatingWithCombined2  
         case r of 
-            (80000,80000) -> return ()
+            (40000,40000) -> return ()
             _ -> assertFailure $ "unexpected lines (2) " ++ show r
 
 alternatingWithCombined :: IO Integer

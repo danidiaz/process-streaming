@@ -421,7 +421,7 @@ liftExitCodeValidation v = Streams $
     Example of a complex handler:
 
 >>> :{ 
-    execute (piped (shell "{ cat ; echo eee 1>&2 ; }")) $ 
+    execute (piped (shell "{ cat ; sleep 1 ; echo eee 1>&2 ; }")) $ 
         (\_ _ o e oe ec -> (o,e,oe,ec)) 
         <$>
         feedBytes (Just "aaa") 
