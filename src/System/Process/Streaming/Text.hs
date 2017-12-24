@@ -31,60 +31,45 @@ import Pipes.Transduce.Text
 
 {- $examples
 
-   To process a standard stream as text, use the 'utf8' or 'utf8x'
-   'Transducer's, applying them with 'transduce1' to a 'Fold1' that accepts
-   text. 
-   
-   The result will be a a 'Fold1' that accepts raw 'ByteStrings':
+   To process a standard stream as utf8 text:
 
->>> execute (piped (shell "echo foo")) (foldOut (transduce1 PT.utf8x PT.intoLazyText))
+>>> execute (piped (shell "echo foo")) (foldOut (PT.asUtf8x PT.intoLazyText))
 "foo\n"   
 
-   The difference between 'utf8' and 'utf8x' is that the former uses an 'Either'
-   to signal encoding errors, while the latter uses an exception.
+   'Pipes.Transduce.Text.asUtf8x' throws exceptions on decodign errors.
+   'Pipes.Transduce.Text.asUtf8' uses sum types instead. We must provide an
+   error mapping function, here we simply use 'id':
 
->>> executeFallibly (piped (shell "echo foo")) (foldOut (transduce1 PT.utf8 PT.intoLazyText))
+>>> executeFallibly (piped (shell "echo foo")) (foldOut (PT.asUtf8 id PT.intoLazyText))
 Right "foo\n"   
    
-   'foldedLines' lets you consume the lines that appear in a stream as lazy
-   'Data.Text.Lazy.Text's. Here we collect them in a list using the
-   'Control.Foldl.list' 'Control.Foldl.Fold' from the @foldl@ package:
+   'Pipes.Transduce.Text.asFoldedLines' lets you identify and consume the lines that appear in a
+   stream as lazy 'Data.Text.Lazy.Text's.
 
 >>> :{ 
-      execute (piped (shell "{ echo foo ; echo bar ; }"))
-    . foldOut
-    . transduce1 PT.utf8x 
-    . transduce1 PT.foldedLines 
-    $ withFold L.list
+      execute (piped (shell "{ echo foo ; echo bar ; }")) $
+          (foldOut (PT.asUtf8x (PT.asFoldedLines intoList)))
     :}
 ["foo","bar"]
 
     Sometimes we want to consume the lines in @stdout@ and @stderr@ as a single
-    stream. We can do this with 'System.Process.Streaming.foldOutErr' and the 'Pipes.Transduce.combined' function.
+    text stream. We can do this with 'System.Process.Streaming.foldOutErr' and
+    'Pipes.Transduce.Text.combinedLines'.
 
-    'combined' takes one 'Pipes.Transduce.Transducer' for @stdout@ and another
-    for @stderr@, that know how to decode each stream into text, then break
-    the text into lines.  
-    
-    The resulting lines are consumed using a 'Fold1': 
+    We also need 'Pipes.Transduce.Text.bothAsUtf8x' to decode both streams.
 
 >>> :{ 
-      execute (piped (shell "{ echo ooo ; sleep 1 ; echo eee 1>&2 ; }"))  
-    . foldOutErr
-    . combined (PT.lines PT.utf8x) (PT.lines PT.utf8x)
-    $ intoLazyText
+      execute (piped (shell "{ echo ooo ; sleep 1 ; echo eee 1>&2 ; }")) $ 
+          (foldOutErr (PT.bothAsUtf8x (PT.combinedLines PT.intoLazyText)))
     :}
 "ooo\neee\n"
 
-    We can also tag each line with its provenance, using 'Pipes.Transduce.groups':
+    We can also tag each line with its provenance, using
+    'Pipes.Transduce.Text.combinedLinesPrefixing':
 
 >>> :{ 
-    let tag prefix = groups (\producer -> Pipes.yield prefix *> producer)
-    in
-      execute (piped (shell "{ echo ooo ; sleep 1 ; echo eee 1>&2 ; }"))  
-    . foldOutErr
-    . combined (tag "+" (PT.lines PT.utf8x)) (tag "-" (PT.lines PT.utf8x))
-    $ intoLazyText
+      execute (piped (shell "{ echo ooo ; sleep 1 ; echo eee 1>&2 ; }")) $
+          (foldOutErr (PT.bothAsUtf8x (PT.combinedLinesPrefixing "+" "-" PT.intoLazyText)))
     :}
 "+ooo\n-eee\n"
 
