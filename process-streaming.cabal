@@ -24,7 +24,7 @@ Library
         System.Process.Streaming.Text
         System.Process.Lens
     other-modules: 
-    ghc-options: -Wall -threaded -O2
+    ghc-options: -Wall -O2
     build-depends:         
         base >= 4.4 && < 5
       , process >= 1.2.3.0
