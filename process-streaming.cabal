@@ -87,6 +87,8 @@ Test-suite test
       , process-streaming
 
 test-suite doctests
+  default-language:
+      Haskell2010
   type:           exitcode-stdio-1.0
   ghc-options:    -Wall -threaded
   hs-source-dirs: tests
@@ -123,6 +125,7 @@ test-suite doctests
       , tasty >= 0.9
       , tasty-hunit >= 0.9
       , process-streaming
+  default-language: Haskell2010
 
 Source-repository head
     type:     git
