@@ -11,6 +11,7 @@
 module System.Process.Streaming.Text ( 
         -- * Examples
         -- $examples
+        -- $examplescombined
         module Pipes.Transduce.Text
     ) where
 
@@ -23,6 +24,7 @@ import Pipes.Transduce.Text
 >>> import qualified Pipes
 >>> import Pipes.Transduce
 >>> import Control.Applicative
+>>> import Control.Monad
 >>> import System.Process.Streaming
 >>> import qualified System.Process.Streaming.Text as PT
 >>> import qualified Control.Foldl as L
@@ -52,6 +54,10 @@ Right "foo\n"
     :}
 ["foo","bar"]
 
+-}
+
+{- $examplescombined
+
     Sometimes we want to consume the lines in @stdout@ and @stderr@ as a single
     text stream. We can do this with 'System.Process.Streaming.foldOutErr' and
     'Pipes.Transduce.Text.combinedLines'.
@@ -73,7 +79,14 @@ Right "foo\n"
     :}
 "+ooo\n-eee\n"
 
--}
+    Fail when an error message appears in the combined @stdout@ and @stderr@ stream. This uses the 'System.Process.Streaming.Text.eachLine' function. We switched to 'System.Process.Streaming.executeFallibly' to enable either-like failures.
 
- 
+>>> :{ 
+      executeFallibly (piped (shell "{ echo ooo ; sleep 1 ; echo _error_ 1>&2 ; }")) $ 
+          let check line = runExceptT $ when (Data.Text.Lazy.isInfixOf "error" line) $ throwE line
+          in  foldOutErr (PT.bothAsUtf8x (PT.combinedLines (PT.eachLine check)))
+    :}
+Left "_error_"
+
+-}
 

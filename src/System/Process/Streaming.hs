@@ -367,8 +367,7 @@ foldOut =  liftFold2 . Pipes.Transduce.liftFirst
 foldErr :: Fold1 ByteString e r -> Streams e r
 foldErr =  liftFold2 . Pipes.Transduce.liftSecond
 
-{-| Consume standard output and error together.	See also the 'combine' function
-    re-exported from "Pipes.Transduce".
+{-| Consume standard output and error together. This enables combining them in a single stream. See also 'System.Process.Streaming.Text.bothAsUtf8x' and 'System.Process.Streaming.Text.combinedLines'.
 
 -}
 foldOutErr :: Fold2 ByteString ByteString e r -> Streams e r
@@ -422,7 +421,7 @@ liftExitCodeValidation v = Streams $
 
 >>> :{ 
     execute (piped (shell "{ cat ; sleep 1 ; echo eee 1>&2 ; }")) $ 
-        (\_ _ o e oe ec -> (o,e,oe,ec)) 
+        (\_ _ ob eb et oet c -> (ob,eb,et,oet,c)) 
         <$>
         feedBytes (Just "aaa") 
         <*> 
@@ -432,11 +431,13 @@ liftExitCodeValidation v = Streams $
         <*>
         foldErr intoLazyBytes 
         <*>
-        foldOutErr (combined (PT.lines PT.utf8x) (PT.lines PT.utf8x) PT.intoLazyText)
+        foldErr (PT.asUtf8x PT.intoLazyText)
+        <*>
+        foldOutErr (PT.bothAsUtf8x (PT.combinedLines PT.intoLazyText))
         <*>
         exitCode
     :}
-("aaabbb","eee\n","aaabbb\neee\n",ExitSuccess)
+("aaabbb","eee\n","eee\n","aaabbb\neee\n",ExitSuccess)
 
 -}
 newtype Streams e r = 
