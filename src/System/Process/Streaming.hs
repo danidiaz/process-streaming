@@ -21,6 +21,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE CPP #-}
 
 
 module System.Process.Streaming ( 
@@ -61,7 +62,7 @@ module System.Process.Streaming (
     ) where
 
 import qualified Data.ByteString.Lazy
-import Data.Monoid
+import qualified Data.Semigroup as S
 import Data.Foldable
 import Data.Bifunctor
 import Data.ByteString
@@ -295,9 +296,19 @@ instance Applicative (Feed1_ b e) where
                          runExceptT $ pure ()
                       )
 
+
+instance (S.Semigroup a) => S.Semigroup (Feed1 b e a) where
+     s1 <> s2 = (S.<>) <$> s1 <*> s2
+
+#if !(MIN_VERSION_base(4,11,0))
+instance (Monoid a,S.Semigroup a) => Monoid (Feed1 b e a) where
+#else
 instance (Monoid a) => Monoid (Feed1 b e a) where
+#endif
    mempty = pure mempty
-   mappend s1 s2 = (<>) <$> s1 <*> s2
+#if !(MIN_VERSION_base(4,11,0))
+   mappend = (S.<>)
+#endif
 
 feed1Fallibly :: Feed1 b e a -> Consumer b IO () -> IO (Either e a)
 feed1Fallibly (Feed1 (unLift -> s)) = runFeed1_ s
@@ -470,9 +481,18 @@ instance Applicative (Streams e) where
 
     Streams f <*> Streams x = Streams (f <*> x)
 
+instance (S.Semigroup a) => S.Semigroup (Streams e a) where
+   (<>) s1 s2 = (S.<>) <$> s1 <*> s2
+
+#if !(MIN_VERSION_base(4,11,0))
+instance (Monoid a,S.Semigroup a) => Monoid (Streams e a) where
+#else
 instance (Monoid a) => Monoid (Streams e a) where
+#endif
    mempty = pure mempty
-   mappend s1 s2 = (<>) <$> s1 <*> s2
+#if !(MIN_VERSION_base(4,11,0))
+   mappend = (S.<>)
+#endif
 
 {- $ghci
 
